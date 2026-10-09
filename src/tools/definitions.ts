@@ -26,6 +26,12 @@ import {
   errorDiagnosisOutputJsonSchema,
 } from '../foundry/diagnosis-contract.js';
 import {
+  lootGenerationInputJsonSchema,
+  lootGenerationOutputJsonSchema,
+  npcGenerationInputJsonSchema,
+  npcGenerationOutputJsonSchema,
+} from '../foundry/generation-contract.js';
+import {
   journalPageInputJsonSchema,
   journalPageOutputSchema,
   journalSummaryInputJsonSchema,
@@ -393,48 +399,16 @@ export const generationTools = [
   {
     name: 'generate_npc',
     description:
-      'Generate a random NPC (name, race, class, HP, ability scores, background) as text. Use when: the user needs a throwaway NPC on the spot. Do not use when: the NPC must exist in FoundryVTT - this creates no documents, and the result still has to be entered into the world by hand.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        level: {
-          type: 'number',
-          description: 'Character level (1-20)',
-          minimum: 1,
-          maximum: 20,
-          default: 1,
-        },
-        race: {
-          type: 'string',
-          description: 'Character race (optional)',
-        },
-        class: {
-          type: 'string',
-          description: 'Character class (optional)',
-        },
-      },
-    },
+      'Create a bounded, system-neutral NPC creative preview. Every option affects the preview; no Foundry document is created and no game-system rules are claimed.',
+    inputSchema: npcGenerationInputJsonSchema,
+    outputSchema: npcGenerationOutputJsonSchema,
   },
   {
     name: 'generate_loot',
     description:
-      "Generate random treasure for an encounter as text. Only the currency amounts vary: they scale with the challenge rating, while the item list is fixed (a Healing Potion and a Silver Ring) and the treasureType argument is accepted but not used. Use when: the user wants a quick coin total for an encounter. Do not use when: the loot should end up in an actor's inventory - this creates no documents; use create_actor_item for that.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        challengeRating: {
-          type: 'number',
-          description: 'Challenge rating for loot generation',
-          minimum: 0,
-          maximum: 30,
-        },
-        treasureType: {
-          type: 'string',
-          description:
-            'Type of treasure (hoard, individual, etc.). Accepted but not used - the generated result is the same whichever value is passed.',
-        },
-      },
-    },
+      'Create bounded fictional loot as a world-independent creative preview. Returns traceable fictional currency arithmetic and explicitly unknown item and overall values; no Foundry document is created.',
+    inputSchema: lootGenerationInputJsonSchema,
+    outputSchema: lootGenerationOutputJsonSchema,
   },
   {
     name: 'lookup_rule',

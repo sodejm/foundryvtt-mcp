@@ -40,6 +40,7 @@ import {
 } from './caller-context.js';
 import {
   type CapabilityReport,
+  CONTENT_GENERATION_UNAVAILABLE,
   DIAGNOSTICS_UNAVAILABLE,
   RULES_LOOKUP_UNAVAILABLE,
 } from './capabilities.js';
@@ -1960,11 +1961,7 @@ export class FoundryClient {
           transport: 'rest',
         },
         {
-          feature: 'contentGeneration',
-          status: 'unavailable',
-          reason: 'No verified Foundry-backed adapter is implemented for this feature.',
-          remediation:
-            'Use this feature only after a compatible Foundry integration is implemented and verified.',
+          ...CONTENT_GENERATION_UNAVAILABLE,
           verifiedAt,
           transport: 'rest',
         },

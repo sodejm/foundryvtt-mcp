@@ -1,6 +1,10 @@
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DIAGNOSTICS_UNAVAILABLE, RULES_LOOKUP_UNAVAILABLE } from '../capabilities.js';
+import {
+  CONTENT_GENERATION_UNAVAILABLE,
+  DIAGNOSTICS_UNAVAILABLE,
+  RULES_LOOKUP_UNAVAILABLE,
+} from '../capabilities.js';
 import { FoundryClient } from '../client.js';
 import type { WorldData } from '../types.js';
 
@@ -358,6 +362,12 @@ describe('verified compendium client boundary', () => {
       transport: 'rest',
       verifiedAt: expect.any(String),
     });
+    expect(report.capabilities[3]).toMatchObject({
+      ...CONTENT_GENERATION_UNAVAILABLE,
+      transport: 'rest',
+      verifiedAt: expect.any(String),
+    });
+    expect(Object.isFrozen(CONTENT_GENERATION_UNAVAILABLE)).toBe(true);
     expect(get).not.toHaveBeenCalled();
   });
   it('does not infer rules, diagnostics, or generation from a working compendium adapter', async () => {
@@ -367,6 +377,7 @@ describe('verified compendium client boundary', () => {
     expect(report.capabilities[0].status).toBe('available');
     expect(report.capabilities[1]).toMatchObject(RULES_LOOKUP_UNAVAILABLE);
     expect(report.capabilities[2]).toMatchObject(DIAGNOSTICS_UNAVAILABLE);
+    expect(report.capabilities[3]).toMatchObject(CONTENT_GENERATION_UNAVAILABLE);
     expect(report.capabilities.slice(1).map((entry) => entry.status)).toEqual([
       'unavailable',
       'unavailable',

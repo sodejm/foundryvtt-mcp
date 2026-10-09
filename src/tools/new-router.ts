@@ -9,6 +9,10 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { FoundryClient } from '../foundry/client.js';
 import { parseErrorDiagnosisInput } from '../foundry/diagnosis-contract.js';
+import {
+  parseLootGenerationInput,
+  parseNpcGenerationInput,
+} from '../foundry/generation-contract.js';
 import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
@@ -134,15 +138,11 @@ async function routeLegacyTool(
 
     // Generation tools
     case 'generate_npc':
-      return handleGenerateNPC(
-        args as { level?: number; race?: string; class?: string },
-        foundryClient,
-      );
+      parseNpcGenerationInput(args);
+      return handleGenerateNPC(args);
     case 'generate_loot':
-      return handleGenerateLoot(
-        args as { challengeRating?: number; treasureType?: string },
-        foundryClient,
-      );
+      parseLootGenerationInput(args);
+      return handleGenerateLoot(args);
     case 'lookup_rule':
       parseRuleLookupInput(args);
       return handleLookupRule(args, foundryClient);
