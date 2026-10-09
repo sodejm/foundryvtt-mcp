@@ -115,7 +115,7 @@ describe('built MCP bounded dice workflow', () => {
       expect(tool).toBeDefined(); expect(tool!.inputSchema.additionalProperties).toBe(false);
       expect(tool!.outputSchema).toBeDefined(); schemas.push(tool!.outputSchema!);
     }
-  });
+  }, 60000); // Ten authenticated CLI processes share this bounded setup hook.
   afterAll(async () => {
     await Promise.allSettled([...clients.map(client => client.close()), ...transports.map(transport => transport.close())]);
     if (sockets) {

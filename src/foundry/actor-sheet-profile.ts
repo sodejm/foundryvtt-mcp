@@ -5,6 +5,7 @@ import type {
   ActorSectionName,
   ActorSystemIdentity,
 } from './actor-sheet-contract.js';
+import { type ItemEconomyIdentity, normalizeItemEconomy } from './item-normalization.js';
 import type { WorldActor, WorldData, WorldItem } from './types.js';
 
 const MAX_FIELD_TEXT_UNITS = 4096;
@@ -378,7 +379,8 @@ function boundFieldValues(fields: ActorField[]): ActorField[] {
 }
 
 export function actorSystemIdentity(world: WorldData): ActorSystemIdentity {
-  const id = typeof world.system.id === 'string' ? world.system.id.toLowerCase() : 'unknown';
+  const id =
+    typeof world.system.id === 'string' ? world.system.id.toLowerCase() || 'unknown' : 'unknown';
   const version = typeof world.system.version === 'string' ? world.system.version : undefined;
   const profile = id === 'dnd5e' ? 'dnd5e' : id === 'pf2e' ? 'pf2e' : 'generic';
   return {
@@ -432,9 +434,6 @@ function itemDefinitions(profile: 'dnd5e' | 'pf2e', delegated: boolean): FieldDe
     { key: 'quantity', label: 'Quantity', paths: ['quantity', 'quantity.value'] },
     { key: 'equipped', label: 'Equipped', paths: ['equipped'] },
     { key: 'identified', label: 'Identified', paths: ['identified'] },
-    { key: 'rarity', label: 'Rarity', paths: ['rarity'] },
-    { key: 'price.value', label: 'Price', paths: ['price.value'] },
-    { key: 'price.denomination', label: 'Price Denomination', paths: ['price.denomination'] },
     { key: 'weight', label: 'Weight', paths: ['weight.value', 'weight'] },
   ];
   if (profile === 'pf2e') {
@@ -466,7 +465,11 @@ export function actorItemFields(
   );
 }
 
-export function publicActorItemSummary(actorId: string, item: WorldItem): ActorItemSummary {
+export function publicActorItemSummary(
+  actorId: string,
+  item: WorldItem,
+  identity: ItemEconomyIdentity = { id: 'unknown' },
+): ActorItemSummary {
   const directQuantity = publicScalar(scalarAt(item.system, 'quantity'), false).value;
   const quantity =
     directQuantity ?? publicScalar(scalarAt(item.system, 'quantity.value'), false).value;
@@ -474,6 +477,7 @@ export function publicActorItemSummary(actorId: string, item: WorldItem): ActorI
   return {
     id: item._id,
     uuid: `Actor.${actorId}.Item.${item._id}`,
+    economy: normalizeItemEconomy(item, identity),
     name: truncateUtf16(item.name, MAX_IDENTITY_TEXT_UNITS).value,
     type: truncateUtf16(item.type, 128).value,
     ...(typeof item.img === 'string' ? { img: truncateUtf16(item.img, 2048).value } : {}),
