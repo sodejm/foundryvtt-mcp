@@ -11,6 +11,7 @@ const A = 'Actor00000000001';
 const B = 'Actor00000000002';
 const I = 'Item000000000001';
 const J = 'Item000000000002';
+const GM = 'User000000000001';
 const actor = {
   _id: A,
   name: 'Twin',
@@ -59,9 +60,28 @@ function createClient(rest = false) {
   });
 }
 function setWorld(client: FoundryClient, overrides: Partial<WorldData> = {}) {
-  const world = {
+  const world: WorldData = {
+    userId: GM,
+    release: {},
+    world: { id: 'test-world', title: 'Test World' },
+    system: {},
+    modules: [],
+    demoMode: false,
     actors: [worldActor, { ...worldActor, _id: B }],
+    scenes: [],
     items: [worldItem, { ...worldItem, _id: J }],
+    journal: [],
+    messages: [],
+    combats: [],
+    users: [{ _id: GM, name: 'GM', role: 4, color: '#000000' }],
+    activeUsers: [GM],
+    settings: [],
+    folders: [],
+    macros: [],
+    playlists: [],
+    tables: [],
+    cards: [],
+    packs: [],
     ...overrides,
   };
   Reflect.set(client, 'worldData', world);
@@ -278,22 +298,22 @@ describe('Socket.IO value fidelity', () => {
     expect((await client.searchItems({})).items).toEqual([]);
     client.disconnect();
   });
-  it('validates only selected cached records after filtering and paging', async () => {
+  it('filters before validating but validates the full matching snapshot before paging', async () => {
     const client = createClient();
     const invalidActor = { ...worldActor, _id: 'invalid', name: 'Other' };
     const invalidItem = { ...worldItem, _id: 'invalid', name: 'Other' };
     setWorld(client, { actors: [worldActor, invalidActor], items: [worldItem, invalidItem] });
     expect((await client.searchActors({ query: 'Twin' })).actors).toHaveLength(1);
     expect((await client.searchItems({ query: 'Twin' })).items).toHaveLength(1);
-    expect((await client.searchActors({ limit: 1 })).actors).toHaveLength(1);
-    expect((await client.searchItems({ limit: 1 })).items).toHaveLength(1);
+    await expect(client.searchActors({ limit: 1 })).rejects.toThrow();
+    await expect(client.searchItems({ limit: 1 })).rejects.toThrow();
     client.disconnect();
   });
   it('rejects malformed cached document identities and shapes', async () => {
     const client = createClient();
-    Reflect.set(client, 'worldData', {
-      actors: [{ ...worldActor, name: 42 }],
-      items: [{ ...worldItem, system: null }],
+    setWorld(client, {
+      actors: [{ ...worldActor, name: 42 }] as never,
+      items: [{ ...worldItem, system: null }] as never,
     });
     await expect(client.getActor(A)).rejects.toThrow();
     await expect(client.searchActors({})).rejects.toThrow();

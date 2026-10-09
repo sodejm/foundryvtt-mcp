@@ -5,6 +5,7 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
+import { randomUUID } from 'node:crypto';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
@@ -12,12 +13,14 @@ import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import { evaluateDiceFormula } from './dice-formula.js';
 import {
-  actorDocumentSchema,
-  actorSearchDocumentSchema,
-  FOUNDRY_ID_PATTERN,
-  itemDocumentSchema,
-  itemSearchDocumentSchema,
-} from './read-contract.js';
+  type CollectionPage,
+  type CollectionRecord,
+  type PaginationParams,
+  SnapshotPaginator,
+  sortCollectionRecords,
+  validateBoundedText,
+} from './pagination.js';
+import { actorDocumentSchema, FOUNDRY_ID_PATTERN, itemDocumentSchema } from './read-contract.js';
 import type {
   ActorAttributeUpdateResult,
   ActorItemCreateSource,
@@ -62,6 +65,22 @@ const worldReadDocumentSchema = z.object({
   type: z.string(),
   img: z.string().optional(),
   system: z.record(z.string(), z.unknown()),
+});
+
+/** Wire shape returned by the REST bridge. Public MCP search results add
+ * snapshot metadata after the complete backend result set has been verified. */
+const restActorPageSchema = z.object({
+  actors: z.array(actorDocumentSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  limit: z.number().int().min(1).max(100),
+});
+
+const restItemPageSchema = z.object({
+  items: z.array(itemDocumentSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  limit: z.number().int().min(1).max(100),
 });
 
 /** REST module payloads do not establish UUID scope. Preserve existing internal
@@ -214,6 +233,7 @@ export interface SearchActorsParams {
   query?: string;
   type?: string;
   limit?: number;
+  cursor?: string;
 }
 
 export interface SearchItemsParams {
@@ -221,6 +241,13 @@ export interface SearchItemsParams {
   type?: string;
   rarity?: string;
   limit?: number;
+  cursor?: string;
+}
+
+export interface SearchCollectionParams {
+  query?: string | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
 }
 
 export interface CompendiumSearchParams {
@@ -257,6 +284,9 @@ export class FoundryClient {
    * FoundryVTT at all (#217). Unused in Socket.IO mode.
    */
   private restLinkLive = true;
+  private readonly paginator = new SnapshotPaginator();
+  private paginationSession = randomUUID();
+  private restStatusIdentity = 'not-connected';
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -322,7 +352,9 @@ export class FoundryClient {
   async connect(): Promise<void> {
     if (this.config.apiKey) {
       try {
-        await this.http.get('/api/status');
+        const response = await this.http.get('/api/status');
+        this.resetPaginationSession();
+        this.restStatusIdentity = JSON.stringify(response.data ?? null);
         this._isConnected = true;
         logger.info('Connected to FoundryVTT via REST API module');
       } catch (error) {
@@ -344,6 +376,7 @@ export class FoundryClient {
 
     // Connect authenticated socket and load world data
     this.worldData = await this.connectAndLoadWorld(session);
+    this.resetPaginationSession();
     this.worldDataStale = false;
     this._isConnected = true;
     logger.info('Connected to FoundryVTT via Socket.IO', {
@@ -513,11 +546,13 @@ export class FoundryClient {
    * Bound field rather than a method so the same reference reaches `socket.off()`.
    */
   private onSocketConnect = (): void => {
+    this.resetPaginationSession();
     this._isConnected = true;
     logger.info('FoundryVTT socket reconnected — cached world data is still stale until refreshed');
   };
 
   private onSocketDisconnect = (reason?: unknown): void => {
+    this.resetPaginationSession();
     this._isConnected = false;
     this.worldDataStale = this.worldData !== null;
     logger.warn('FoundryVTT socket disconnected — cached world data is now stale', {
@@ -547,11 +582,17 @@ export class FoundryClient {
 
   async disconnect(): Promise<void> {
     this.detachSocket();
+    this.resetPaginationSession();
     this.worldData = null;
     this.worldDataStale = false;
     this._isConnected = false;
     this.restLinkLive = true;
     logger.info('FoundryVTT client disconnected');
+  }
+
+  private resetPaginationSession(): void {
+    this.paginator.clear();
+    this.paginationSession = randomUUID();
   }
 
   /**
@@ -657,33 +698,183 @@ export class FoundryClient {
   // Actor methods
   // ==========================================================================
 
-  async searchActors(params: SearchActorsParams): Promise<ActorSearchResult> {
-    if (this.config.apiKey) {
-      const response = await this.executeWithRetry(() => this.http.get('/api/actors', { params }));
-      const result = actorSearchDocumentSchema.parse(response.data);
-      return { ...result, actors: result.actors.map((actor) => restActor(actor)) };
-    }
+  private paginationContext(kind: string, filters: Record<string, unknown>): string {
+    const world = this.config.apiKey
+      ? this.restStatusIdentity
+      : JSON.stringify(this.worldData?.world ?? null);
+    const caller = this.config.apiKey
+      ? `${this.config.baseUrl}|${this.config.apiKey}`
+      : `${this.worldData?.userId ?? 'unknown'}|${this.paginationSession}`;
+    return JSON.stringify({ kind, filters, world, caller });
+  }
 
+  private assertSocketPaginationAuthorized(): void {
+    if (this.config.apiKey) {
+      return;
+    }
     if (!this.worldData) {
       throw new Error('Not connected — no world data available');
     }
-
-    let results = this.worldData.actors;
-
-    if (params.query) {
-      const q = params.query.toLowerCase();
-      results = results.filter((a) => a.name.toLowerCase().includes(q));
+    const caller = this.worldData.users.find((user) => user._id === this.worldData?.userId);
+    if (!caller || typeof caller.role !== 'number' || caller.role < 4) {
+      throw new Error('Socket pagination requires an authenticated GM with role 4 or higher');
     }
-    if (params.type) {
-      const t = params.type.toLowerCase();
-      results = results.filter((a) => a.type.toLowerCase() === t);
+  }
+
+  private validateSearchFilters(filters: Record<string, unknown>): void {
+    for (const [name, value] of Object.entries(filters)) {
+      validateBoundedText(value, name, name === 'query' ? 1024 : 128);
     }
+  }
 
-    const total = results.length;
-    const limit = params.limit || 10;
-    const actors: FoundryActor[] = results.slice(0, limit).map(worldActorToFoundry);
+  private paginationParams(params: {
+    limit?: number | undefined;
+    cursor?: string | undefined;
+  }): PaginationParams {
+    const result: PaginationParams = {};
+    if (params.limit !== undefined) {
+      result.limit = params.limit;
+    }
+    if (params.cursor !== undefined) {
+      result.cursor = params.cursor;
+    }
+    return result;
+  }
 
-    return { actors, total, page: 1, limit };
+  private async fetchAllRestActors(filters: {
+    query?: string | undefined;
+    type?: string | undefined;
+  }): Promise<FoundryActor[]> {
+    const requestFilters = Object.fromEntries(
+      Object.entries(filters).filter((entry) => entry[1] !== undefined),
+    );
+    const records: FoundryActor[] = [];
+    const seen = new Set<string>();
+    let expectedTotal: number | undefined;
+    for (let page = 1; page <= 10_000; page += 1) {
+      const response = await this.executeWithRetry(() =>
+        this.http.get('/api/actors', { params: { ...requestFilters, page, limit: 100 } }),
+      );
+      const result = restActorPageSchema.parse(response.data);
+      if (result.page !== page) {
+        throw new Error(`REST actor pagination ignored requested page ${page}`);
+      }
+      if (!Number.isInteger(result.limit) || result.limit < 1 || result.limit > 100) {
+        throw new Error('REST actor pagination returned an invalid page limit');
+      }
+      if (result.actors.length > result.limit) {
+        throw new Error('REST actor pagination returned more records than its page limit');
+      }
+      if (expectedTotal === undefined) {
+        expectedTotal = result.total;
+        if (!Number.isInteger(expectedTotal) || expectedTotal < 0 || expectedTotal > 10_000) {
+          throw new Error('REST actor pagination returned an invalid or oversized total');
+        }
+      } else if (result.total !== expectedTotal) {
+        throw new Error('REST actor pagination returned inconsistent totals');
+      }
+      for (const value of result.actors) {
+        const actor = restActor(value);
+        if (seen.has(actor._id)) {
+          throw new Error(`REST actor pagination returned duplicate id ${actor._id}`);
+        }
+        seen.add(actor._id);
+        records.push(actor);
+      }
+      if (records.length > expectedTotal) {
+        throw new Error('REST actor pagination returned more records than its reported total');
+      }
+      if (records.length === expectedTotal) {
+        return records;
+      }
+      if (result.actors.length === 0) {
+        throw new Error('REST actor pagination made no progress before reaching its total');
+      }
+    }
+    throw new Error('REST actor pagination exceeded the maximum supported page count');
+  }
+
+  private async fetchAllRestItems(filters: {
+    query?: string | undefined;
+    type?: string | undefined;
+    rarity?: string | undefined;
+  }): Promise<FoundryItem[]> {
+    const requestFilters = Object.fromEntries(
+      Object.entries(filters).filter((entry) => entry[1] !== undefined),
+    );
+    const records: FoundryItem[] = [];
+    const seen = new Set<string>();
+    let expectedTotal: number | undefined;
+    for (let page = 1; page <= 10_000; page += 1) {
+      const response = await this.executeWithRetry(() =>
+        this.http.get('/api/items', { params: { ...requestFilters, page, limit: 100 } }),
+      );
+      const result = restItemPageSchema.parse(response.data);
+      if (result.page !== page) {
+        throw new Error(`REST item pagination ignored requested page ${page}`);
+      }
+      if (!Number.isInteger(result.limit) || result.limit < 1 || result.limit > 100) {
+        throw new Error('REST item pagination returned an invalid page limit');
+      }
+      if (result.items.length > result.limit) {
+        throw new Error('REST item pagination returned more records than its page limit');
+      }
+      if (expectedTotal === undefined) {
+        expectedTotal = result.total;
+        if (!Number.isInteger(expectedTotal) || expectedTotal < 0 || expectedTotal > 10_000) {
+          throw new Error('REST item pagination returned an invalid or oversized total');
+        }
+      } else if (result.total !== expectedTotal) {
+        throw new Error('REST item pagination returned inconsistent totals');
+      }
+      for (const value of result.items) {
+        const item = restItem(value);
+        if (seen.has(item._id)) {
+          throw new Error(`REST item pagination returned duplicate id ${item._id}`);
+        }
+        seen.add(item._id);
+        records.push(item);
+      }
+      if (records.length > expectedTotal) {
+        throw new Error('REST item pagination returned more records than its reported total');
+      }
+      if (records.length === expectedTotal) {
+        return records;
+      }
+      if (result.items.length === 0) {
+        throw new Error('REST item pagination made no progress before reaching its total');
+      }
+    }
+    throw new Error('REST item pagination exceeded the maximum supported page count');
+  }
+
+  async searchActors(params: SearchActorsParams): Promise<ActorSearchResult> {
+    const filters = { query: params.query, type: params.type };
+    this.validateSearchFilters(filters);
+    this.assertSocketPaginationAuthorized();
+    const context = this.paginationContext('actor-search', filters);
+    let records: FoundryActor[] | undefined;
+    if (params.cursor === undefined) {
+      if (this.config.apiKey) {
+        records = await this.fetchAllRestActors(filters);
+      } else {
+        const worldData = this.worldData;
+        if (!worldData) {
+          throw new Error('Not connected — no world data available');
+        }
+        records = worldData.actors
+          .filter(
+            (actor) =>
+              (!params.query || actor.name.toLowerCase().includes(params.query.toLowerCase())) &&
+              (!params.type || actor.type.toLowerCase() === params.type.toLowerCase()),
+          )
+          .map(worldActorToFoundry);
+      }
+      records.sort(compareFoundryRecords);
+    }
+    const page = this.paginator.paginate(records, params, context);
+    const { records: actors, ...metadata } = page;
+    return { actors, ...metadata };
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
@@ -779,32 +970,35 @@ export class FoundryClient {
   // ==========================================================================
 
   async searchItems(params: SearchItemsParams): Promise<ItemSearchResult> {
-    if (this.config.apiKey) {
-      const response = await this.executeWithRetry(() => this.http.get('/api/items', { params }));
-      const result = itemSearchDocumentSchema.parse(response.data);
-      return { ...result, items: result.items.map((item) => restItem(item)) };
+    const filters = { query: params.query, type: params.type, rarity: params.rarity };
+    this.validateSearchFilters(filters);
+    this.assertSocketPaginationAuthorized();
+    const context = this.paginationContext('item-search', filters);
+    let records: FoundryItem[] | undefined;
+    if (params.cursor === undefined) {
+      if (this.config.apiKey) {
+        records = await this.fetchAllRestItems(filters);
+      } else {
+        const worldData = this.worldData;
+        if (!worldData) {
+          throw new Error('Not connected — no world data available');
+        }
+        records = worldData.items
+          .filter(
+            (item) =>
+              (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
+              (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
+          )
+          .map(worldItemToFoundry)
+          .filter(
+            (item) => !params.rarity || item.rarity?.toLowerCase() === params.rarity.toLowerCase(),
+          );
+      }
+      records.sort(compareFoundryRecords);
     }
-
-    if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
-    }
-
-    let results = this.worldData.items;
-
-    if (params.query) {
-      const q = params.query.toLowerCase();
-      results = results.filter((i) => i.name.toLowerCase().includes(q));
-    }
-    if (params.type) {
-      const t = params.type.toLowerCase();
-      results = results.filter((i) => i.type.toLowerCase() === t);
-    }
-
-    const total = results.length;
-    const limit = params.limit || 10;
-    const items = results.slice(0, limit).map(worldItemToFoundry);
-
-    return { items, total, page: 1, limit };
+    const page = this.paginator.paginate(records, params, context);
+    const { records: items, ...metadata } = page;
+    return { items, ...metadata };
   }
 
   /** Read one world item only; actor-owned and compendium items are excluded. */
@@ -1434,6 +1628,30 @@ export class FoundryClient {
     });
   }
 
+  async searchJournalsPage(params: SearchCollectionParams): Promise<CollectionPage> {
+    validateBoundedText(params.query, 'query');
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST journal pagination is unsupported because no authenticated collection endpoint is available',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const filters = { query: params.query };
+    const context = this.paginationContext('journal-search', filters);
+    let records: CollectionRecord[] | undefined;
+    if (params.cursor === undefined) {
+      records = sortCollectionRecords(
+        this.searchJournals(params.query ?? '').map((journal) => ({
+          id: journal._id,
+          name: journal.name,
+          documentType: 'JournalEntry' as const,
+          pageCount: journal.pages?.length ?? 0,
+        })),
+      );
+    }
+    return this.paginator.paginate(records, this.paginationParams(params), context);
+  }
+
   getJournal(journalId: string): WorldJournal | undefined {
     return this.worldData?.journal.find((j) => j._id === journalId);
   }
@@ -1524,6 +1742,147 @@ export class FoundryClient {
       scenes: this.worldData.scenes.filter((s) => s.name.toLowerCase().includes(q)),
       journals: this.worldData.journal.filter((j) => j.name.toLowerCase().includes(q)),
     };
+  }
+
+  async searchWorldPage(params: SearchCollectionParams): Promise<CollectionPage> {
+    validateBoundedText(params.query, 'query');
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST world pagination is unsupported because authenticated scene, journal, and user collection endpoints are unavailable',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const worldData = this.worldData;
+    if (!worldData) {
+      throw new Error('Not connected — no world data available');
+    }
+    const filters = { query: params.query };
+    const context = this.paginationContext('world-search', filters);
+    let records: CollectionRecord[] | undefined;
+    if (params.cursor === undefined) {
+      const query = (params.query ?? '').toLowerCase();
+      records = sortCollectionRecords([
+        ...worldData.actors
+          .filter((record) => record.name.toLowerCase().includes(query))
+          .map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'Actor' as const,
+            type: record.type,
+          })),
+        ...worldData.items
+          .filter((record) => record.name.toLowerCase().includes(query))
+          .map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'Item' as const,
+            type: record.type,
+          })),
+        ...worldData.scenes
+          .filter((record) => record.name.toLowerCase().includes(query))
+          .map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'Scene' as const,
+            active: record.active,
+          })),
+        ...worldData.journal
+          .filter((record) => record.name.toLowerCase().includes(query))
+          .map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'JournalEntry' as const,
+            pageCount: record.pages?.length ?? 0,
+          })),
+      ]);
+    }
+    return this.paginator.paginate(records, this.paginationParams(params), context);
+  }
+
+  async getCollectionPage(
+    collection: 'actors' | 'items' | 'scenes' | 'journals' | 'users',
+    params: PaginationParams,
+  ): Promise<CollectionPage> {
+    this.assertSocketPaginationAuthorized();
+    if (this.config.apiKey && !['actors', 'items'].includes(collection)) {
+      throw new Error(
+        `REST ${collection} pagination is unsupported because no authenticated collection endpoint is available`,
+      );
+    }
+
+    const context = this.paginationContext('collection', { collection });
+    let records: CollectionRecord[] | undefined;
+    if (params.cursor === undefined) {
+      if (this.config.apiKey) {
+        if (collection === 'actors') {
+          const actors = await this.fetchAllRestActors({});
+          records = actors.map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'Actor',
+            type: record.type,
+          }));
+        } else {
+          const items = await this.fetchAllRestItems({});
+          records = items.map((record) => ({
+            id: record._id,
+            name: record.name,
+            documentType: 'Item',
+            type: record.type,
+          }));
+        }
+      } else {
+        const worldData = this.worldData;
+        if (!worldData) {
+          throw new Error('Not connected — no world data available');
+        }
+        switch (collection) {
+          case 'actors':
+            records = worldData.actors.map((record) => ({
+              id: record._id,
+              name: record.name,
+              documentType: 'Actor',
+              type: record.type,
+            }));
+            break;
+          case 'items':
+            records = worldData.items.map((record) => ({
+              id: record._id,
+              name: record.name,
+              documentType: 'Item',
+              type: record.type,
+            }));
+            break;
+          case 'scenes':
+            records = worldData.scenes.map((record) => ({
+              id: record._id,
+              name: record.name,
+              documentType: 'Scene',
+              active: record.active,
+            }));
+            break;
+          case 'journals':
+            records = worldData.journal.map((record) => ({
+              id: record._id,
+              name: record.name,
+              documentType: 'JournalEntry',
+              pageCount: record.pages?.length ?? 0,
+            }));
+            break;
+          case 'users':
+            records = worldData.users.map((record) => ({
+              id: record._id,
+              name: record.name,
+              documentType: 'User',
+              active: worldData.activeUsers.includes(record._id),
+              role: record.role,
+            }));
+            break;
+        }
+      }
+      records = sortCollectionRecords(records);
+    }
+    return this.paginator.paginate(records, params, context);
   }
 
   // ==========================================================================
@@ -1720,6 +2079,23 @@ export class FoundryClient {
 // ============================================================================
 // Mapping helpers — WorldData raw documents → display interfaces
 // ============================================================================
+
+function compareFoundryRecords(
+  left: Pick<FoundryActor | FoundryItem, '_id' | 'name'>,
+  right: Pick<FoundryActor | FoundryItem, '_id' | 'name'>,
+): number {
+  const leftName = left.name.normalize('NFKC').toLowerCase();
+  const rightName = right.name.normalize('NFKC').toLowerCase();
+  if (leftName < rightName) {
+    return -1;
+  }
+  if (leftName > rightName) {
+    return 1;
+  }
+  const leftId = left._id.normalize('NFKC').toLowerCase();
+  const rightId = right._id.normalize('NFKC').toLowerCase();
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
 
 function worldActorToFoundry(a: WorldActor): FoundryActor {
   worldReadDocumentSchema.parse(a);

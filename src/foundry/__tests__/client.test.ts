@@ -150,7 +150,7 @@ describe('FoundryClient', () => {
 
       const result = await client.searchActors({ query: 'Hero' });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/actors', {
-        params: { query: 'Hero' },
+        params: { query: 'Hero', page: 1, limit: 100 },
       });
       expect(result.actors).toEqual(mockData.actors);
     });
@@ -166,7 +166,7 @@ describe('FoundryClient', () => {
 
       const result = await client.searchItems({ query: 'Sword', type: 'weapon', limit: 10 });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/items', {
-        params: { query: 'Sword', type: 'weapon', limit: 10 },
+        params: { query: 'Sword', type: 'weapon', page: 1, limit: 100 },
       });
       expect(result.items).toEqual(mockData.items);
     });

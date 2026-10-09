@@ -10,6 +10,8 @@
  * @see {@link https://foundryvtt.com/api/} FoundryVTT API Documentation
  */
 
+import type { PaginationMetadata } from './pagination.js';
+
 /** Public versioned MCP read envelopes and their allowlisted document records. */
 export type {
   ActorDetailsEnvelope,
@@ -522,11 +524,8 @@ export interface FoundryUser {
  * };
  * ```
  */
-export interface ActorSearchResult {
+export interface ActorSearchResult extends PaginationMetadata {
   actors: FoundryActor[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 /**
@@ -545,11 +544,8 @@ export interface ActorSearchResult {
  * };
  * ```
  */
-export interface ItemSearchResult {
+export interface ItemSearchResult extends PaginationMetadata {
   items: FoundryItem[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 /**
