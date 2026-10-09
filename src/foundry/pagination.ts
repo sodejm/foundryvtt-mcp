@@ -57,7 +57,7 @@ interface Snapshot<T> {
   bytes: number;
 }
 
-interface SnapshotPaginatorOptions {
+export interface SnapshotPaginatorOptions {
   now?: () => number;
   secret?: Buffer | string;
 }

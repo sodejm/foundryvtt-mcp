@@ -48,7 +48,7 @@ not passes. Broader refresh failures remain tracked by issue 3.
 
 ## Verified checkpoint
 
-- Unit suite: 740 tests in 33 files; no skips. Read-contract and actor/item
+- Unit suite: 750 tests in 34 files; no skips. Read-contract and actor/item
   handler coverage is 100% for statements, branches, functions and lines.
   Pagination engine coverage separately reaches 100% in all four metrics.
 - Actual stdio MCP against `test1world` (Foundry 14.369, dnd5e 6.0.6,
@@ -56,9 +56,9 @@ not passes. Broader refresh failures remain tracked by issue 3.
   traversals of 251 actors and 251 items and malformed/context-bound cursors.
 - REST protocol workflow fixtures: 45 checks pass without skips.
 - Build, lint and all three startup/package smoke commands pass. Lint retains
-  11 existing warnings. Documentation emits no errors and four warnings.
+  11 existing warnings. Documentation emits no errors and three existing warnings.
 - `bun audit --json` completes with exit 1 and reports advisories in the existing
-  dependency lockfile. This change does not alter dependencies; the audit is
+  dependency lockfile. Pagination does not alter dependencies relative to PR #23; the audit is
   a failed security check and is not presented as merge clearance.
 - Parent review caught locale-dependent ID ties; names/types are normalized,
   while IDs now use strict binary ordering with regression and live coverage.
