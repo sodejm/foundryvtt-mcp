@@ -23,7 +23,8 @@ The input is a strict object with `formula`, optional `reason` and optional
 
 Only one of `kh`, `kl`, `dh` or `dl` may follow a dice term. Explicit modifier
 counts must be positive and cannot exceed a positive dice count. `0d6kh` remains
-an empty roll. Short aliases such as `k` and `d`, chained modifiers, rerolls,
+an empty roll. Dice and modifier letters are case-insensitive (`D6`, `2D6KH1`).
+Short aliases such as `k` and `d`, chained modifiers, rerolls,
 explosions, pools, fractions, variables and JavaScript are not accepted.
 
 The bounds apply to the entire formula: at most 1,000 dice, 50 numeric/dice terms,
