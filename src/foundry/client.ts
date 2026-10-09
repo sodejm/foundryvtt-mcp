@@ -5,7 +5,7 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
@@ -581,6 +581,7 @@ export class FoundryClient {
   private restLinkLive = true;
   private readonly paginator = new SnapshotPaginator();
   private readonly compendiumPaginator = new SnapshotPaginator();
+  private readonly compendiumRelaySecret = randomBytes(32);
   private readonly sceneTokenPaginator = new SnapshotPaginator();
   private readonly compendiumAdapter: CompendiumRestAdapter;
   private paginationSession = randomUUID();
@@ -2035,7 +2036,7 @@ export class FoundryClient {
       filters,
       session: this.paginationSession,
       world: this.snapshotWorldId ?? this.restWorldId,
-      relayIdentity: createHash('sha256')
+      relayIdentity: createHmac('sha256', this.compendiumRelaySecret)
         .update(
           JSON.stringify([this.config.restUrl, this.config.restClientId, this.config.restApiKey]),
         )

@@ -549,6 +549,8 @@ describe('verified compendium client boundary', () => {
     'limit',
     'world',
     'relay',
+    'relayUrl',
+    'relayApiKey',
     'session',
   ] as const)('binds cursors to %s', async (binding) => {
     const { client } = compendiumClient();
@@ -559,6 +561,12 @@ describe('verified compendium client boundary', () => {
     }
     if (binding === 'relay') {
       (Reflect.get(client, 'config') as { restClientId: string }).restClientId = 'other-client';
+    }
+    if (binding === 'relayUrl') {
+      (Reflect.get(client, 'config') as { restUrl: string }).restUrl = 'https://other.example.test';
+    }
+    if (binding === 'relayApiKey') {
+      (Reflect.get(client, 'config') as { restApiKey: string }).restApiKey = 'other-key';
     }
     if (binding === 'session') {
       Reflect.set(client, 'paginationSession', 'other-session');
@@ -571,6 +579,19 @@ describe('verified compendium client boundary', () => {
         cursor,
       }),
     ).rejects.toThrow();
+  });
+  it('keeps credential-derived cursor context private to each client', async () => {
+    const { client: firstClient } = compendiumClient();
+    const { client: secondClient } = compendiumClient();
+    Reflect.set(secondClient, 'paginationSession', Reflect.get(firstClient, 'paginationSession'));
+    const contextHash = async (client: FoundryClient) => {
+      const page = await client.searchCompendium({ query: 'Entry', limit: 1 });
+      const payload = requireCursor(page.nextCursor).split('.')[0];
+      return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')).contextHash;
+    };
+    const firstHash = await contextHash(firstClient);
+    expect(await contextHash(firstClient)).toBe(firstHash);
+    expect(await contextHash(secondClient)).not.toBe(firstHash);
   });
   it.each([
     'unavailable',
