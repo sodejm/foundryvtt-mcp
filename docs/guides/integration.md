@@ -559,10 +559,18 @@ stdio against a local REST fixture. That fixture proves the process/protocol
 workflow; supported Foundry compatibility still requires live integration.
 
 `tests/integration/structured-reads.integration.test.ts` requires a licensed,
-bootstrapped world containing exactly two actors with a shared name and exactly
-two world items with a shared name. The live test records core/system/module
-version evidence. Missing connection or fixture prerequisites fail; they do not
-skip. Use the existing integration setup and keep credentials outside source.
+launched disposable dnd5e world (`test1world` by default; set
+`FOUNDRY_TEST_WORLD_ID` to select another disposable world). It creates its own
+same-name actor/item pairs with zero, false and empty-string values and its own
+deleted-document fixtures. It removes only documents it created and reports
+cleanup failures. Existing world documents are never needed as fixtures. The
+live test records core/system/module version evidence; missing connection or
+world prerequisites fail instead of skipping. Keep credentials outside source.
+
+A healthy Docker container alone does not provide these prerequisites: install
+dnd5e, create the disposable world and launch it before running the live suite.
+The Docker helper does not bootstrap a licensed world. The local Foundry server
+is the validated live target for this PR stack.
 
 `tests/integration/pagination.integration.test.ts` additionally requires the
 disposable world ID `test1world`. It creates uniquely named fixtures (251 actors,
@@ -588,3 +596,14 @@ and insufficient-scope keys, socket-only and plain Foundry configurations, actua
 empty searches, filters, 1/100/101/251-entry traversals, authorization revocation,
 module removal and recovery. Missing prerequisites fail instead of skipping. See
 [optional capability configuration and test prerequisites](optional-capabilities.md).
+
+### GitHub Actions live endpoint
+
+The integration workflow requires a prepared disposable `test1world` with dnd5e, the REST module, a paired REST relay and all fixture controllers reachable from the runner. Configure these repository secrets:
+
+- `FOUNDRY_TEST_URL`, `FOUNDRY_TEST_USERNAME`, and optionally `FOUNDRY_TEST_PASSWORD` for the world login.
+- `FOUNDRY_REST_URL` for the paired REST relay.
+- `FOUNDRY_REST_TEST_CONTROL_URL`, `FOUNDRY_JOURNAL_TEST_CONTROL_URL`, `FOUNDRY_ACTOR_TEST_CONTROL_URL`, `FOUNDRY_SCENE_TEST_CONTROL_URL`, `FOUNDRY_DICE_TEST_CONTROL_URL`, and `FOUNDRY_ITEM_TEST_CONTROL_URL` for the fixture controllers.
+- `FOUNDRY_REST_TEST_FIXTURES_JSON` for the scoped-key fixture JSON described in the optional-capability test prerequisites. CI writes it to a private temporary file and removes it afterward. The workflow expects REST module version `3.4.1`.
+
+World login credentials are separate from the account used to download Foundry. The local relay and controller scripts bind to loopback; a hosted runner cannot reach them without a separately prepared secure connection. Pull requests skip this optional live tier when configuration is incomplete; manually dispatched runs fail. The required unit, workflow, package, documentation, and security gates run independently. This workflow does not download, license or launch Foundry, or provision the controllers.
