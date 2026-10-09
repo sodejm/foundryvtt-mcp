@@ -34,6 +34,7 @@ export interface ToolResult {
     mimeType?: string;
     [key: string]: unknown;
   }>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
 

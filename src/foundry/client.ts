@@ -11,6 +11,13 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import { evaluateDiceFormula } from './dice-formula.js';
+import {
+  actorDocumentSchema,
+  actorSearchDocumentSchema,
+  FOUNDRY_ID_PATTERN,
+  itemDocumentSchema,
+  itemSearchDocumentSchema,
+} from './read-contract.js';
 import type {
   ActorAttributeUpdateResult,
   ActorItemCreateSource,
@@ -42,8 +49,37 @@ import {
   parseUserActivity,
 } from './world-cache.js';
 
-/** FoundryVTT document IDs are 16-character alphanumeric strings. */
-const FOUNDRY_ID_PATTERN = /^[a-zA-Z0-9]{16}$/;
+/** Validate identity before any detail lookup, including callers outside MCP. */
+function assertReadId(id: unknown, field: string): asserts id is string {
+  if (typeof id !== 'string' || !FOUNDRY_ID_PATTERN.test(id)) {
+    throw new Error(`Invalid ${field} format: expected 16 alphanumeric characters`);
+  }
+}
+
+const worldReadDocumentSchema = z.object({
+  _id: z.string().regex(FOUNDRY_ID_PATTERN),
+  name: z.string(),
+  type: z.string(),
+  img: z.string().optional(),
+  system: z.record(z.string(), z.unknown()),
+});
+
+/** REST module payloads do not establish UUID scope. Preserve existing internal
+ * fields for other client callers, but remove unverified UUIDs before display. */
+function restActor(value: unknown, expectedId?: string): FoundryActor {
+  const { uuid: _uuid, ...actor } = actorDocumentSchema.parse(value);
+  if (expectedId !== undefined && actor._id !== expectedId) {
+    throw new Error('Actor response ID mismatch');
+  }
+  return actor as FoundryActor;
+}
+function restItem(value: unknown, expectedId?: string): FoundryItem {
+  const { uuid: _uuid, ...item } = itemDocumentSchema.parse(value);
+  if (expectedId !== undefined && item._id !== expectedId) {
+    throw new Error('Item response ID mismatch');
+  }
+  return item as FoundryItem;
+}
 
 /**
  * Characters a dice formula may contain. A cheap sanity gate, not a grammar:
@@ -623,14 +659,13 @@ export class FoundryClient {
 
   async searchActors(params: SearchActorsParams): Promise<ActorSearchResult> {
     if (this.config.apiKey) {
-      return this.executeWithRetry(async () => {
-        const response = await this.http.get('/api/actors', { params });
-        return response.data;
-      });
+      const response = await this.executeWithRetry(() => this.http.get('/api/actors', { params }));
+      const result = actorSearchDocumentSchema.parse(response.data);
+      return { ...result, actors: result.actors.map((actor) => restActor(actor)) };
     }
 
     if (!this.worldData) {
-      return { actors: [], total: 0, page: 1, limit: params.limit || 10 };
+      throw new Error('Not connected — no world data available');
     }
 
     let results = this.worldData.actors;
@@ -652,14 +687,10 @@ export class FoundryClient {
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
-    if (!FOUNDRY_ID_PATTERN.test(actorId)) {
-      throw new Error(`Invalid actorId format: ${actorId}`);
-    }
+    assertReadId(actorId, 'actorId');
     if (this.config.apiKey) {
-      return this.executeWithRetry(async () => {
-        const response = await this.http.get(`/api/actors/${actorId}`);
-        return response.data;
-      });
+      const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
+      return restActor(response.data, actorId);
     }
 
     if (!this.worldData) {
@@ -749,14 +780,13 @@ export class FoundryClient {
 
   async searchItems(params: SearchItemsParams): Promise<ItemSearchResult> {
     if (this.config.apiKey) {
-      return this.executeWithRetry(async () => {
-        const response = await this.http.get('/api/items', { params });
-        return response.data;
-      });
+      const response = await this.executeWithRetry(() => this.http.get('/api/items', { params }));
+      const result = itemSearchDocumentSchema.parse(response.data);
+      return { ...result, items: result.items.map((item) => restItem(item)) };
     }
 
     if (!this.worldData) {
-      return { items: [], total: 0, page: 1, limit: params.limit || 10 };
+      throw new Error('Not connected — no world data available');
     }
 
     let results = this.worldData.items;
@@ -772,34 +802,26 @@ export class FoundryClient {
 
     const total = results.length;
     const limit = params.limit || 10;
-    const items = results.slice(0, limit).map((i) => {
-      const item: {
-        _id: string;
-        name: string;
-        type: string;
-        img?: string;
-        description?: string;
-        rarity?: string;
-      } = {
-        _id: i._id,
-        name: i.name,
-        type: i.type,
-      };
-      if (i.img) {
-        item.img = i.img;
-      }
-      const desc = extractString(i.system, 'description', 'value');
-      if (desc) {
-        item.description = desc;
-      }
-      const rar = extractString(i.system, 'rarity');
-      if (rar) {
-        item.rarity = rar;
-      }
-      return item;
-    });
+    const items = results.slice(0, limit).map(worldItemToFoundry);
 
     return { items, total, page: 1, limit };
+  }
+
+  /** Read one world item only; actor-owned and compendium items are excluded. */
+  async getItem(itemId: string): Promise<FoundryItem> {
+    assertReadId(itemId, 'itemId');
+    if (this.config.apiKey) {
+      const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
+      return restItem(response.data, itemId);
+    }
+    if (!this.worldData) {
+      throw new Error('Not connected — no world data available');
+    }
+    const item = this.worldData.items.find((entry) => entry._id === itemId);
+    if (!item) {
+      throw new Error(`Item not found: ${itemId}`);
+    }
+    return worldItemToFoundry(item);
   }
 
   // ==========================================================================
@@ -1699,7 +1721,8 @@ export class FoundryClient {
 // ============================================================================
 
 function worldActorToFoundry(a: WorldActor): FoundryActor {
-  const sys = a.system || {};
+  worldReadDocumentSchema.parse(a);
+  const sys = a.system;
   const hpRaw = extractNested(sys, 'attributes', 'hp');
   const hp = isRecord(hpRaw) ? hpRaw : undefined;
   const acRaw = extractNested(sys, 'attributes', 'ac');
@@ -1712,10 +1735,13 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
     mappedAbilities = {};
     for (const [key, val] of Object.entries(abilitiesRaw)) {
       if (isRecord(val)) {
-        const entry: { value: number; mod: number; save?: number } = {
-          value: typeof val.value === 'number' ? val.value : 10,
-          mod: typeof val.mod === 'number' ? val.mod : 0,
-        };
+        const entry: { value?: number; mod?: number; save?: number } = {};
+        if (typeof val.value === 'number') {
+          entry.value = val.value;
+        }
+        if (typeof val.mod === 'number') {
+          entry.mod = val.mod;
+        }
         if (typeof val.save === 'number') {
           entry.save = val.save;
         }
@@ -1726,18 +1752,23 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
 
   const actor: FoundryActor = {
     _id: a._id,
+    uuid: `Actor.${a._id}`,
     name: a.name,
     type: a.type,
   };
 
-  if (a.img) {
+  if (a.img !== undefined) {
     actor.img = a.img;
   }
 
   if (hp) {
-    const hpValue = typeof hp.value === 'number' ? hp.value : 0;
-    const hpMax = typeof hp.max === 'number' ? hp.max : 0;
-    const hpObj: { value: number; max: number; temp?: number } = { value: hpValue, max: hpMax };
+    const hpObj: { value?: number; max?: number; temp?: number } = {};
+    if (typeof hp.value === 'number') {
+      hpObj.value = hp.value;
+    }
+    if (typeof hp.max === 'number') {
+      hpObj.max = hp.max;
+    }
     if (typeof hp.temp === 'number') {
       hpObj.temp = hp.temp;
     }
@@ -1756,12 +1787,53 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
     actor.abilities = mappedAbilities;
   }
 
-  const bio = extractString(details, 'biography', 'value') || extractString(details, 'biography');
-  if (bio) {
+  const bio = extractString(details, 'biography', 'value') ?? extractString(details, 'biography');
+  if (bio !== null) {
     actor.biography = bio;
   }
 
+  actorDocumentSchema.parse(actor);
   return actor;
+}
+
+function worldItemToFoundry(i: WorldItem): FoundryItem {
+  worldReadDocumentSchema.parse(i);
+  const item: FoundryItem = { _id: i._id, uuid: `Item.${i._id}`, name: i.name, type: i.type };
+  if (i.img !== undefined) {
+    item.img = i.img;
+  }
+  const desc = extractString(i.system, 'description', 'value');
+  if (desc !== null) {
+    item.description = desc;
+  }
+  const rarity = extractString(i.system, 'rarity');
+  if (rarity !== null) {
+    item.rarity = rarity;
+  }
+  // Preserve existing common world-item values without normalizing game systems
+  // or changing the transport-specific rarity-filter behavior (#13).
+  for (const key of ['weight', 'quantity'] as const) {
+    const value = i.system[key];
+    if (typeof value === 'number') {
+      item[key] = value;
+    }
+  }
+  for (const key of ['equipped', 'identified'] as const) {
+    const value = i.system[key];
+    if (typeof value === 'boolean') {
+      item[key] = value;
+    }
+  }
+  const price = i.system.price;
+  if (
+    isRecord(price) &&
+    typeof price.value === 'number' &&
+    typeof price.denomination === 'string'
+  ) {
+    item.price = { value: price.value, denomination: price.denomination };
+  }
+  itemDocumentSchema.parse(item);
+  return item;
 }
 
 function worldSceneToFoundry(s: WorldScene): FoundryScene {

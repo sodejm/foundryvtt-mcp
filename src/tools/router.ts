@@ -39,7 +39,7 @@ import {
   handleDeleteActorItem,
   handleUpdateActorItem,
 } from './handlers/item-mutations.js';
-import { handleSearchItems } from './handlers/items.js';
+import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleCreateJournalEntry } from './handlers/journal-mutations.js';
 import { handleGetJournal, handleSearchJournals } from './handlers/journals.js';
 import { handleReadResource } from './handlers/resources.js';
@@ -99,7 +99,7 @@ export async function routeToolRequest(
       return handleSearchActors(args, foundryClient);
     case 'get_actor_details':
       if (!('actorId' in args) || typeof args.actorId !== 'string') {
-        throw new Error('Missing required parameter: actorId');
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
 
@@ -120,6 +120,11 @@ export async function routeToolRequest(
     // Item tools
     case 'search_items':
       return handleSearchItems(args, foundryClient);
+    case 'get_item_details':
+      if (!('itemId' in args) || typeof args.itemId !== 'string') {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: itemId');
+      }
+      return handleGetItemDetails(args as { itemId: string }, foundryClient);
 
     // Compendium tools (#144)
     case 'search_compendium':

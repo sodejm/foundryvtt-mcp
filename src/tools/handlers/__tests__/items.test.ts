@@ -47,14 +47,14 @@ describe('handleSearchItems', () => {
       const { client, calls } = mockFoundryClient({
         items: [
           {
-            _id: 'item-1',
+            _id: 'Item000000000001',
             name: 'Longsword',
             type: 'weapon',
             rarity: 'Common',
             price: { value: 15, denomination: 'gp' },
           },
           {
-            _id: 'item-2',
+            _id: 'Item000000000002',
             name: 'Potion of Healing',
             type: 'consumable',
             rarity: 'Common',
@@ -125,11 +125,11 @@ describe('handleSearchItems', () => {
       expect(text).toContain('No items found matching the criteria.');
     });
 
-    it('falls back to "Common" rarity and "Unknown price" when item fields are missing', async () => {
+    it('falls back to "Unknown rarity" and "Unknown price" when item fields are missing', async () => {
       const { client } = mockFoundryClient({
         items: [
           {
-            _id: 'item-3',
+            _id: 'Item000000000003',
             name: 'Mystery Box',
             type: 'misc',
             // no rarity, no price
@@ -143,7 +143,7 @@ describe('handleSearchItems', () => {
       const result = await handleSearchItems({ query: 'box' }, client);
       const text = getText(result);
 
-      expect(text).toContain('**Mystery Box** (misc) - Common - Unknown price');
+      expect(text).toContain('**Mystery Box** (misc) - Unknown rarity - Unknown price');
     });
   });
 });

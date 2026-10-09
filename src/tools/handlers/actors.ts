@@ -1,26 +1,20 @@
-/**
- * @fileoverview Actor management tool handlers
- *
- * Handles searching for actors and retrieving detailed actor information.
- */
-
+/** Actor world-document search and detail handlers. */
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import {
+  actorDetailsSchema,
+  actorReadRecord,
+  actorSearchDocumentSchema,
+  actorSearchSchema,
+  documentIdSchema,
+} from '../../foundry/read-contract.js';
 import { withToolError } from './utils.js';
 
-/**
- * Handles actor search requests
- */
 export async function handleSearchActors(
-  args: {
-    query?: string;
-    type?: string;
-    limit?: number;
-  },
+  args: { query?: string; type?: string; limit?: number },
   foundryClient: FoundryClient,
 ) {
   const { query, type, limit = 10 } = args;
-
   return withToolError('search actors', async () => {
     const searchParams: { query: string; type?: string; limit: number } = {
       query: query || '',
@@ -29,74 +23,85 @@ export async function handleSearchActors(
     if (type) {
       searchParams.type = type;
     }
-    const result = await foundryClient.searchActors(searchParams);
-
-    const actorList = result.actors
+    const result = actorSearchDocumentSchema.parse(await foundryClient.searchActors(searchParams));
+    const structuredContent = actorSearchSchema.parse({
+      schemaVersion: 1,
+      documentType: 'Actor',
+      records: result.actors.map(actorReadRecord),
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    });
+    const actorList = structuredContent.records
       .map(
         (actor) =>
-          `- **${actor.name}** (${actor.type}) - Level ${actor.level || 'Unknown'} - HP: ${actor.hp?.value || 'Unknown'}/${actor.hp?.max || 'Unknown'}`,
+          `- **${actor.name}** (${actor.type}) - Level ${actor.level ?? 'Unknown'} - HP: ${actor.hp?.value ?? 'Unknown'}/${actor.hp?.max ?? 'Unknown'} - ID: ${actor.id}`,
       )
       .join('\n');
-
     return {
+      structuredContent,
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `🎭 **Actor Search Results**
 **Query:** ${query || 'All actors'}
 **Type Filter:** ${type || 'All types'}
-**Results:** ${result.actors.length}/${result.total} total
+**Results:** ${structuredContent.records.length}/${structuredContent.total} total
 
 ${actorList || 'No actors found matching the criteria.'}
 
-**Page:** ${result.page} | **Limit:** ${result.limit}`,
+**Page:** ${structuredContent.page} | **Limit:** ${structuredContent.limit}`,
         },
       ],
     };
   });
 }
 
-/**
- * Handles detailed actor information requests
- */
 export async function handleGetActorDetails(
-  args: {
-    actorId: string;
-  },
+  args: { actorId: string },
   foundryClient: FoundryClient,
 ) {
   const { actorId } = args;
-
-  if (!actorId || typeof actorId !== 'string') {
-    throw new McpError(ErrorCode.InvalidParams, 'Actor ID is required and must be a string');
+  if (!documentIdSchema.safeParse(actorId).success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Invalid actorId: expected 16 alphanumeric characters',
+    );
   }
-
   return withToolError('get actor details', async () => {
-    const actor = await foundryClient.getActor(actorId);
-
+    const actor = actorReadRecord(await foundryClient.getActor(actorId));
+    if (actor.id !== actorId) {
+      throw new Error('Actor response ID mismatch');
+    }
+    const structuredContent = actorDetailsSchema.parse({
+      schemaVersion: 1,
+      documentType: 'Actor',
+      record: actor,
+    });
     const abilities = actor.abilities
       ? Object.entries(actor.abilities)
-          .map(
-            ([key, ability]: [string, { value: number; mod: number }]) =>
-              `**${key.toUpperCase()}:** ${ability.value} (${ability.mod >= 0 ? '+' : ''}${ability.mod})`,
-          )
+          .map(([key, ability]) => {
+            const mod = ability.mod;
+            return `**${key.toUpperCase()}:** ${ability.value ?? 'Unknown'} (${mod === undefined ? 'Unknown' : `${mod >= 0 ? '+' : ''}${mod}`})`;
+          })
           .join('\n')
       : 'No ability scores available';
-
     return {
+      structuredContent,
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `🎭 **Actor Details: ${actor.name}**
+**ID:** ${actor.id}
 **Type:** ${actor.type}
-**Level:** ${actor.level || 'Unknown'}
-**Hit Points:** ${actor.hp?.value || 'Unknown'}/${actor.hp?.max || 'Unknown'}
-**Armor Class:** ${actor.ac?.value || 'Unknown'}
+**Level:** ${actor.level ?? 'Unknown'}
+**Hit Points:** ${actor.hp?.value ?? 'Unknown'}/${actor.hp?.max ?? 'Unknown'}
+**Armor Class:** ${actor.ac?.value ?? 'Unknown'}
 
 **Ability Scores:**
 ${abilities}
 
-**Description:** ${(actor as { description?: string }).description || 'No description available.'}`,
+**Biography:** ${actor.biography ?? 'No biography available.'}`,
         },
       ],
     };

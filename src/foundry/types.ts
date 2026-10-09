@@ -38,9 +38,10 @@ export interface FoundryActor {
   img?: string;
   data?: Record<string, unknown>;
   // Common actor properties
+  uuid?: string;
   hp?: {
-    value: number;
-    max: number;
+    value?: number;
+    max?: number;
     temp?: number;
   };
   ac?: {
@@ -50,8 +51,8 @@ export interface FoundryActor {
   abilities?: Record<
     string,
     {
-      value: number;
-      mod: number;
+      value?: number;
+      mod?: number;
       save?: number;
     }
   >;
@@ -92,6 +93,7 @@ export interface FoundryActor {
  * ```
  */
 export interface FoundryItem {
+  uuid?: string;
   _id: string;
   name: string;
   type: string;

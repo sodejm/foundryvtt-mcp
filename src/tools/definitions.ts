@@ -5,6 +5,13 @@
  * Tools are separated into logical groups for better maintainability.
  */
 
+import {
+  actorDetailsOutputSchema,
+  actorSearchOutputSchema,
+  itemDetailsOutputSchema,
+  itemSearchOutputSchema,
+} from '../foundry/read-contract.js';
+
 /**
  * Shared write-safety clause appended to every mutation tool description.
  *
@@ -63,8 +70,9 @@ export const diceTools = [
 export const actorTools = [
   {
     name: 'search_actors',
+    outputSchema: actorSearchOutputSchema,
     description:
-      "Search actors (player characters, NPCs) by name, optionally filtered by type. Returns a summary line per match: name, type, level and current/max HP. Use when: checking whether an actor exists, or getting a quick roster with HP. Do not use when: you already have the actorId and want that actor's ability scores - use get_actor_details; or you need the actorId itself, which this tool does not print - read the foundry://actors resource, whose JSON lists up to the first 100 actors with their _id (not exhaustive in larger worlds).",
+      'Search world actors by name, optionally filtered by type. Returns version 1 structuredContent with stable id, documentType, name and available mapped stats, plus a readable summary with each ID. Duplicate names remain distinct; pass the chosen id to get_actor_details. Missing stats are omitted and displayed as Unknown; zero is preserved. UUIDs appear only for a verified world source. Uses the existing backend/cache view and does not list embedded items.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -86,14 +94,16 @@ export const actorTools = [
   },
   {
     name: 'get_actor_details',
+    outputSchema: actorDetailsOutputSchema,
     description:
-      'Get details for one actor by id: type, level, current/max HP, AC and ability scores; no biography or description text is returned (the description line always reads "No description available."). Use when: you have an actorId and need its current HP or ability scores - notably as the read-before-write step for update_actor_attributes. Do not use when: you only have a name - run search_actors first; or you need the ids of items the actor owns, which this tool does not return (no tool in this server lists owned-item ids - ask the user for the itemId).',
+      'Read one world actor by its 16-character alphanumeric actorId from search_actors. Returns version 1 structuredContent and text with ID, type and available level, HP, AC, ability scores and biography. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified. Use for a read-before-write step; actor-owned items and full sheets are outside this read.',
     inputSchema: {
       type: 'object',
       properties: {
         actorId: {
           type: 'string',
-          description: 'The ID of the actor to retrieve',
+          description: 'World actor ID from search_actors (not a UUID)',
+          pattern: '^[a-zA-Z0-9]{16}$',
         },
       },
       required: ['actorId'],
@@ -141,8 +151,9 @@ export const actorMutationTools = [
 export const itemTools = [
   {
     name: 'search_items',
+    outputSchema: itemSearchOutputSchema,
     description:
-      'Search item documents in the world by name, optionally filtered by type. Returns name, type and rarity per match (rarity shows "Common" when the system records none); price is not available and always prints "Unknown price", and the rarity filter is ignored unless the REST API module is configured (FOUNDRY_API_KEY). Item ids are not printed - read the foundry://items resource, whose JSON lists up to the first 100 items with their _id (not exhaustive in larger worlds). Use when: checking whether an item exists in the world. Do not use when: searching compendium packs (use search_compendium) or listing what one actor carries (this searches world items, not owned items).',
+      'Search world items by name, optionally filtered by type. Returns version 1 structuredContent with stable id, documentType, name and available mapped fields, plus a readable summary with IDs, rarity and price. Pass the chosen id to get_item_details to distinguish same-name items. Missing values are omitted and displayed as Unknown; zero, false and empty strings are preserved. Rarity filtering is applied only in REST API mode; Socket.IO behavior is unchanged. Excludes actor-owned and compendium items.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -165,6 +176,23 @@ export const itemTools = [
           default: 10,
         },
       },
+    },
+  },
+  {
+    name: 'get_item_details',
+    outputSchema: itemDetailsOutputSchema,
+    description:
+      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 1 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        itemId: {
+          type: 'string',
+          pattern: '^[a-zA-Z0-9]{16}$',
+          description: 'World item ID from search_items (not a UUID or owned-item ID)',
+        },
+      },
+      required: ['itemId'],
     },
   },
 ];
@@ -809,7 +837,7 @@ export const worldTools = [
   {
     name: 'search_world',
     description:
-      'Search across all collections (actors, items, scenes, journals) by name, grouped by collection. Use when: you do not know which collection holds what you are looking for. Do not use when: you already know the collection - use search_actors, search_items, or search_journals. Of those, only search_journals prints document ids; for actor and item ids read the foundry://actors and foundry://items resources, each of which lists up to the first 100 documents (not exhaustive in larger worlds).',
+      'Search across all collections (actors, items, scenes, journals) by name, grouped by collection. Use when: you do not know which collection holds what you are looking for. Do not use when: you already know the collection - use search_actors, search_items, or search_journals. These collection-specific searches return document IDs for detail lookup; actor/item searches also return versioned structuredContent.',
     inputSchema: {
       type: 'object',
       properties: {

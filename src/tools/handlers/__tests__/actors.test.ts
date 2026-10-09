@@ -14,7 +14,7 @@ function getText(result: { content: Array<{ type: string; text: string }> }): st
 
 function buildActor(overrides: Partial<FoundryActor> = {}): FoundryActor {
   return {
-    _id: 'actor-1',
+    _id: 'Actor00000000001',
     name: 'Hero',
     type: 'character',
     level: 3,
@@ -32,13 +32,19 @@ describe('handleSearchActors', () => {
   it('returns a formatted list of actors on happy path', async () => {
     const actors: FoundryActor[] = [
       buildActor({
-        _id: 'a1',
+        _id: 'Actor00000000001',
         name: 'Aragorn',
         type: 'character',
         level: 5,
         hp: { value: 30, max: 40 },
       }),
-      buildActor({ _id: 'a2', name: 'Goblin', type: 'npc', level: 1, hp: { value: 7, max: 7 } }),
+      buildActor({
+        _id: 'Actor00000000002',
+        name: 'Goblin',
+        type: 'npc',
+        level: 1,
+        hp: { value: 7, max: 7 },
+      }),
     ];
     const searchResult: ActorSearchResult = { actors, total: 2, page: 1, limit: 10 };
     const client = {
@@ -125,10 +131,10 @@ describe('handleGetActorDetails', () => {
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
-    const result = await handleGetActorDetails({ actorId: 'actor-1' }, client);
+    const result = await handleGetActorDetails({ actorId: 'Actor00000000001' }, client);
     const text = getText(result);
 
-    expect(client.getActor).toHaveBeenCalledWith('actor-1');
+    expect(client.getActor).toHaveBeenCalledWith('Actor00000000001');
     expect(text).toContain('Legolas');
     expect(text).toContain('**Type:** character');
     expect(text).toContain('**Level:** 7');
@@ -160,7 +166,7 @@ describe('handleGetActorDetails', () => {
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
-    const result = await handleGetActorDetails({ actorId: 'actor-1' }, client);
+    const result = await handleGetActorDetails({ actorId: 'Actor00000000001' }, client);
     const text = getText(result);
 
     expect(text).toContain('No ability scores available');
@@ -174,7 +180,7 @@ describe('handleGetActorDetails', () => {
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
-    const result = await handleGetActorDetails({ actorId: 'actor-1' }, client);
+    const result = await handleGetActorDetails({ actorId: 'Actor00000000001' }, client);
     const text = getText(result);
 
     expect(text).toContain('**STR:** 8 (-1)');
@@ -185,6 +191,8 @@ describe('handleGetActorDetails', () => {
       getActor: vi.fn().mockRejectedValue(new Error('not found')),
     } as unknown as FoundryClient;
 
-    await expect(handleGetActorDetails({ actorId: 'actor-1' }, client)).rejects.toThrow(McpError);
+    await expect(handleGetActorDetails({ actorId: 'Actor00000000001' }, client)).rejects.toThrow(
+      McpError,
+    );
   });
 });

@@ -96,7 +96,12 @@ describe('FoundryClient', () => {
     });
 
     it('should search actors via REST API', async () => {
-      const mockData = { actors: [{ _id: '1', name: 'Hero', type: 'character' }] };
+      const mockData = {
+        actors: [{ _id: 'Actor00000000001', name: 'Hero', type: 'character' }],
+        total: 1,
+        page: 1,
+        limit: 10,
+      };
       mockAxiosInstance.get.mockResolvedValue({ data: mockData });
 
       const result = await client.searchActors({ query: 'Hero' });
@@ -107,7 +112,12 @@ describe('FoundryClient', () => {
     });
 
     it('should search items via REST API', async () => {
-      const mockData = { items: [{ _id: '1', name: 'Sword', type: 'weapon' }] };
+      const mockData = {
+        items: [{ _id: 'Item000000000001', name: 'Sword', type: 'weapon' }],
+        total: 1,
+        page: 1,
+        limit: 10,
+      };
       mockAxiosInstance.get.mockResolvedValue({ data: mockData });
 
       const result = await client.searchItems({ query: 'Sword', type: 'weapon', limit: 10 });
@@ -137,7 +147,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(new Error('Network error'))
         .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'test' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
@@ -305,7 +315,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(429))
         .mockRejectedValueOnce(build4xxError(429))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
@@ -322,7 +332,7 @@ describe('FoundryClient', () => {
 
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(500))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
@@ -339,7 +349,7 @@ describe('FoundryClient', () => {
 
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(503))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
@@ -358,7 +368,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(new Error('transient'))
         .mockRejectedValueOnce(new Error('transient'))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const start = Date.now();
       await client.searchActors({ query: 'x' });
@@ -372,15 +382,11 @@ describe('FoundryClient', () => {
   });
 
   describe('worldData mode (no apiKey)', () => {
-    it('should return empty results when no worldData', async () => {
+    it('should report unavailable backend when no worldData', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
 
-      const actors = await client.searchActors({ query: 'test' });
-      expect(actors.actors).toEqual([]);
-      expect(actors.total).toBe(0);
-
-      const items = await client.searchItems({ query: 'test' });
-      expect(items.items).toEqual([]);
+      await expect(client.searchActors({ query: 'test' })).rejects.toThrow('Not connected');
+      await expect(client.searchItems({ query: 'test' })).rejects.toThrow('Not connected');
     });
 
     it('should return default world info when no worldData', async () => {
