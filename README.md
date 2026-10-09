@@ -7,7 +7,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 
 ## Features
 
-- **Dice Rolling** — standard RPG notation with any formula
+- **Dice Rolling** — bounded additive formulas, keep/drop modifiers and explicit engine provenance
 - **Data Querying** — search and inspect actors, items, scenes, journals
 - **Game State** — combat tracking, chat messages, user presence
 - **Optional Capabilities** — verified compendium search with typed availability states
@@ -436,10 +436,11 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 
 ### Game Mechanics
 
-- `roll_dice` — roll dice; dice terms (`NdS`) and whole numbers joined by `+`/`-`, with
-  unsupported notation (`4d6kh3`, `1d20r1`, `*`) rejected rather than dropped.
-  Parentheses are the one transport difference: FoundryVTT evaluates them when
-  `FOUNDRY_API_KEY` is set, the local roller rejects them otherwise
+- `roll_dice` — evaluate bounded additive dice formulas with parentheses and
+  `kh`, `kl`, `dh`, `dl` modifiers. Select `auto`, `local` or `foundry`; the result
+  identifies the engine that actually evaluated the roll. Unsupported syntax is
+  rejected before rolling, and failed remote attempts are never rolled again.
+  See the [dice contract](docs/guides/dice.md) for grammar, limits and transport behavior.
 - `lookup_rule` — returns a versioned `rulesLookup: unavailable` capability result
   because no verified rules provider is implemented. Accepts a nonblank `query`
   up to 256 characters and optional nonblank `system` up to 128 characters;

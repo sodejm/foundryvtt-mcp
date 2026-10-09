@@ -77,9 +77,13 @@ const result = await client.request({
 ```json
 {
   "formula": "1d20+5",
-  "reason": "Attack roll against goblin"
+  "reason": "Attack roll against goblin",
+  "engine": "auto"
 }
 ```
+
+See the [dice contract](dice.md) for the supported grammar, bounds and actual
+engine provenance returned by `roll_dice`.
 
 ### search_world
 
