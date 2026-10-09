@@ -62,6 +62,11 @@ function socketClient(role = 4) {
     packs: [],
   };
   Reflect.set(client, 'worldData', world);
+  Reflect.set(client, 'snapshotWorldId', world.world.id);
+  Reflect.set(client, 'snapshotId', 'world-snapshot-1');
+  Reflect.set(client, 'snapshotRevision', 1);
+  Reflect.set(client, 'snapshotCapturedAt', '2026-01-01T00:00:00.000Z');
+  Reflect.set(client, 'snapshotObservedAt', '2026-01-01T00:00:01.000Z');
   return { client, world };
 }
 
@@ -120,6 +125,35 @@ describe('socket snapshot pagination', () => {
     expect(ids).toHaveLength(101);
     expect(new Set(ids).size).toBe(101);
     expect((await client.searchActors({ cursor })).actors[0]?.name).toBe('Actor 017');
+  });
+
+  it('keeps the cursor source revision and marks it stale after a newer snapshot', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime('2026-01-01T00:00:04.000Z');
+      const { client } = socketClient();
+      const first = await client.searchActors({ limit: 1 });
+      const sourceMetadata = first.readMetadata;
+
+      Reflect.set(client, 'snapshotId', 'world-snapshot-2');
+      Reflect.set(client, 'snapshotRevision', 2);
+      Reflect.set(client, 'snapshotCapturedAt', '2026-01-01T00:00:02.000Z');
+      Reflect.set(client, 'snapshotObservedAt', '2026-01-01T00:00:03.000Z');
+      vi.setSystemTime('2026-01-01T00:00:05.000Z');
+      const second = await client.searchActors({ cursor: requireCursor(first.nextCursor) });
+
+      expect(second.snapshotId).toBe(first.snapshotId);
+      expect(second.readMetadata).toMatchObject({
+        snapshotId: sourceMetadata.snapshotId,
+        revision: sourceMetadata.revision,
+        capturedAt: sourceMetadata.capturedAt,
+        observedAt: sourceMetadata.observedAt,
+        freshness: 'stale',
+        respondedAt: '2026-01-01T00:00:05.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('applies type and rarity filters without confusing duplicate names', async () => {

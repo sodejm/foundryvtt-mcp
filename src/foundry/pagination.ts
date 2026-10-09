@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import type { WorldReadMetadata } from './freshness.js';
 
 export interface PaginationParams {
   limit?: number;
@@ -15,6 +16,7 @@ export interface PaginationMetadata {
   snapshotId: string;
   expiresAt: string;
   consistency: 'snapshot';
+  readMetadata: WorldReadMetadata;
 }
 
 export interface CollectionRecord {
@@ -55,6 +57,7 @@ interface Snapshot<T> {
   contextHash: string;
   expiresAt: number;
   bytes: number;
+  readMetadata: WorldReadMetadata;
 }
 
 export interface SnapshotPaginatorOptions {
@@ -122,11 +125,31 @@ export class SnapshotPaginator {
     records: readonly T[] | undefined,
     params: PaginationParams,
     context: unknown,
+    readMetadataOrDefaultLimit?: WorldReadMetadata | number,
     defaultLimit = DEFAULT_PAGE_LIMIT,
   ): PaginationMetadata & { records: T[] } {
     validateBoundedText(params.cursor, 'cursor', MAX_CURSOR_LENGTH);
     const contextHash = this.hashContext(context);
     const now = this.now();
+    const suppliedMetadata =
+      typeof readMetadataOrDefaultLimit === 'object' ? readMetadataOrDefaultLimit : undefined;
+    const effectiveDefaultLimit =
+      typeof readMetadataOrDefaultLimit === 'number'
+        ? readMetadataOrDefaultLimit
+        : defaultLimit;
+    const currentMetadata: WorldReadMetadata = suppliedMetadata
+      ? structuredClone(suppliedMetadata)
+      : {
+          source: 'socket',
+          freshness: 'unavailable',
+          worldId: null,
+          sessionId: 'standalone-paginator',
+          snapshotId: null,
+          revision: 0,
+          capturedAt: null,
+          observedAt: null,
+          respondedAt: new Date(now).toISOString(),
+        };
     this.evictExpired(now);
 
     let snapshot: Snapshot<T>;
@@ -161,7 +184,7 @@ export class SnapshotPaginator {
       snapshot = stored;
       offset = payload.offset;
     } else {
-      const limit = params.limit ?? defaultLimit;
+      const limit = params.limit ?? effectiveDefaultLimit;
       this.validateLimit(limit);
       if (!records) {
         throw new Error('Pagination records are required for the first page');
@@ -186,6 +209,7 @@ export class SnapshotPaginator {
         contextHash,
         expiresAt: now + SNAPSHOT_TTL_MS,
         bytes,
+        readMetadata: currentMetadata,
       };
       this.snapshots.set(snapshot.id, snapshot as Snapshot<unknown>);
       this.cachedBytes += bytes;
@@ -204,6 +228,7 @@ export class SnapshotPaginator {
       snapshotId: snapshot.id,
       expiresAt: new Date(snapshot.expiresAt).toISOString(),
       consistency: 'snapshot',
+      readMetadata: this.pageReadMetadata(snapshot.readMetadata, currentMetadata, now),
     };
     const result = { records: pageRecords, ...metadata };
     const resultBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
@@ -211,6 +236,31 @@ export class SnapshotPaginator {
       throw new Error(`Pagination page exceeds the maximum size of ${MAX_PAGE_BYTES} bytes`);
     }
     return result;
+  }
+
+  private pageReadMetadata(
+    snapshot: WorldReadMetadata,
+    current: WorldReadMetadata,
+    now: number,
+  ): WorldReadMetadata {
+    const sessionChanged =
+      snapshot.sessionId !== current.sessionId || snapshot.worldId !== current.worldId;
+    const newerSnapshot =
+      current.revision > snapshot.revision || current.snapshotId !== snapshot.snapshotId;
+    const freshness =
+      snapshot.freshness === 'unavailable'
+        ? 'unavailable'
+        : snapshot.freshness === 'stale' ||
+            current.freshness !== 'current' ||
+            sessionChanged ||
+            newerSnapshot
+          ? 'stale'
+          : 'current';
+    return {
+      ...structuredClone(snapshot),
+      freshness,
+      respondedAt: new Date(now).toISOString(),
+    };
   }
 
   private validateLimit(limit: number): void {

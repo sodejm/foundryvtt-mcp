@@ -178,8 +178,8 @@ for (const surface of [
     });
     it('refuses unavailable cached world instead of fabricating an empty success', async () => {
       const client = createClient();
-      await expect(surface.detail(client, surface.id)).rejects.toThrow('Not connected');
-      await expect(surface.search(client)).rejects.toThrow('Not connected');
+      await expect(surface.detail(client, surface.id)).rejects.toThrow('World data unavailable');
+      await expect(surface.search(client)).rejects.toThrow('World data unavailable');
       client.disconnect();
     });
     it.each([

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import type { WorldReadMetadata } from '../freshness.js';
 
 import {
   type CollectionRecord,
@@ -111,6 +112,39 @@ describe('SnapshotPaginator', () => {
         { query: '' },
       ).records,
     ).toEqual([{ name: 'b' }]);
+  });
+
+  it('preserves source metadata across pages and marks an older revision stale', () => {
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const paginator = new SnapshotPaginator({ secret: 'test-secret', now: () => now });
+    const source: WorldReadMetadata = {
+      source: 'socket',
+      freshness: 'current',
+      worldId: 'world-1',
+      sessionId: 'session-1',
+      snapshotId: 'world-snapshot-1',
+      revision: 1,
+      capturedAt: '2025-12-31T23:59:58.000Z',
+      observedAt: '2025-12-31T23:59:59.000Z',
+      respondedAt: '2025-12-31T23:59:59.500Z',
+    };
+    const first = paginator.paginate([1, 2], { limit: 1 }, 'context', source);
+
+    now += 1_000;
+    const second = paginator.paginate<number>(
+      undefined,
+      { cursor: requireCursor(first.nextCursor) },
+      'context',
+      { ...source, snapshotId: 'world-snapshot-2', revision: 2 },
+    );
+
+    expect(first.snapshotId).not.toBe(source.snapshotId);
+    expect(second.snapshotId).toBe(first.snapshotId);
+    expect(second.readMetadata).toEqual({
+      ...source,
+      freshness: 'stale',
+      respondedAt: '2026-01-01T00:00:01.000Z',
+    });
   });
 
   it('binds cursors to context and limit and rejects corrupt cursors', () => {

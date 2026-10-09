@@ -429,15 +429,17 @@ describe('FoundryClient', () => {
     it('should report unavailable backend when no worldData', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
 
-      await expect(client.searchActors({ query: 'test' })).rejects.toThrow('Not connected');
-      await expect(client.searchItems({ query: 'test' })).rejects.toThrow('Not connected');
+      await expect(client.searchActors({ query: 'test' })).rejects.toThrow(
+        'World data unavailable',
+      );
+      await expect(client.searchItems({ query: 'test' })).rejects.toThrow(
+        'World data unavailable',
+      );
     });
 
-    it('should return default world info when no worldData', async () => {
+    it('should reject world info when no snapshot has been captured', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const info = await client.getWorldInfo();
-      expect(info.id).toBe('unknown');
-      expect(info.title).toBe('Not connected');
+      await expect(client.getWorldInfo()).rejects.toThrow('World data unavailable');
     });
 
     it('should require credentials for connect in Socket.IO mode', async () => {
@@ -445,38 +447,34 @@ describe('FoundryClient', () => {
       await expect(client.connect()).rejects.toThrow('Socket.IO mode requires');
     });
 
-    it('should return null combat state when no worldData', () => {
+    it('should reject combat state when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getCombatState()).toBeNull();
+      expect(() => client.getCombatState()).toThrow('World data unavailable');
     });
 
-    it('should return empty chat messages when no worldData', () => {
+    it('should reject chat messages when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getChatMessages()).toEqual([]);
+      expect(() => client.getChatMessages()).toThrow('World data unavailable');
     });
 
-    it('should return empty users when no worldData', () => {
+    it('should reject users when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const { users, activeUsers } = client.getUsers();
-      expect(users).toEqual([]);
-      expect(activeUsers).toEqual([]);
+      expect(() => client.getUsers()).toThrow('World data unavailable');
     });
 
-    it('should return empty journals when no worldData', () => {
+    it('should reject journals when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getJournals()).toEqual([]);
+      expect(() => client.getJournals()).toThrow('World data unavailable');
     });
 
-    it('should return empty world search when no worldData', () => {
+    it('should reject world search when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const results = client.searchWorld('test');
-      expect(results.actors).toEqual([]);
-      expect(results.items).toEqual([]);
+      expect(() => client.searchWorld('test')).toThrow('World data unavailable');
     });
 
-    it('should return empty summary when no worldData', () => {
+    it('should reject summary when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getWorldSummary()).toEqual({});
+      expect(() => client.getWorldSummary()).toThrow('World data unavailable');
     });
   });
 
@@ -658,76 +656,180 @@ describe('FoundryClient', () => {
     });
   });
 
-  describe('refreshWorldData listener cleanup', () => {
-    /**
-     * Builds a minimal mock socket that records `once`/`off`/`emit` calls and
-     * lets the test trigger the registered 'world' handler manually.
-     */
+  describe('world snapshot refresh lifecycle', () => {
+    const ACTOR_ID = 'Actor00000000001';
+    const WORLD_SNAPSHOT = {
+      userId: 'test-user-id',
+      release: { version: '12.331' },
+      world: { id: 'world-1', title: 'Test World' },
+      system: { id: 'dnd5e', version: '3.3.1' },
+      modules: [],
+      demoMode: false,
+      actors: [{ _id: ACTOR_ID, name: 'Before refresh', type: 'npc', system: {} }],
+      scenes: [],
+      items: [],
+      journal: [],
+      messages: [],
+      combats: [],
+      users: [{ _id: 'user-aaaaaaaaaaaaaa', name: 'GM', role: 4 }],
+      activeUsers: [],
+      settings: [],
+      macros: [],
+      playlists: [],
+      tables: [],
+      folders: [],
+      cards: [],
+      packs: [],
+    };
+
     function buildMockSocket() {
-      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const worldAcks: Array<(payload: unknown) => void> = [];
+      const modifyAcks: Array<(payload: unknown) => void> = [];
       const socket = {
         connected: true,
-        once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-          listeners.set(event, handler);
+        emit: vi.fn((event: string, ...args: unknown[]) => {
+          const ack = args.at(-1);
+          if (event === 'world' && typeof ack === 'function') {
+            worldAcks.push(ack as (payload: unknown) => void);
+          }
+          if (event === 'modifyDocument' && typeof ack === 'function') {
+            modifyAcks.push(ack as (payload: unknown) => void);
+          }
           return socket;
         }),
-        off: vi.fn((event: string, _handler: (...args: unknown[]) => void) => {
-          listeners.delete(event);
-          return socket;
-        }),
-        emit: vi.fn(),
         disconnect: vi.fn(),
       };
-      return { socket, listeners };
+      return { socket, worldAcks, modifyAcks };
     }
 
-    it('removes the world listener on the success path', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', timeout: 50 });
-      const { socket, listeners } = buildMockSocket();
-      // Inject the mock socket — bypasses the real Socket.IO connect path.
-      (client as unknown as { socket: typeof socket }).socket = socket;
+    function attachSocket(socket: ReturnType<typeof buildMockSocket>['socket']) {
+      Reflect.set(client, 'socket', socket);
+      Reflect.set(client, 'socketGeneration', 1);
+      Reflect.set(client, 'socketEpoch', 1);
+      Reflect.set(client, 'socketUserId', 'test-user-id');
+      Reflect.set(client, '_isConnected', true);
+    }
 
-      const refresh = client.refreshWorldData();
-
-      // Trigger the 'world' event handler with a minimal valid WorldData payload.
-      const handler = listeners.get('world');
-      expect(handler).toBeDefined();
-      handler?.({
-        userId: 'test-user',
-        actors: [],
-        scenes: [],
-        items: [],
-        journal: [],
-        messages: [],
-        combats: [],
-        users: [],
-        activeUsers: [],
-        macros: [],
-        playlists: [],
-        tables: [],
-        folders: [],
+    it('uses an acknowledgement callback and coalesces concurrent refreshes', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
       });
+      const { socket, worldAcks } = buildMockSocket();
+      attachSocket(socket);
 
-      await refresh;
+      const first = client.refreshWorldData();
+      const second = client.refreshWorldData();
 
-      expect(socket.once).toHaveBeenCalledWith('world', expect.any(Function));
-      const registeredHandler = socket.once.mock.calls[0]?.[1];
-      expect(socket.off).toHaveBeenCalledWith('world', registeredHandler);
-      expect(listeners.has('world')).toBe(false);
+      expect(worldAcks).toHaveLength(1);
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await Promise.all([first, second]);
+
+      expect(socket.emit).toHaveBeenCalledWith('world', expect.any(Function));
+      expect(client.getReadMetadata()).toMatchObject({
+        source: 'socket',
+        freshness: 'current',
+        worldId: 'world-1',
+        revision: 1,
+      });
+      expect((await client.getWorldInfo()).title).toBe('Test World');
     });
 
-    it('removes the world listener on the timeout path', async () => {
-      // Short timeout so the test runs fast; never trigger the 'world' event.
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', timeout: 25 });
-      const { socket, listeners } = buildMockSocket();
-      (client as unknown as { socket: typeof socket }).socket = socket;
+    it('rejects a timed-out refresh and ignores its late acknowledgement', async () => {
+      vi.useFakeTimers();
+      try {
+        client = new FoundryClient({
+          baseUrl: 'http://localhost:30000',
+          timeout: 25,
+          retryAttempts: 0,
+        });
+        const { socket, worldAcks } = buildMockSocket();
+        attachSocket(socket);
 
-      await expect(client.refreshWorldData()).rejects.toThrow('Refresh timeout');
+        const refresh = client.refreshWorldData();
+        const rejected = expect(refresh).rejects.toThrow('ACK timed out');
+        await vi.advanceTimersByTimeAsync(26);
+        await rejected;
 
-      expect(socket.once).toHaveBeenCalledWith('world', expect.any(Function));
-      const registeredHandler = socket.once.mock.calls[0]?.[1];
-      expect(socket.off).toHaveBeenCalledWith('world', registeredHandler);
-      expect(listeners.has('world')).toBe(false);
+        worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+        await Promise.resolve();
+        expect(client.hasWorldData()).toBe(false);
+        expect(client.getReadMetadata().freshness).toBe('unavailable');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not publish malformed or retired acknowledgements', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+      });
+      const first = buildMockSocket();
+      attachSocket(first.socket);
+      const malformed = client.refreshWorldData();
+      first.worldAcks[0]?.({ ...WORLD_SNAPSHOT, actors: null });
+      await expect(malformed).rejects.toThrow('snapshot validation failed');
+      expect(client.hasWorldData()).toBe(false);
+
+      const retired = client.refreshWorldData();
+      Reflect.set(client, 'socketEpoch', 2);
+      first.worldAcks[1]?.(structuredClone(WORLD_SNAPSHOT));
+      await expect(retired).rejects.toThrow(/retired socket session/i);
+      expect(client.hasWorldData()).toBe(false);
+    });
+
+    it('replays document and presence events received during refresh', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+      });
+      const { socket, worldAcks } = buildMockSocket();
+      attachSocket(socket);
+
+      const refresh = client.refreshWorldData();
+      Reflect.get(client, 'onDocumentBroadcast')({
+        type: 'Actor',
+        action: 'update',
+        result: [{ _id: ACTOR_ID, name: 'During refresh' }],
+      });
+      Reflect.get(client, 'onUserActivity')('user-aaaaaaaaaaaaaa', { active: true });
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await refresh;
+
+      expect(client.getRawActor(ACTOR_ID)?.name).toBe('During refresh');
+      expect(client.getUsers().activeUsers).toEqual(['user-aaaaaaaaaaaaaa']);
+    });
+
+    it('applies an authoritative write acknowledgement when no broadcast returns to the writer', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+        writeEnabled: true,
+      });
+      const { socket, worldAcks, modifyAcks } = buildMockSocket();
+      attachSocket(socket);
+      const refresh = client.refreshWorldData();
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await refresh;
+
+      const modifyDocument = Reflect.get(client, 'modifyDocument').bind(client) as (
+        type: string,
+        action: string,
+        operation: Record<string, unknown>,
+      ) => Promise<unknown>;
+      const update = modifyDocument('Actor', 'update', {
+        updates: [{ _id: ACTOR_ID, name: 'Acknowledged update' }],
+      });
+      modifyAcks[0]?.({ result: [{ _id: ACTOR_ID, name: 'Acknowledged update' }] });
+      await update;
+
+      expect(client.getRawActor(ACTOR_ID)?.name).toBe('Acknowledged update');
+      expect(client.getReadMetadata().revision).toBe(2);
     });
   });
 
@@ -785,6 +887,8 @@ describe('FoundryClient', () => {
       world: { id: 'w', title: 'Test World' },
       system: { id: 'dnd5e', version: '3.3.1' },
       release: { version: '12.331' },
+      modules: [],
+      demoMode: false,
       actors: [],
       scenes: [],
       items: [],
@@ -801,6 +905,8 @@ describe('FoundryClient', () => {
       playlists: [],
       tables: [],
       folders: [],
+      cards: [],
+      packs: [],
     };
 
     async function connectWithMockSocket(existing?: FoundryClient) {
@@ -922,9 +1028,7 @@ describe('FoundryClient', () => {
       fire('connect');
 
       expect(connected.isConnected()).toBe(true);
-      // The gap was not replayed: broadcasts missed while the socket was down
-      // are gone, so the cache stays flagged until an explicit refresh.
-      expect(connected.isWorldDataStale()).toBe(true);
+      await vi.waitFor(() => expect(connected.isWorldDataStale()).toBe(false));
     });
 
     /**
@@ -946,14 +1050,14 @@ describe('FoundryClient', () => {
       fire('disconnect', 'transport close');
       socket.connected = true;
       fire('connect');
+      await vi.waitFor(() => expect(connected.isWorldDataStale()).toBe(false));
 
       const after = (await handleGetHealthStatus({}, connected, diagnosticsClient)).content[0] as {
         text: string;
       };
 
       expect(after.text).toContain('✅ Connected');
-      expect(after.text).toMatch(/stale/i);
-      expect(after.text).toContain('refresh_world_data');
+      expect(after.text).not.toMatch(/stale/i);
     });
 
     it('removes the persistent connect listener on explicit disconnect()', async () => {

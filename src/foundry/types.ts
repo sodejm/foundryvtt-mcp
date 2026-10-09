@@ -966,8 +966,8 @@ export interface WorldEffect {
 export interface WorldData {
   userId: string;
   release: Record<string, unknown>;
-  world: Record<string, unknown>;
-  system: Record<string, unknown>;
+  world: Record<string, unknown> & { id: string };
+  system: Record<string, unknown> & { id: string };
   modules: Array<Record<string, unknown>>;
   demoMode: boolean;
   actors: WorldActor[];

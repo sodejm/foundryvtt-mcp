@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import { evaluateDiceFormula } from './dice-formula.js';
+import type { WorldReadMetadata } from './freshness.js';
 import {
   type CollectionPage,
   type CollectionRecord,
@@ -50,7 +51,12 @@ import {
   applyUserActivity,
   parseDocumentBroadcast,
   parseUserActivity,
+  type DocumentBroadcast,
+  type UserActivity,
 } from './world-cache.js';
+
+const WORLD_DATA_UNAVAILABLE_MESSAGE =
+  'World data unavailable — no valid snapshot has been loaded';
 
 /** Validate identity before any detail lookup, including callers outside MCP. */
 function assertReadId(id: unknown, field: string): asserts id is string {
@@ -155,6 +161,13 @@ function hasHttpResponse(error: unknown): boolean {
   return response !== undefined && response !== null;
 }
 
+/** Normalizes Foundry timestamps without inventing a new observation time on reads. */
+function normalizeTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
+}
+
 /**
  * Spacing between sibling `sort` values, mirroring Foundry's
  * `CONST.SORT_INTEGER_DENSITY`. Leaving every sibling at the default `0` makes
@@ -191,7 +204,12 @@ const RestDiceRollSchema = z.object({
  * Validates the required top-level array fields; extra fields pass through.
  */
 const WorldDataSchema = z.object({
-  userId: z.string(),
+  userId: z.string().min(1),
+  release: z.record(z.string(), z.unknown()),
+  world: z.object({ id: z.string().min(1) }).passthrough(),
+  system: z.object({ id: z.string().min(1) }).passthrough(),
+  modules: z.array(z.record(z.string(), z.unknown())),
+  demoMode: z.boolean(),
   actors: z.array(z.unknown()),
   scenes: z.array(z.unknown()),
   items: z.array(z.unknown()),
@@ -200,11 +218,27 @@ const WorldDataSchema = z.object({
   combats: z.array(z.unknown()),
   users: z.array(z.unknown()),
   activeUsers: z.array(z.string()),
+  settings: z.array(z.unknown()),
   macros: z.array(z.unknown()),
   playlists: z.array(z.unknown()),
   tables: z.array(z.unknown()),
   folders: z.array(z.unknown()),
+  cards: z.array(z.unknown()),
+  packs: z.array(z.unknown()),
 });
+
+const MAX_REFRESH_EVENT_BUFFER = 1000;
+
+type BufferedWorldEvent =
+  | { kind: 'document'; value: DocumentBroadcast }
+  | { kind: 'activity'; value: UserActivity };
+
+interface RefreshBuffer {
+  generation: number;
+  epoch: number;
+  events: BufferedWorldEvent[];
+  overflowed: boolean;
+}
 
 export interface FoundryClientConfig {
   baseUrl: string;
@@ -287,6 +321,26 @@ export class FoundryClient {
   private readonly paginator = new SnapshotPaginator();
   private paginationSession = randomUUID();
   private restStatusIdentity = 'not-connected';
+  private readSessionId = randomUUID();
+  private snapshotId: string | null = null;
+  private snapshotRevision = 0;
+  private snapshotCapturedAt: string | null = null;
+  private snapshotObservedAt: string | null = null;
+  private snapshotWorldId: string | null = null;
+  private restRevision = 0;
+  private restObservedAt: string | null = null;
+  private restWorldId: string | null = null;
+  private socketGeneration = 0;
+  private socketEpoch = 0;
+  private socketUserId: string | null = null;
+  private refreshInFlight: {
+    socket: Socket;
+    generation: number;
+    epoch: number;
+    promise: Promise<void>;
+  } | null = null;
+  private refreshBuffer: RefreshBuffer | null = null;
+  private readonly pendingWorldRequests = new Set<(error: Error) => void>();
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -331,10 +385,14 @@ export class FoundryClient {
       this.http.interceptors.response.use(
         (response) => {
           this.restLinkLive = true;
+          this.observeRestResponse(response.data);
           return response;
         },
         (error: unknown) => {
           this.restLinkLive = hasHttpResponse(error);
+          if (this.restLinkLive) {
+            this.observeRestResponse(Reflect.get(error as object, 'response'));
+          }
           return Promise.reject(error);
         },
       );
@@ -374,15 +432,11 @@ export class FoundryClient {
 
     const { session } = await authenticateFoundry(this.config.baseUrl, user, this.config.password);
 
-    // Connect authenticated socket and load world data
-    this.worldData = await this.connectAndLoadWorld(session);
-    this.resetPaginationSession();
-    this.worldDataStale = false;
-    this._isConnected = true;
+    const worldData = await this.connectAndLoadWorld(session);
     logger.info('Connected to FoundryVTT via Socket.IO', {
-      actors: this.worldData.actors.length,
-      scenes: this.worldData.scenes.length,
-      items: this.worldData.items.length,
+      actors: worldData.actors.length,
+      scenes: worldData.scenes.length,
+      items: worldData.items.length,
     });
   }
 
@@ -390,64 +444,119 @@ export class FoundryClient {
    * Connects Socket.IO with an authenticated session and loads worldData.
    */
   private connectAndLoadWorld(session: string): Promise<WorldData> {
-    // A previous socket must not outlive its replacement (see `detachSocket`).
     this.detachSocket();
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
 
     return new Promise((resolve, reject) => {
-      this.socket = io(this.config.baseUrl, sessionSocketOptions(session));
+      const socket = io(this.config.baseUrl, sessionSocketOptions(session));
+      this.socket = socket;
+      const generation = ++this.socketGeneration;
+      const epoch = ++this.socketEpoch;
+      let settled = false;
 
       const cleanup = () => {
-        this.socket?.off('session', onSession);
-        this.socket?.off('connect_error', onConnectError);
+        socket.off('session', onSession);
+        socket.off('connect_error', onConnectError);
+      };
+
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        cleanup();
+        if (this.socket === socket) this.detachSocket();
+        reject(error);
       };
 
       const timeout = setTimeout(() => {
-        cleanup();
-        this.socket?.disconnect();
-        reject(new Error('Timeout waiting for world data (15s)'));
-      }, 15000);
+        fail(new Error(`Timeout waiting for authenticated session (${this.config.timeout}ms)`));
+      }, this.config.timeout);
 
-      const onSession = (data: { userId?: string } | null) => {
+      const onSession = async (data: { userId?: string } | null) => {
+        if (settled || !this.isCurrentSocket(socket, generation, epoch)) return;
         if (!data?.userId) {
-          clearTimeout(timeout);
-          cleanup();
-          this.socket?.disconnect();
-          return reject(new Error('Authentication failed — session event returned no userId'));
+          fail(new Error('Authentication failed — session event returned no userId'));
+          return;
         }
 
-        this.socket?.emit('world', (worldData: WorldData) => {
-          clearTimeout(timeout);
-          cleanup();
-          const parsed = WorldDataSchema.safeParse(worldData);
-          if (!parsed.success) {
-            logger.warn('WorldData failed schema validation — proceeding with raw data', {
-              issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
-            });
-          }
-          // Keep the snapshot live from here on (#205). Attached only after a
-          // successful handshake so the reject paths have no listener to leak.
-          this.socket?.on('modifyDocument', this.onDocumentBroadcast);
-          // Presence (#218): `activeUsers` is not a document collection, so it
-          // only moves on this event.
-          this.socket?.on('userActivity', this.onUserActivity);
-          // Liveness (#217): a socket that drops on its own must stop reading
-          // as connected, and one that socket.io reconnects must read as
-          // connected again. Both are removed in `disconnect()`.
-          this.socket?.on('connect', this.onSocketConnect);
-          this.socket?.on('disconnect', this.onSocketDisconnect);
-          resolve(worldData);
-        });
+        clearTimeout(timeout);
+        cleanup();
+        this.socketUserId = data.userId;
+        this._isConnected = true;
+        this.attachSocketListeners(socket);
+        try {
+          await this.refreshWorldData();
+          if (settled || !this.isCurrentSocket(socket, generation, epoch)) return;
+          settled = true;
+          resolve(this.requireWorldData());
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
       };
 
       const onConnectError = (err: Error) => {
-        clearTimeout(timeout);
-        cleanup();
-        reject(new Error(`Socket.IO connection failed: ${err.message}`));
+        fail(new Error(`Socket.IO connection failed: ${err.message}`));
       };
 
-      this.socket.on('session', onSession);
-      this.socket.on('connect_error', onConnectError);
+      socket.on('session', onSession);
+      socket.on('connect_error', onConnectError);
     });
+  }
+
+  private attachSocketListeners(socket: Socket): void {
+    socket.on('modifyDocument', this.onDocumentBroadcast);
+    socket.on('userActivity', this.onUserActivity);
+    socket.on('connect', this.onSocketConnect);
+    socket.on('disconnect', this.onSocketDisconnect);
+    socket.on('session', this.onSocketSession);
+  }
+
+  private isCurrentSocket(socket: Socket, generation: number, epoch: number): boolean {
+    return this.socket === socket && this.socketGeneration === generation && this.socketEpoch === epoch;
+  }
+
+  private cancelWorldRequests(error: Error): void {
+    for (const cancel of this.pendingWorldRequests) cancel(error);
+    this.pendingWorldRequests.clear();
+  }
+
+  private clearSocketSnapshot(): void {
+    this.worldData = null;
+    this.worldDataStale = false;
+    this.snapshotId = null;
+    this.snapshotRevision = 0;
+    this.snapshotCapturedAt = null;
+    this.snapshotObservedAt = null;
+    this.snapshotWorldId = null;
+  }
+
+  private requireWorldData(): WorldData {
+    if (!this.worldData) throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    return this.worldData;
+  }
+
+  private publishWorldData(data: WorldData): void {
+    const nextWorldId = data.world.id;
+    if (this.snapshotWorldId !== null && this.snapshotWorldId !== nextWorldId) {
+      this.rotateReadSession();
+      this.snapshotRevision = 0;
+    }
+    const now = new Date().toISOString();
+    this.worldData = data;
+    this.worldDataStale = false;
+    this.snapshotWorldId = nextWorldId;
+    this.snapshotId = randomUUID();
+    this.snapshotRevision += 1;
+    this.snapshotCapturedAt = now;
+    this.snapshotObservedAt = now;
+  }
+
+  private noteSnapshotMutation(): void {
+    if (!this.worldData || !this.snapshotId) return;
+    this.snapshotId = randomUUID();
+    this.snapshotRevision += 1;
+    this.snapshotObservedAt = new Date().toISOString();
   }
 
   /**
@@ -458,17 +567,14 @@ export class FoundryClient {
    * leaves the cache untouched (and stale) rather than taking the connection down.
    */
   private onDocumentBroadcast = (payload: unknown): void => {
-    if (!this.worldData) {
-      return;
-    }
-
     const broadcast = parseDocumentBroadcast(payload);
-    if (!broadcast) {
-      return;
-    }
+    if (!broadcast) return;
+    this.bufferRefreshEvent({ kind: 'document', value: broadcast });
+    if (!this.worldData) return;
 
     try {
       const applied = applyDocumentBroadcast(this.worldData, broadcast);
+      if (applied) this.noteSnapshotMutation();
       logger.debug(
         applied
           ? `Applied ${broadcast.action} ${broadcast.type} broadcast to cached worldData`
@@ -496,17 +602,16 @@ export class FoundryClient {
    * Never throws: an unrecognized payload leaves presence as it was.
    */
   private onUserActivity = (userId: unknown, activityData?: unknown): void => {
-    if (!this.worldData) {
-      return;
-    }
-
     const activity = parseUserActivity(userId, activityData);
     if (!activity) {
       logger.debug('Ignored unrecognized userActivity payload');
       return;
     }
+    this.bufferRefreshEvent({ kind: 'activity', value: activity });
+    if (!this.worldData) return;
 
     if (applyUserActivity(this.worldData, activity)) {
+      this.noteSnapshotMutation();
       logger.debug(
         `User ${activity.userId} is now ${activity.active ? 'active' : 'inactive'} (userActivity)`,
       );
@@ -546,12 +651,27 @@ export class FoundryClient {
    * Bound field rather than a method so the same reference reaches `socket.off()`.
    */
   private onSocketConnect = (): void => {
+    if (!this.socket) return;
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket connection epoch changed'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
     this.resetPaginationSession();
     this._isConnected = true;
-    logger.info('FoundryVTT socket reconnected — cached world data is still stale until refreshed');
+    this.worldDataStale = this.worldData !== null;
+    void this.refreshWorldData().catch((error: unknown) => {
+      logger.warn('Automatic world snapshot recovery failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    logger.info('FoundryVTT socket reconnected — refreshing cached world data');
   };
 
   private onSocketDisconnect = (reason?: unknown): void => {
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket disconnected during world refresh'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
     this.resetPaginationSession();
     this._isConnected = false;
     this.worldDataStale = this.worldData !== null;
@@ -559,6 +679,36 @@ export class FoundryClient {
       reason: typeof reason === 'string' ? reason : undefined,
     });
   };
+
+  private onSocketSession = (data: { userId?: string } | null): void => {
+    if (!data?.userId || data.userId === this.socketUserId) return;
+    this.socketUserId = data.userId;
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Authenticated socket session changed'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
+    if (this.socket?.connected) {
+      void this.refreshWorldData().catch((error: unknown) => {
+        logger.warn('World snapshot load after session change failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  };
+
+  private bufferRefreshEvent(event: BufferedWorldEvent): void {
+    const buffer = this.refreshBuffer;
+    if (!buffer || buffer.generation !== this.socketGeneration || buffer.epoch !== this.socketEpoch) {
+      return;
+    }
+    if (buffer.events.length >= MAX_REFRESH_EVENT_BUFFER) {
+      buffer.overflowed = true;
+      return;
+    }
+    buffer.events.push(event);
+  }
 
   /**
    * Closes the current socket and removes every persistent listener bound to
@@ -569,22 +719,27 @@ export class FoundryClient {
    * client, so this is reachable in-repo).
    */
   private detachSocket(): void {
-    if (!this.socket) {
-      return;
-    }
-    this.socket.off('modifyDocument', this.onDocumentBroadcast);
-    this.socket.off('userActivity', this.onUserActivity);
-    this.socket.off('connect', this.onSocketConnect);
-    this.socket.off('disconnect', this.onSocketDisconnect);
-    this.socket.disconnect();
+    const socket = this.socket;
+    this.socketGeneration += 1;
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket retired'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
+    this.socketUserId = null;
+    if (!socket) return;
+    socket.off('modifyDocument', this.onDocumentBroadcast);
+    socket.off('userActivity', this.onUserActivity);
+    socket.off('connect', this.onSocketConnect);
+    socket.off('disconnect', this.onSocketDisconnect);
+    socket.off('session', this.onSocketSession);
+    socket.disconnect();
     this.socket = null;
   }
 
   async disconnect(): Promise<void> {
     this.detachSocket();
-    this.resetPaginationSession();
-    this.worldData = null;
-    this.worldDataStale = false;
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
     this._isConnected = false;
     this.restLinkLive = true;
     logger.info('FoundryVTT client disconnected');
@@ -593,6 +748,74 @@ export class FoundryClient {
   private resetPaginationSession(): void {
     this.paginator.clear();
     this.paginationSession = randomUUID();
+  }
+
+  private rotateReadSession(): void {
+    this.readSessionId = randomUUID();
+    this.resetPaginationSession();
+  }
+
+  private observeRestResponse(value: unknown): void {
+    this.restObservedAt = new Date().toISOString();
+    this.restRevision += 1;
+    const candidate =
+      typeof value === 'object' && value !== null && 'data' in value
+        ? Reflect.get(value, 'data')
+        : value;
+    if (typeof candidate !== 'object' || candidate === null) return;
+    const world = Reflect.get(candidate, 'world');
+    const directWorldId = Reflect.get(candidate, 'worldId');
+    const nestedWorldId =
+      typeof world === 'object' && world !== null ? Reflect.get(world, 'id') : undefined;
+    const nextWorldId =
+      typeof directWorldId === 'string'
+        ? directWorldId
+        : typeof nestedWorldId === 'string'
+          ? nestedWorldId
+          : null;
+    if (nextWorldId && this.restWorldId && nextWorldId !== this.restWorldId) {
+      this.rotateReadSession();
+    }
+    if (nextWorldId) this.restWorldId = nextWorldId;
+  }
+
+  /** Non-throwing diagnostics for the source snapshot used by world reads. */
+  getReadMetadata(): WorldReadMetadata {
+    const respondedAt = new Date().toISOString();
+    if (this.config.apiKey) {
+      return {
+        source: 'rest',
+        freshness:
+          this.restObservedAt === null
+            ? 'unavailable'
+            : this.isConnected()
+              ? 'current'
+              : 'stale',
+        worldId: this.restWorldId,
+        sessionId: this.readSessionId,
+        snapshotId: null,
+        revision: this.restRevision,
+        capturedAt: null,
+        observedAt: this.restObservedAt,
+        respondedAt,
+      };
+    }
+    return {
+      source: 'socket',
+      freshness:
+        this.snapshotId === null
+          ? 'unavailable'
+          : this.worldDataStale || !this.isConnected()
+            ? 'stale'
+            : 'current',
+      worldId: this.snapshotWorldId,
+      sessionId: this.readSessionId,
+      snapshotId: this.snapshotId,
+      revision: this.snapshotRevision,
+      capturedAt: this.snapshotCapturedAt,
+      observedAt: this.snapshotObservedAt,
+      respondedAt,
+    };
   }
 
   /**
@@ -641,52 +864,122 @@ export class FoundryClient {
   // World data accessors
   // ==========================================================================
 
-  /**
-   * Re-emits 'world' on the existing socket to refresh the cached snapshot.
-   *
-   * Registers a one-shot 'world' listener and cleans it up on every exit
-   * path (success, error, timeout) via `socket.off()` so that repeated
-   * refreshes over a long-running session do not leak listener handles.
-   */
   async refreshWorldData(): Promise<void> {
-    if (!this.socket?.connected) {
+    const socket = this.socket;
+    if (!socket?.connected) {
       throw new Error('Not connected — cannot refresh world data');
     }
+    const generation = this.socketGeneration;
+    const epoch = this.socketEpoch;
+    if (
+      this.refreshInFlight &&
+      this.refreshInFlight.socket === socket &&
+      this.refreshInFlight.generation === generation &&
+      this.refreshInFlight.epoch === epoch
+    ) {
+      return this.refreshInFlight.promise;
+    }
 
-    this.worldData = await new Promise<WorldData>((resolve, reject) => {
-      const cleanup = () => {
-        this.socket?.off('world', onWorld);
-      };
+    if (this.worldData) this.worldDataStale = true;
+    const buffer: RefreshBuffer = { generation, epoch, events: [], overflowed: false };
+    this.refreshBuffer = buffer;
+    const promise = this.runWorldRefresh(socket, generation, epoch, buffer);
+    this.refreshInFlight = { socket, generation, epoch, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.refreshInFlight?.promise === promise) this.refreshInFlight = null;
+      if (this.refreshBuffer === buffer) this.refreshBuffer = null;
+    }
+  }
 
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error('Refresh timeout'));
-      }, this.config.timeout ?? 15000);
-
-      const onWorld = (data: WorldData) => {
-        cleanup();
-        clearTimeout(timeoutId);
-        try {
-          const parsed = WorldDataSchema.safeParse(data);
-          if (!parsed.success) {
-            logger.warn('WorldData refresh failed schema validation — proceeding with raw data', {
-              issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
-            });
-          }
-          resolve(data);
-        } catch (err) {
-          reject(err as Error);
+  private async runWorldRefresh(
+    socket: Socket,
+    generation: number,
+    epoch: number,
+    buffer: RefreshBuffer,
+  ): Promise<void> {
+    const attempts = Math.max(1, (this.config.retryAttempts ?? 0) + 1);
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const raw = await this.requestWorldSnapshot(socket, generation, epoch);
+        const parsed = WorldDataSchema.safeParse(raw);
+        if (!parsed.success) {
+          throw new Error(
+            `World snapshot validation failed: ${parsed.error.issues
+              .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+              .join('; ')}`,
+          );
         }
+        const candidate = parsed.data as unknown as WorldData;
+        if (candidate.userId !== this.socketUserId) {
+          throw new Error('World snapshot identity does not match authenticated socket session');
+        }
+        if (!this.isCurrentSocket(socket, generation, epoch)) {
+          throw new Error('World snapshot arrived for a retired socket session');
+        }
+        if (buffer.overflowed) {
+          throw new Error('World snapshot event buffer overflowed during refresh');
+        }
+        for (const event of buffer.events) {
+          if (event.kind === 'document') applyDocumentBroadcast(candidate, event.value);
+          else applyUserActivity(candidate, event.value);
+        }
+        if (!this.isCurrentSocket(socket, generation, epoch)) {
+          throw new Error('World snapshot session changed before publication');
+        }
+        this.publishWorldData(candidate);
+        logger.info('World data refreshed', {
+          actors: candidate.actors.length,
+          items: candidate.items.length,
+          replayedEvents: buffer.events.length,
+        });
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (!this.isCurrentSocket(socket, generation, epoch) || !socket.connected) break;
+        if (attempt < attempts && (this.config.retryDelay ?? 0) > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, this.config.retryDelay));
+        }
+      }
+    }
+    this.worldDataStale = this.worldData !== null;
+    throw lastError ?? new Error('World snapshot refresh failed');
+  }
+
+  private requestWorldSnapshot(
+    socket: Socket,
+    generation: number,
+    epoch: number,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error, value?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        this.pendingWorldRequests.delete(cancel);
+        if (error) reject(error);
+        else resolve(value);
       };
-
-      this.socket?.once('world', onWorld);
-      this.socket?.emit('world');
-    });
-
-    this.worldDataStale = false;
-    logger.info('World data refreshed', {
-      actors: this.worldData.actors.length,
-      items: this.worldData.items.length,
+      const cancel = (error: Error) => finish(error);
+      const timeoutId = setTimeout(
+        () => finish(new Error(`World snapshot ACK timed out after ${this.config.timeout}ms`)),
+        this.config.timeout,
+      );
+      this.pendingWorldRequests.add(cancel);
+      try {
+        socket.emit('world', (value: unknown) => {
+          if (!this.isCurrentSocket(socket, generation, epoch)) {
+            finish(new Error('World snapshot ACK belongs to a retired socket session'));
+            return;
+          }
+          finish(undefined, value);
+        });
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -713,7 +1006,7 @@ export class FoundryClient {
       return;
     }
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
     const caller = this.worldData.users.find((user) => user._id === this.worldData?.userId);
     if (!caller || typeof caller.role !== 'number' || caller.role < 4) {
@@ -860,7 +1153,7 @@ export class FoundryClient {
       } else {
         const worldData = this.worldData;
         if (!worldData) {
-          throw new Error('Not connected — no world data available');
+          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
         }
         records = worldData.actors
           .filter(
@@ -872,7 +1165,7 @@ export class FoundryClient {
       }
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context);
+    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     const { records: actors, ...metadata } = page;
     return { actors, ...metadata };
   }
@@ -885,7 +1178,7 @@ export class FoundryClient {
     }
 
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
 
     const actor = this.worldData.actors.find((a) => a._id === actorId);
@@ -900,7 +1193,7 @@ export class FoundryClient {
    * Returns the raw WorldActor with the full system data (game-system specific).
    */
   getRawActor(actorId: string): WorldActor | undefined {
-    return this.worldData?.actors.find((a) => a._id === actorId);
+    return this.requireWorldData().actors.find((a) => a._id === actorId);
   }
 
   /**
@@ -981,7 +1274,7 @@ export class FoundryClient {
       } else {
         const worldData = this.worldData;
         if (!worldData) {
-          throw new Error('Not connected — no world data available');
+          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
         }
         records = worldData.items
           .filter(
@@ -996,7 +1289,7 @@ export class FoundryClient {
       }
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context);
+    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     const { records: items, ...metadata } = page;
     return { items, ...metadata };
   }
@@ -1009,7 +1302,7 @@ export class FoundryClient {
       return restItem(response.data, itemId);
     }
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
     const item = this.worldData.items.find((entry) => entry._id === itemId);
     if (!item) {
@@ -1125,6 +1418,9 @@ export class FoundryClient {
     action: 'create' | 'update' | 'delete',
     operation: Record<string, unknown>,
   ): Promise<unknown[]> {
+    const socket = this.socket;
+    const generation = this.socketGeneration;
+    const epoch = this.socketEpoch;
     const request = {
       type,
       action,
@@ -1136,7 +1432,19 @@ export class FoundryClient {
         `FoundryVTT rejected ${action} ${type}: ${response.error.message || 'unknown error'}`,
       );
     }
-    return Array.isArray(response?.result) ? response.result : [];
+    const result = Array.isArray(response?.result) ? response.result : [];
+    if (socket && this.isCurrentSocket(socket, generation, epoch) && this.worldData) {
+      const acknowledged = parseDocumentBroadcast({
+        type,
+        action,
+        result,
+        operation: request.operation,
+      });
+      if (acknowledged && applyDocumentBroadcast(this.worldData, acknowledged)) {
+        this.noteSnapshotMutation();
+      }
+    }
+    return result;
   }
 
   // ==========================================================================
@@ -1501,7 +1809,7 @@ export class FoundryClient {
     }
 
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
 
     let scene: WorldScene | undefined;
@@ -1523,7 +1831,7 @@ export class FoundryClient {
   }
 
   getScenes(): WorldScene[] {
-    return this.worldData?.scenes || [];
+    return this.requireWorldData().scenes;
   }
 
   // ==========================================================================
@@ -1538,23 +1846,16 @@ export class FoundryClient {
       });
     }
 
-    if (!this.worldData) {
-      return {
-        id: 'unknown',
-        title: 'Not connected',
-        description: 'Connect to FoundryVTT to retrieve world information',
-        system: 'unknown',
-        coreVersion: 'unknown',
-        systemVersion: 'unknown',
-        playtime: 0,
-        created: new Date().toISOString(),
-        modified: new Date().toISOString(),
-      };
+    const worldData = this.requireWorldData();
+    const w = worldData.world as Record<string, unknown>;
+    const s = worldData.system as Record<string, unknown>;
+    const r = worldData.release as Record<string, unknown>;
+    const created = normalizeTimestamp(w.created) ?? this.snapshotCapturedAt;
+    const modified =
+      normalizeTimestamp(w.modified) ?? this.snapshotObservedAt ?? this.snapshotCapturedAt;
+    if (!created || !modified) {
+      throw new Error('World data unavailable — snapshot timestamps are missing');
     }
-
-    const w = this.worldData.world as Record<string, unknown>;
-    const s = this.worldData.system as Record<string, unknown>;
-    const r = this.worldData.release as Record<string, unknown>;
 
     return {
       id: (w.id as string) || 'unknown',
@@ -1564,8 +1865,8 @@ export class FoundryClient {
       coreVersion: (r.version as string) || (r.generation as string) || 'unknown',
       systemVersion: (s.version as string) || 'unknown',
       playtime: 0,
-      created: new Date().toISOString(),
-      modified: new Date().toISOString(),
+      created,
+      modified,
     };
   }
 
@@ -1574,10 +1875,7 @@ export class FoundryClient {
   // ==========================================================================
 
   getCombatState(): WorldCombat | null {
-    if (!this.worldData) {
-      return null;
-    }
-    return this.worldData.combats.find((c) => c.active) ?? null;
+    return this.requireWorldData().combats.find((c) => c.active) ?? null;
   }
 
   // ==========================================================================
@@ -1585,10 +1883,7 @@ export class FoundryClient {
   // ==========================================================================
 
   getChatMessages(limit = 20): WorldMessage[] {
-    if (!this.worldData) {
-      return [];
-    }
-    return this.worldData.messages.slice(-limit);
+    return this.requireWorldData().messages.slice(-limit);
   }
 
   // ==========================================================================
@@ -1596,12 +1891,10 @@ export class FoundryClient {
   // ==========================================================================
 
   getUsers(): { users: WorldUser[]; activeUsers: string[] } {
-    if (!this.worldData) {
-      return { users: [], activeUsers: [] };
-    }
+    const worldData = this.requireWorldData();
     return {
-      users: this.worldData.users,
-      activeUsers: this.worldData.activeUsers,
+      users: worldData.users,
+      activeUsers: worldData.activeUsers,
     };
   }
 
@@ -1610,15 +1903,13 @@ export class FoundryClient {
   // ==========================================================================
 
   getJournals(): WorldJournal[] {
-    return this.worldData?.journal || [];
+    return this.requireWorldData().journal;
   }
 
   searchJournals(query: string): WorldJournal[] {
-    if (!this.worldData) {
-      return [];
-    }
+    const worldData = this.requireWorldData();
     const q = query.toLowerCase();
-    return this.worldData.journal.filter((j) => {
+    return worldData.journal.filter((j) => {
       if (j.name.toLowerCase().includes(q)) {
         return true;
       }
@@ -1649,11 +1940,16 @@ export class FoundryClient {
         })),
       );
     }
-    return this.paginator.paginate(records, this.paginationParams(params), context);
+    return this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getReadMetadata(),
+    );
   }
 
   getJournal(journalId: string): WorldJournal | undefined {
-    return this.worldData?.journal.find((j) => j._id === journalId);
+    return this.requireWorldData().journal.find((j) => j._id === journalId);
   }
 
   // ==========================================================================
@@ -1730,17 +2026,15 @@ export class FoundryClient {
     scenes: WorldScene[];
     journals: WorldJournal[];
   } {
-    if (!this.worldData) {
-      return { actors: [], items: [], scenes: [], journals: [] };
-    }
+    const worldData = this.requireWorldData();
 
     const q = query.toLowerCase();
 
     return {
-      actors: this.worldData.actors.filter((a) => a.name.toLowerCase().includes(q)),
-      items: this.worldData.items.filter((i) => i.name.toLowerCase().includes(q)),
-      scenes: this.worldData.scenes.filter((s) => s.name.toLowerCase().includes(q)),
-      journals: this.worldData.journal.filter((j) => j.name.toLowerCase().includes(q)),
+      actors: worldData.actors.filter((a) => a.name.toLowerCase().includes(q)),
+      items: worldData.items.filter((i) => i.name.toLowerCase().includes(q)),
+      scenes: worldData.scenes.filter((s) => s.name.toLowerCase().includes(q)),
+      journals: worldData.journal.filter((j) => j.name.toLowerCase().includes(q)),
     };
   }
 
@@ -1754,7 +2048,7 @@ export class FoundryClient {
     this.assertSocketPaginationAuthorized();
     const worldData = this.worldData;
     if (!worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
     const filters = { query: params.query };
     const context = this.paginationContext('world-search', filters);
@@ -1796,7 +2090,12 @@ export class FoundryClient {
           })),
       ]);
     }
-    return this.paginator.paginate(records, this.paginationParams(params), context);
+    return this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getReadMetadata(),
+    );
   }
 
   async getCollectionPage(
@@ -1834,7 +2133,7 @@ export class FoundryClient {
       } else {
         const worldData = this.worldData;
         if (!worldData) {
-          throw new Error('Not connected — no world data available');
+          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
         }
         switch (collection) {
           case 'actors':
@@ -1882,7 +2181,7 @@ export class FoundryClient {
       }
       records = sortCollectionRecords(records);
     }
-    return this.paginator.paginate(records, params, context);
+    return this.paginator.paginate(records, params, context, this.getReadMetadata());
   }
 
   // ==========================================================================
@@ -1890,21 +2189,19 @@ export class FoundryClient {
   // ==========================================================================
 
   getWorldSummary(): Record<string, number> {
-    if (!this.worldData) {
-      return {};
-    }
+    const worldData = this.requireWorldData();
     return {
-      actors: this.worldData.actors.length,
-      items: this.worldData.items.length,
-      scenes: this.worldData.scenes.length,
-      journals: this.worldData.journal.length,
-      combats: this.worldData.combats.length,
-      users: this.worldData.users.length,
-      messages: this.worldData.messages.length,
-      macros: this.worldData.macros.length,
-      playlists: this.worldData.playlists.length,
-      tables: this.worldData.tables.length,
-      folders: this.worldData.folders.length,
+      actors: worldData.actors.length,
+      items: worldData.items.length,
+      scenes: worldData.scenes.length,
+      journals: worldData.journal.length,
+      combats: worldData.combats.length,
+      users: worldData.users.length,
+      messages: worldData.messages.length,
+      macros: worldData.macros.length,
+      playlists: worldData.playlists.length,
+      tables: worldData.tables.length,
+      folders: worldData.folders.length,
     };
   }
 
