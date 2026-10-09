@@ -7,7 +7,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 
 ## Features
 
-- **Dice Rolling** — standard RPG notation with any formula
+- **Dice Rolling** — bounded additive formulas, keep/drop modifiers and explicit engine provenance
 - **Data Querying** — search and inspect actors, items, scenes, journals
 - **Game State** — combat tracking, chat messages, user presence
 - **Optional Capabilities** — verified compendium search with typed availability states
@@ -144,11 +144,19 @@ Ask your AI assistant things like:
 
 - `search_actors` — find characters, NPCs, monsters
 - `get_actor_details` — detailed character information
+- `get_actor_sheet` — discover bounded actor sections and system metadata
+- `get_actor_section` — read supported sheet fields with explicit presence metadata
+- `list_actor_items` — page through an actor's inventory using stable item IDs
+- `get_actor_item` — read one owned item within its parent actor
 - `search_items` — find world equipment, spells, consumables with stable IDs
 - `get_item_details` — read one world item by ID
 - `get_scene_info` — current scene details
+- `get_scene_spatial` — structured scene dimensions, origin and grid units
+- `list_scene_tokens` — page through visible token positions and footprints
+- `get_scene_token` — read one token within its parent scene
 - `search_journals` — search notes and handouts
-- `get_journal` — retrieve a specific journal entry
+- `get_journal` — list a journal's pages with bounded previews and stable page IDs
+- `get_journal_page` — retrieve a page's complete text or source in bounded chunks
 - `get_users` — list users, roles, and live online status
 - `get_combat_state` — combat state and initiative order
 - `get_chat_messages` — recent chat history
@@ -157,14 +165,21 @@ Ask your AI assistant things like:
 
 `search_actors`, `get_actor_details`, `search_items` and `get_item_details`
 retain readable `content` text and add typed MCP `structuredContent`, validated
-against the `outputSchema` advertised by `tools/list`. Version 3 search results
+against the `outputSchema` advertised by `tools/list`. Actor search uses version 3
+and actor details version 2; item search uses version 4 and item details version 3.
+Search results
 contain `schemaVersion`, `documentType`, `records`, `total`, `page`, `limit`,
 `returnedCount`, `nextCursor`, `complete`, `snapshotId`, `expiresAt` and
-`consistency: "snapshot"`. Version 2 details contain `schemaVersion`,
+`consistency: "snapshot"`. Details contain `schemaVersion`,
 `documentType` and `record`. Both include `readMetadata`. Every actor/item record has
 `id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
 optional values are omitted; zero, false and empty strings remain real values.
-Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
+Item `economy` separates bounded source candidates from normalized currencies,
+purchase quantity and rarity values. Explicit statuses distinguish known, missing,
+invalid, not-applicable and unsupported data. Zero remains known; missing prices
+and rarities receive no invented currency or default. Legacy `price`/`rarity`
+aliases appear only for unambiguous known values. See the
+[item economy version matrix and fixture provenance](docs/item-economy-fixtures.md).
 
 Search first, select by ID even when names repeat, then pass that ID to the
 matching detail tool:
@@ -181,8 +196,9 @@ Only 16-character alphanumeric document IDs are accepted, not names or UUIDs.
 World-cache records have verified `Actor.<id>` / `Item.<id>` UUIDs; REST records
 omit UUIDs because the REST payload does not establish their source scope.
 Item details read only the same world-item collection as `search_items`,
-excluding actor-owned and compendium items. Item search applies both type and
-rarity filters to the current world-item view.
+excluding actor-owned and compendium items. Item search applies query, type and canonical rarity filters before pagination
+on both transports. Unsupported system/version or invalid rarity selectors
+return `InvalidParams`; localized labels are not guessed.
 This contract preserves currently mapped fields, not a complete game-system
 sheet or an inventory.
 
@@ -193,11 +209,135 @@ A connected world with no matching documents returns a successful empty
 search; unavailable world data returns an error. REST detail reads use
 `/api/actors/:id` and `/api/items/:id`; a REST module without item-detail support
 returns its backend error rather than silently selecting a same-name item.
+REST item normalization also needs system ID/version from `/api/world`; a missing
+route yields explicit unsupported economy. The live `foundry-rest-api` 3.4.1
+module provides neither `/api/items` nor `/api/world`, so item REST coverage uses
+a synthetic endpoint fixture, not a claim of module compatibility.
 
 Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
 `records[].id`, not parse IDs or optional values from Markdown. TypeScript
 contracts are exported from `foundry/types` and `foundry/read-contract`.
+
+### Bounded actor sheet and inventory reads
+
+`get_actor_sheet` and `get_actor_section` use schema version 1;
+`list_actor_items` and `get_actor_item` use version 2 and include the same typed
+item economy as world items. These tools preserve the existing
+`get_actor_details` summary. Start with `get_actor_sheet` to discover the actor's
+system ID/version, supported sections and visible inventory count. Read one
+section at a time with `get_actor_section`; fields identify their source,
+presence and optional truncation instead of returning a raw actor blob.
+
+```json
+{"name":"get_actor_sheet","arguments":{"actorId":"Actor00000000001"}}
+{"name":"get_actor_section","arguments":{"actorId":"Actor00000000001","section":"attributes"}}
+{"name":"list_actor_items","arguments":{"actorId":"Actor00000000001","limit":10}}
+{"name":"get_actor_item","arguments":{"actorId":"Actor00000000001","itemId":"Item000000000001"}}
+```
+
+Use IDs returned by the current world, not these placeholders. Inventory records
+include verified `Actor.<actorId>.Item.<itemId>` UUIDs; item detail also includes
+`parentActorId`. Duplicate names are safe to select by ID. Inventory limits
+default to 10 and allow 1–100, with optional `query`, `type` and opaque `cursor`.
+Repeat the same actor, filters and limit with `nextCursor` until `complete`.
+Inventory edits, sorting, deletion or permission changes invalidate cursors in
+both service-identity and delegated modes. Cursors expire after five minutes
+and bind to the world, caller and session.
+
+DND5e and PF2e have bounded normalized profiles. Unknown systems expose a bounded
+primitive `system` section in service-identity mode; delegated unknown-system
+reads fail closed. Delegated reads require actor and embedded-item visibility
+before serialization and withhold rich descriptions. Sections contain at most
+64 fields, each text value at most 4,096 UTF-16 code units, with an aggregate
+text budget of 8,192. Text clipping preserves surrogate pairs and reports
+`truncated`; zero and false remain values, while missing fields use
+`present: false`. Final responses remain limited to 128 KiB.
+
+These tools require native Socket.IO; REST returns an explicit unsupported error.
+See the [integration guide](docs/guides/integration.md#bounded-actor-sheets-and-owned-items)
+for schema imports, profile fixtures and live test setup.
+
+### Structured scene and token reads
+
+The three spatial tools return schema version 1, with advertised output schemas
+and matching JSON text and `structuredContent`. Existing `get_scene_info` and
+token mutation tools retain their contracts. Use an explicit `sceneId` from the
+current world, or omit it to select the active scene:
+
+```json
+{"name":"get_scene_spatial","arguments":{"sceneId":"Scene00000000001"}}
+{"name":"list_scene_tokens","arguments":{"sceneId":"Scene00000000001","limit":100}}
+{"name":"get_scene_token","arguments":{"sceneId":"Scene00000000001","tokenId":"Token00000000001"}}
+```
+
+Scene output distinguishes source width, height, padding and shifts from derived
+canvas dimensions and origin. It names gridless, square and all four hex grid
+types. Token positions use pixels, footprints use grid spaces, rotation uses
+degrees, and elevation uses the scene's distance units. Token detail includes
+optional texture metadata; texture scaling is independent of the footprint and
+is omitted from list summaries. Missing optional values remain absent; zero is
+preserved. No grid-to-pixel or distance conversion is implied.
+
+Token pages default to ten records and allow 1–100, with optional name `query`
+and opaque `cursor`. Repeat the same scene selection, query and limit with
+`nextCursor` until `complete`. Select duplicate names by stable token ID and
+verified `Scene.<sceneId>.Token.<tokenId>` UUID. Cursors expire after five minutes,
+bind to the world, caller and session, and invalidate after token, scene or
+permission changes. Active-scene selection also invalidates when that scene
+changes. Combined MCP responses remain bounded to 128 KiB; reduce the limit if
+a page exceeds this bound.
+
+Delegated reads check scene and token visibility before counts, pages, details
+and actor references. Hidden tokens, secret dispositions and inaccessible linked
+or synthetic actors are filtered using the caller's permissions. Synthetic actor
+overrides inherit nullable fields and merge explicit ownership with their base
+actor. Native Socket.IO is required; REST reports an explicit unsupported error.
+See the [integration guide](docs/guides/integration.md#structured-scene-and-token-reads)
+for schema imports and live fixture setup.
+
+### Complete journal page reads
+
+`get_journal` returns a version 3 structured summary with journal/page IDs and
+verified UUIDs, page type, sort order, source format and visible asset metadata.
+Each page preview contains at most 500 Unicode code points; `contentTruncated`
+explicitly identifies a shortened preview. Summary results now require
+pagination rather than returning every page in one response.
+
+Pass the returned page ID to `get_journal_page` to retrieve its complete content:
+
+```json
+{"name":"get_journal","arguments":{"journalId":"Journal000000001","limit":4}}
+{"name":"get_journal_page","arguments":{"journalId":"Journal000000001","pageId":"JournalPage00001","format":"text","limit":4}}
+```
+
+Use actual 16-character document IDs from the summary, not these placeholders
+or UUIDs. Both tools accept `limit` (default 4, maximum 8) and an opaque `cursor`.
+Summary limits count pages; content limits count chunks. Repeat the same tool,
+IDs, format and limit with `nextCursor` until `complete` is true.
+
+Page content uses schema version 1 with page metadata, `contentLength`, `chunks`,
+`contentTruncated`, `paginationPage` and the shared pagination/freshness fields.
+Each chunk has `index`, inclusive `start`, exclusive `end` and `content`; offsets
+and lengths count Unicode code points. Chunks contain at most 1,024 code points.
+Concatenate their content in order to reconstruct the selected format. An empty
+text page has one empty chunk; image/video pages have typed metadata and zero
+text chunks.
+
+The default `text` format converts HTML without executing it, preserving block
+breaks and decoding entities; Markdown remains literal text. `source` returns
+the original HTML or Markdown as an inert string. Clients must treat returned
+source as untrusted content. Asset references are metadata; the server does not
+download or render them.
+
+Parent and page permission checks happen before previews, content, asset
+references and totals. Any visible journal content, order or permission change
+invalidates both summary and content cursors, including in service-identity
+mode. Cursors also bind to the caller, session, world and selected format, and
+expire after five minutes. Restart the traversal after invalidation.
+These reads require the native Socket.IO backend; REST returns an explicit
+unsupported error. See the [integration guide](docs/guides/integration.md#complete-journal-pages)
+for compatibility and live test setup.
 
 ### Bounded world searches
 
@@ -254,8 +394,11 @@ most 1,000 incoming events; overflow aborts recovery and leaves retained data
 stale until a subsequent refresh succeeds.
 
 Service-identity Socket.IO pagination requires a GM session. REST actor/item pagination uses the authenticated
-backend's visible collection and requires working backend pagination; it rejects
-ignored pages, repeated IDs and inconsistent totals. REST journal/world searches
+backend's visible collection. A multi-page REST result requires a backend-issued
+`snapshotId` identifying an immutable collection: the client sends it on subsequent
+requests and requires the same token on every response. Legacy backends without
+this contract support only results completed in one backend page. Changed or missing
+tokens, ignored pages, repeated IDs and inconsistent totals fail the read. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.
 
 ### Authenticated player reads
@@ -273,8 +416,9 @@ Players receive only their own sanitized user record, and summary counts include
 only visible records. Missing authentication, revoked permissions, disconnected
 backends and stale cursors fail closed. Errors omit privileged backend details.
 
-Delegated discovery exposes ten read tools and four collection resources (actors,
-items, journals and users). Scenes, tokens, combat, compendia, rules, settings,
+Delegated discovery exposes eighteen read tools and four collection resources (actors,
+items, journals and users). The three structured scene/token tools use their
+own visibility contract. Legacy scene/token reads and resources, combat, compendia, rules, settings,
 diagnostics, refresh and every write are disabled for all delegated callers,
 including GMs. REST/API-key backends are unavailable in delegated mode.
 
@@ -309,11 +453,17 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 
 ### Game Mechanics
 
-- `roll_dice` — roll dice; dice terms (`NdS`) and whole numbers joined by `+`/`-`, with
-  unsupported notation (`4d6kh3`, `1d20r1`, `*`) rejected rather than dropped.
-  Parentheses are the one transport difference: FoundryVTT evaluates them when
-  `FOUNDRY_API_KEY` is set, the local roller rejects them otherwise
-- `lookup_rule` — **stub**: returns a templated placeholder, consults no rules source
+- `roll_dice` — evaluate bounded additive dice formulas with parentheses and
+  `kh`, `kl`, `dh`, `dl` modifiers. Select `auto`, `local` or `foundry`; the result
+  identifies the engine that actually evaluated the roll. Unsupported syntax is
+  rejected before rolling, and failed remote attempts are never rolled again.
+  See the [dice contract](docs/guides/dice.md) for grammar, limits and transport behavior.
+- `lookup_rule` — returns a versioned `rulesLookup: unavailable` capability result
+  because no verified rules provider is implemented. Accepts a nonblank `query`
+  up to 256 characters and optional nonblank `system` up to 128 characters;
+  rejects unknown fields. It returns matching JSON text and structured content
+  without generated mechanics or source claims. See the
+  [rule lookup contract](docs/guides/optional-capabilities.md#rule-lookup).
 
 ### Optional Foundry Capabilities
 
@@ -330,19 +480,28 @@ disabled in delegated mode.
 
 ### Content Generation
 
-- `generate_npc` — template text; no verified Foundry-backed generation
-- `generate_loot` — template text; no verified Foundry-backed generation
+- `generate_npc` — structured creative NPC preview with validated level, race and class
+- `generate_loot` — structured fictional loot preview with explicit currency arithmetic and unknown item values
 
-`get_capabilities` reports generation and rules lookup as unavailable.
+Both tools return `persisted: false`, `rulesVerified: false`, limitations and no
+document IDs. They do not modify the world. Verified system generation remains
+unavailable in `get_capabilities`; local creative previews remain available. See
+[content generation](docs/guides/content-generation.md) for inputs, output and
+compatibility changes.
 
 ### Diagnostics
 
 - `get_health_status` — connection and world snapshot health, including stale cache state
-- `get_recent_logs`, `search_logs`, `get_system_health`, `diagnose_errors` — legacy
+- `get_recent_logs`, `search_logs`, `get_system_health` — legacy
   utilities without a verified Foundry diagnostics adapter; registration or a
   configured key does not prove access to Foundry server logs or metrics
 
-`get_capabilities` reports optional Foundry diagnostics as unavailable.
+- `diagnose_errors` — explicit, versioned unavailable result because no verified
+  diagnostic source exists; no inferred health, error counts or troubleshooting
+  suggestions. Optional `category` is validated; unsupported fields are rejected.
+
+`get_capabilities` reports optional Foundry diagnostics as unavailable. See the
+[error diagnosis guide](docs/guides/error-diagnosis.md) for the contract and limits.
 
 ## Available Resources
 

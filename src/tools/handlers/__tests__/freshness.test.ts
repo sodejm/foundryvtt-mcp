@@ -3,6 +3,7 @@ import Ajv from 'ajv';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsClient } from '../../../diagnostics/client.js';
 import type { FoundryClient } from '../../../foundry/client.js';
+import { JournalReadUnavailableError } from '../../../foundry/journal-read.js';
 import { readMetadataText } from '../../../foundry/read-contract.js';
 import { getAllTools } from '../../definitions.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
@@ -76,11 +77,26 @@ describe('cached read freshness', () => {
   it('adds freshness to journal content and preserves missing-document errors', async () => {
     const result = await handleGetJournal(
       { journalId: id },
-      stub({ getJournal: () => ({ ...record, pages: [] }) }),
+      stub({
+        getJournalSummaryPage: async () => ({
+          id,
+          uuid: `JournalEntry.${id}`,
+          name: record.name,
+          pages: [],
+          ...paginationMetadata(0, 0, 4),
+        }),
+      }),
     );
     expect(result.structuredContent.readMetadata.freshness).toBe('current');
     await expect(
-      handleGetJournal({ journalId: id }, stub({ getJournal: () => undefined })),
+      handleGetJournal(
+        { journalId: id },
+        stub({
+          getJournalSummaryPage: async () => {
+            throw new JournalReadUnavailableError();
+          },
+        }),
+      ),
     ).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
   });
   it('reads metadata after recovery and preserves existing structured fields', async () => {

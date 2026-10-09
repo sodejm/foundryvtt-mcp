@@ -57,6 +57,7 @@ const EMBEDDED_COLLECTIONS: Record<string, Record<string, string>> = {
   Scene: { Token: 'tokens', AmbientLight: 'lights', Wall: 'walls', Drawing: 'drawings' },
   Combat: { Combatant: 'combatants' },
   Item: { ActiveEffect: 'effects' },
+  JournalEntry: { JournalEntryPage: 'pages' },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

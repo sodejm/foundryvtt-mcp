@@ -178,7 +178,7 @@ describe('Integration Tests', () => {
             _id: 'Item000000000001',
             name: 'Flame Tongue',
             type: 'weapon',
-            rarity: 'rare',
+            system: { rarities: ['rare'], price: { value: 5000, denomination: 'gp' } },
             damage: {
               parts: [
                 ['1d8', 'slashing'],
@@ -195,7 +195,8 @@ describe('Integration Tests', () => {
 
       mockAxiosInstance.get
         .mockResolvedValueOnce({ data: { status: 'connected' } })
-        .mockResolvedValueOnce({ data: mockItemData });
+        .mockResolvedValueOnce({ data: mockItemData })
+        .mockResolvedValueOnce({ data: { system: { id: 'dnd5e', version: '6.0.6' } } });
 
       client = new FoundryClient({
         baseUrl: 'http://localhost:30000',

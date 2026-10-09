@@ -15,6 +15,7 @@ on:
 
 jobs:
   update-docs:
+    if: github.repository == 'laurigates/foundryvtt-mcp'
     runs-on: ubuntu-latest
 
     steps:
@@ -45,9 +46,9 @@ jobs:
         run: |
           git add docs/
           if git diff --staged --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Commit and push documentation updates
@@ -68,14 +69,16 @@ jobs:
       - name: Create documentation summary
         if: steps.docs-changes.outputs.changed == 'true'
         run: |
-          echo "## 📚 Documentation Updated" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The TypeDoc documentation has been regenerated and committed to the repository." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📁 Generated Files:" >> $GITHUB_STEP_SUMMARY
-          echo "- API documentation for FoundryClient class" >> $GITHUB_STEP_SUMMARY
-          echo "- TypeScript interface documentation" >> $GITHUB_STEP_SUMMARY
-          echo "- Configuration and utility documentation" >> $GITHUB_STEP_SUMMARY
-          echo "- Usage examples and code samples" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "View the documentation by browsing the \`docs/\` folder in the repository." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 📚 Documentation Updated"
+            echo ""
+            echo "The TypeDoc documentation has been regenerated and committed to the repository."
+            echo ""
+            echo "### 📁 Generated Files:"
+            echo "- API documentation for FoundryClient class"
+            echo "- TypeScript interface documentation"
+            echo "- Configuration and utility documentation"
+            echo "- Usage examples and code samples"
+            echo ""
+            echo "View the documentation by browsing the \`docs/\` folder in the repository."
+          } >> "$GITHUB_STEP_SUMMARY"

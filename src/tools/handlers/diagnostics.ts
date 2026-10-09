@@ -11,8 +11,9 @@ import { LogEntrySchema } from '../../diagnostics/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import { worldReadMetadataSchema } from '../../foundry/freshness.js';
 import { readMetadataText } from '../../foundry/read-contract.js';
-import type { DiagnosticSystem } from '../../utils/diagnostics.js';
 import { withToolError } from './utils.js';
+
+export { handleDiagnoseErrors } from './error-diagnosis.js';
 
 /** Valid log levels recognized by the tool schema */
 const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'log', 'notification']);
@@ -274,62 +275,6 @@ ${performanceLines.join('\n')}
 - **Recent Errors:** ${logs.recentErrors}
 - **Recent Warnings:** ${logs.recentWarnings}
 - **Error Rate:** ${logs.errorRate}%`,
-        },
-      ],
-    };
-  });
-}
-
-/**
- * Handles error diagnosis requests
- */
-export async function handleDiagnoseErrors(
-  args: {
-    category?: string;
-  },
-  _diagnosticSystem: DiagnosticSystem,
-) {
-  const { category } = args;
-
-  return withToolError('diagnose errors', async () => {
-    // Mock diagnosis since the method doesn't exist yet
-    const diagnosis = {
-      errors: [],
-      recommendations: ['No specific errors detected', 'System appears to be functioning normally'],
-      systemStatus: 'Operational',
-    };
-
-    const errorsByCategory = diagnosis.errors.reduce(
-      (acc: Record<string, unknown[]>, error: { category: string }) => {
-        if (!acc[error.category]) {
-          acc[error.category] = [];
-        }
-        acc[error.category]?.push(error);
-        return acc;
-      },
-      {},
-    );
-
-    const errorSummary =
-      Object.entries(errorsByCategory)
-        .map(([cat, errors]: [string, unknown[]]) => `**${cat}:** ${errors.length} error(s)`)
-        .join('\n') || 'No errors found';
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `🔧 **Error Diagnosis**
-**Category Filter:** ${category || 'All categories'}
-**Total Errors:** ${diagnosis.errors.length}
-
-**Error Summary:**
-${errorSummary}
-
-**Recommendations:**
-${diagnosis.recommendations.map((rec: string) => `- ${rec}`).join('\n')}
-
-**System Status:** ${diagnosis.systemStatus}`,
         },
       ],
     };
