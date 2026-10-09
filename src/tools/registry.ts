@@ -7,7 +7,34 @@
 
 import { logger } from '../utils/logger.js';
 import type { Tool, ToolContext, ToolResult } from './base.js';
+import { actorTools } from './definitions.js';
+import {
+  handleGetActorItem,
+  handleGetActorSection,
+  handleGetActorSheet,
+  handleListActorItems,
+} from './handlers/actors.js';
 import { RollDiceTool } from './handlers/dice.js';
+
+const ACTOR_READ_HANDLERS = {
+  get_actor_sheet: handleGetActorSheet,
+  get_actor_section: handleGetActorSection,
+  list_actor_items: handleListActorItems,
+  get_actor_item: handleGetActorItem,
+} as const;
+
+function registeredActorReadTool(name: keyof typeof ACTOR_READ_HANDLERS): Tool {
+  const definition = actorTools.find((candidate) => candidate.name === name);
+  if (!definition) {
+    throw new Error(`Missing tool definition for ${name}`);
+  }
+  return {
+    name,
+    description: definition.description,
+    inputSchema: definition.inputSchema,
+    execute: (args, context) => ACTOR_READ_HANDLERS[name](args, context.foundryClient),
+  };
+}
 
 /**
  * Tool registry manages all available tools
@@ -90,6 +117,12 @@ export class ToolRegistry {
   private registerDefaultTools(): void {
     // Register the dice tool (converted to new system)
     this.register(new RollDiceTool());
+
+    for (const name of Object.keys(ACTOR_READ_HANDLERS) as Array<
+      keyof typeof ACTOR_READ_HANDLERS
+    >) {
+      this.register(registeredActorReadTool(name));
+    }
 
     // TODO: Register other tools as they are converted
     logger.info(`Registered ${this.tools.size} tools`);

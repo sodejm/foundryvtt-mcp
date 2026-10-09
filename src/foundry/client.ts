@@ -10,6 +10,23 @@ import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse 
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
+import type {
+  ActorItemListOutput,
+  ActorItemOutput,
+  ActorItemSummary,
+  ActorSectionName,
+  ActorSectionOutput,
+  ActorSheetOutput,
+} from './actor-sheet-contract.js';
+import { ACTOR_SECTION_NAMES } from './actor-sheet-contract.js';
+import {
+  actorItemFields,
+  actorSectionFields,
+  actorSystemIdentity,
+  isActorSectionSupported,
+  publicActorIdentity,
+  publicActorItemSummary,
+} from './actor-sheet-profile.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import {
   type AuthorizationMode,
@@ -41,7 +58,12 @@ import {
   sortCollectionRecords,
   validateBoundedText,
 } from './pagination.js';
-import { actorDocumentSchema, FOUNDRY_ID_PATTERN, itemDocumentSchema } from './read-contract.js';
+import {
+  actorDocumentSchema,
+  availableWorldReadMetadataSchema,
+  FOUNDRY_ID_PATTERN,
+  itemDocumentSchema,
+} from './read-contract.js';
 import { CompendiumRestAdapter } from './rest-compendium.js';
 import type {
   ActorAttributeUpdateResult,
@@ -490,6 +512,14 @@ export interface SearchItemsParams {
   query?: string;
   type?: string;
   rarity?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListActorItemsParams {
+  actorId: string;
+  query?: string;
+  type?: string;
   limit?: number;
   cursor?: string;
 }
@@ -1178,6 +1208,16 @@ export class FoundryClient {
     };
   }
 
+  private getAvailableReadMetadata(): WorldReadMetadata & {
+    freshness: 'current' | 'stale';
+  } {
+    const metadata = this.getReadMetadata();
+    if (metadata.freshness === 'unavailable') {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
+    return { ...metadata, freshness: metadata.freshness };
+  }
+
   /**
    * Reports whether the client currently has a live link to FoundryVTT (#217).
    *
@@ -1594,6 +1634,161 @@ export class FoundryClient {
     }
 
     return worldActorToFoundry(actor);
+  }
+
+  private actorReadWorld(
+    actorId: unknown,
+    unavailableMessage = 'Actor read unavailable',
+  ): { world: WorldData; actor: WorldActor } {
+    assertReadId(actorId, 'actorId');
+    if (this.config.apiKey) {
+      throw new Error('Structured actor-sheet reads are unsupported by the REST backend');
+    }
+    const world = this.readWorld('actors');
+    const actor = world.actors.find((candidate) => candidate._id === actorId);
+    if (!actor) {
+      throw new Error(unavailableMessage);
+    }
+    const system = actorSystemIdentity(world);
+    if (system.profile === 'generic' && this.isDelegatedMode()) {
+      throw new Error(unavailableMessage);
+    }
+    return { world, actor };
+  }
+
+  getActorSheet(actorId: string): ActorSheetOutput {
+    this.assertReadSurfaceAllowed('actors');
+    const { world, actor } = this.actorReadWorld(actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorSheet',
+      actor: publicActorIdentity(actor),
+      system,
+      sections: ACTOR_SECTION_NAMES.map((name) => {
+        const supported = isActorSectionSupported(system.profile, name, delegated);
+        return {
+          name,
+          supported,
+          fieldCount: supported
+            ? actorSectionFields(actor, system.profile, name, delegated).length
+            : 0,
+        };
+      }),
+      itemCount: Array.isArray(actor.items) ? actor.items.length : 0,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  getActorSection(actorId: string, section: ActorSectionName): ActorSectionOutput {
+    this.assertReadSurfaceAllowed('actors');
+    const { world, actor } = this.actorReadWorld(actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    const supported = isActorSectionSupported(system.profile, section, delegated);
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorSection',
+      actor: publicActorIdentity(actor),
+      system,
+      section,
+      supported,
+      fields: supported ? actorSectionFields(actor, system.profile, section, delegated) : [],
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  listActorItems(params: ListActorItemsParams): ActorItemListOutput {
+    this.assertReadSurfaceAllowed('actors');
+    assertReadId(params.actorId, 'actorId');
+    this.validateSearchFilters({ query: params.query, type: params.type });
+    this.assertSocketPaginationAuthorized();
+    const { world, actor } = this.actorReadWorld(params.actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    const items = Array.isArray(actor.items) ? actor.items : [];
+    const visibleProjection = items.map((item) => ({
+      summary: publicActorItemSummary(actor._id, item),
+      fields: actorItemFields(item, system.profile, delegated),
+      sort: typeof item.sort === 'number' ? item.sort : null,
+    }));
+    const contentFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          actor: publicActorIdentity(actor),
+          items: visibleProjection,
+        }),
+      )
+      .digest('hex');
+    const filters = {
+      actorId: actor._id,
+      query: params.query,
+      type: params.type,
+      contentFingerprint,
+    };
+    const context = this.paginationContext('actor-item-list', filters);
+    let records: ActorItemSummary[] | undefined;
+    if (params.cursor === undefined) {
+      const query = params.query?.toLocaleLowerCase();
+      const type = params.type?.toLocaleLowerCase();
+      records = visibleProjection
+        .map(({ summary }) => summary)
+        .filter(
+          (item) =>
+            (!query || item.name.toLocaleLowerCase().includes(query)) &&
+            (!type || item.type.toLocaleLowerCase() === type),
+        )
+        .sort(
+          (left, right) =>
+            left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+            left.id.localeCompare(right.id),
+        );
+    }
+    const page = this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getAvailableReadMetadata(),
+    );
+    if (page.readMetadata.freshness === 'unavailable') {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
+    const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorItemCollection',
+      actor: publicActorIdentity(actor),
+      ...page,
+      readMetadata,
+    };
+  }
+
+  getActorItem(actorId: string, itemId: string): ActorItemOutput {
+    this.assertReadSurfaceAllowed('actors');
+    assertReadId(actorId, 'actorId');
+    assertReadId(itemId, 'itemId');
+    const { world, actor } = this.actorReadWorld(actorId, 'Actor item read unavailable');
+    const item = (Array.isArray(actor.items) ? actor.items : []).find(
+      (candidate) => candidate._id === itemId,
+    );
+    if (!item) {
+      throw new Error('Actor item read unavailable');
+    }
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorItem',
+      actor: publicActorIdentity(actor),
+      item: {
+        ...publicActorItemSummary(actor._id, item),
+        parentActorId: actor._id,
+        fields: actorItemFields(item, system.profile, delegated),
+        systemFieldsSupported: system.profile !== 'generic' || !delegated,
+      },
+      readMetadata: this.getAvailableReadMetadata(),
+    };
   }
 
   /**

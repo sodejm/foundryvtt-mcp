@@ -15,7 +15,14 @@ import { logger } from '../utils/logger.js';
 import { assertResourceAllowed, assertToolAllowed } from './authorization.js';
 import type { ToolContext, ToolResult } from './base.js';
 import { handleUpdateActorAttribute } from './handlers/actor-mutations.js';
-import { handleGetActorDetails, handleSearchActors } from './handlers/actors.js';
+import {
+  handleGetActorDetails,
+  handleGetActorItem,
+  handleGetActorSection,
+  handleGetActorSheet,
+  handleListActorItems,
+  handleSearchActors,
+} from './handlers/actors.js';
 import { handleGetChatMessages } from './handlers/chat.js';
 import { handleGetCombatState } from './handlers/combat.js';
 import {
@@ -112,6 +119,14 @@ export async function routeToolRequest(
         throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
+    case 'get_actor_sheet':
+      return handleGetActorSheet(args, foundryClient);
+    case 'get_actor_section':
+      return handleGetActorSection(args, foundryClient);
+    case 'list_actor_items':
+      return handleListActorItems(args, foundryClient);
+    case 'get_actor_item':
+      return handleGetActorItem(args, foundryClient);
 
     // Actor mutation tools (#143) — WRITE via the Socket.IO modifyDocument
     // protocol (foundryClient); require FOUNDRY_WRITE_ENABLED=true + a GM user.

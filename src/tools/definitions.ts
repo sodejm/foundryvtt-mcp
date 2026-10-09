@@ -6,6 +6,16 @@
  */
 
 import {
+  actorItemInputJsonSchema,
+  actorItemListInputJsonSchema,
+  actorItemListOutputJsonSchema,
+  actorItemOutputJsonSchema,
+  actorSectionInputJsonSchema,
+  actorSectionOutputJsonSchema,
+  actorSheetInputJsonSchema,
+  actorSheetOutputJsonSchema,
+} from '../foundry/actor-sheet-contract.js';
+import {
   capabilitiesInputJsonSchema,
   capabilitiesOutputSchema,
   compendiumSearchInputJsonSchema,
@@ -108,6 +118,34 @@ export const actorTools = [
       },
       required: ['actorId'],
     },
+  },
+  {
+    name: 'get_actor_sheet',
+    outputSchema: actorSheetOutputJsonSchema,
+    description:
+      'Read a bounded version 1 actor-sheet index for a 16-character actorId. Returns public actor and system identity, supported section names with field counts, owned-item count and read metadata. Follow with get_actor_section or list_actor_items. The REST backend rejects this read when it cannot prove field permissions.',
+    inputSchema: actorSheetInputJsonSchema,
+  },
+  {
+    name: 'get_actor_section',
+    outputSchema: actorSectionOutputJsonSchema,
+    description:
+      'Read one bounded version 1 actor-sheet section. Normalized profile fields use stable keys; conservative fallback fields are labeled system-path. Missing fields remain present=false and numeric zero values remain zero. Supported sections are attributes, abilities, skills, details, currency, resources and system.',
+    inputSchema: actorSectionInputJsonSchema,
+  },
+  {
+    name: 'list_actor_items',
+    outputSchema: actorItemListOutputJsonSchema,
+    description:
+      'List permission-projected items embedded in one actor with bounded snapshot pagination. Sorts by name then item ID, preserves duplicate names, and returns parent-bound Actor.<actorId>.Item.<itemId> UUIDs. Follow nextCursor with the same actorId, query, type and limit. Any visible inventory or permission change invalidates the cursor.',
+    inputSchema: actorItemListInputJsonSchema,
+  },
+  {
+    name: 'get_actor_item',
+    outputSchema: actorItemOutputJsonSchema,
+    description:
+      'Read one permission-projected item embedded in the specified actor. Both IDs must be 16 alphanumeric characters. The item is resolved only within its parent actor and returns bounded normalized or system-path primitive fields; missing, denied, deleted and wrong-parent targets share an unavailable error.',
+    inputSchema: actorItemInputJsonSchema,
   },
 ];
 

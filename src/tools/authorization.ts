@@ -6,6 +6,10 @@ import type { FoundryClient } from '../foundry/client.js';
 export const delegatedTools: Readonly<Record<string, ReadSurface>> = Object.freeze({
   search_actors: 'actors',
   get_actor_details: 'actors',
+  get_actor_sheet: 'actors',
+  get_actor_section: 'actors',
+  list_actor_items: 'actors',
+  get_actor_item: 'actors',
   search_items: 'items',
   get_item_details: 'items',
   search_journals: 'journals',

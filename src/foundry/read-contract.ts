@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { type WorldReadMetadata, worldReadMetadataSchema } from './freshness.js';
 
 // Successful reads require an established source; health can also report unavailable.
-const availableWorldReadMetadataSchema = worldReadMetadataSchema.extend({
+export const availableWorldReadMetadataSchema = worldReadMetadataSchema.extend({
   freshness: z.enum(['current', 'stale']),
 });
 

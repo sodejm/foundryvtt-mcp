@@ -13,7 +13,14 @@ import { logger } from '../utils/logger.js';
 import { assertResourceAllowed, assertToolAllowed } from './authorization.js';
 import type { ToolContext } from './base.js';
 // Import legacy handlers for tools not yet converted
-import { handleGetActorDetails, handleSearchActors } from './handlers/actors.js';
+import {
+  handleGetActorDetails,
+  handleGetActorItem,
+  handleGetActorSection,
+  handleGetActorSheet,
+  handleListActorItems,
+  handleSearchActors,
+} from './handlers/actors.js';
 import {
   handleDiagnoseErrors,
   handleGetHealthStatus,
@@ -89,6 +96,14 @@ async function routeLegacyTool(
         throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
+    case 'get_actor_sheet':
+      return handleGetActorSheet(args, foundryClient);
+    case 'get_actor_section':
+      return handleGetActorSection(args, foundryClient);
+    case 'list_actor_items':
+      return handleListActorItems(args, foundryClient);
+    case 'get_actor_item':
+      return handleGetActorItem(args, foundryClient);
 
     // Item tools
     case 'search_items':
