@@ -148,7 +148,8 @@ Ask your AI assistant things like:
 - `get_item_details` — read one world item by ID
 - `get_scene_info` — current scene details
 - `search_journals` — search notes and handouts
-- `get_journal` — retrieve a specific journal entry
+- `get_journal` — list a journal's pages with bounded previews and stable page IDs
+- `get_journal_page` — retrieve a page's complete text or source in bounded chunks
 - `get_users` — list users, roles, and live online status
 - `get_combat_state` — combat state and initiative order
 - `get_chat_messages` — recent chat history
@@ -198,6 +199,49 @@ Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
 `records[].id`, not parse IDs or optional values from Markdown. TypeScript
 contracts are exported from `foundry/types` and `foundry/read-contract`.
+
+### Complete journal page reads
+
+`get_journal` returns a version 3 structured summary with journal/page IDs and
+verified UUIDs, page type, sort order, source format and visible asset metadata.
+Each page preview contains at most 500 Unicode code points; `contentTruncated`
+explicitly identifies a shortened preview. Summary results now require
+pagination rather than returning every page in one response.
+
+Pass the returned page ID to `get_journal_page` to retrieve its complete content:
+
+```json
+{"name":"get_journal","arguments":{"journalId":"Journal000000001","limit":4}}
+{"name":"get_journal_page","arguments":{"journalId":"Journal000000001","pageId":"JournalPage00001","format":"text","limit":4}}
+```
+
+Use actual 16-character document IDs from the summary, not these placeholders
+or UUIDs. Both tools accept `limit` (default 4, maximum 8) and an opaque `cursor`.
+Summary limits count pages; content limits count chunks. Repeat the same tool,
+IDs, format and limit with `nextCursor` until `complete` is true.
+
+Page content uses schema version 1 with page metadata, `contentLength`, `chunks`,
+`contentTruncated`, `paginationPage` and the shared pagination/freshness fields.
+Each chunk has `index`, inclusive `start`, exclusive `end` and `content`; offsets
+and lengths count Unicode code points. Chunks contain at most 1,024 code points.
+Concatenate their content in order to reconstruct the selected format. An empty
+text page has one empty chunk; image/video pages have typed metadata and zero
+text chunks.
+
+The default `text` format converts HTML without executing it, preserving block
+breaks and decoding entities; Markdown remains literal text. `source` returns
+the original HTML or Markdown as an inert string. Clients must treat returned
+source as untrusted content. Asset references are metadata; the server does not
+download or render them.
+
+Parent and page permission checks happen before previews, content, asset
+references and totals. Any visible journal content, order or permission change
+invalidates both summary and content cursors, including in service-identity
+mode. Cursors also bind to the caller, session, world and selected format, and
+expire after five minutes. Restart the traversal after invalidation.
+These reads require the native Socket.IO backend; REST returns an explicit
+unsupported error. See the [integration guide](docs/guides/integration.md#complete-journal-pages)
+for compatibility and live test setup.
 
 ### Bounded world searches
 
@@ -273,7 +317,7 @@ Players receive only their own sanitized user record, and summary counts include
 only visible records. Missing authentication, revoked permissions, disconnected
 backends and stale cursors fail closed. Errors omit privileged backend details.
 
-Delegated discovery exposes ten read tools and four collection resources (actors,
+Delegated discovery exposes eleven read tools and four collection resources (actors,
 items, journals and users). Scenes, tokens, combat, compendia, rules, settings,
 diagnostics, refresh and every write are disabled for all delegated callers,
 including GMs. REST/API-key backends are unavailable in delegated mode.

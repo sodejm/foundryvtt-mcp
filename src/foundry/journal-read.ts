@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { type DefaultTreeAdapterMap, parseFragment } from 'parse5';
+import { type DefaultTreeAdapterMap, defaultTreeAdapter, parseFragment } from 'parse5';
 import { MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_RECORDS } from './pagination.js';
 import { FOUNDRY_ID_PATTERN } from './read-contract.js';
 import type {
@@ -18,6 +18,7 @@ export const JOURNAL_PREVIEW_CODEPOINTS = 500;
 export const JOURNAL_CONTENT_CHUNK_CODEPOINTS = 1024;
 export const JOURNAL_MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 export const JOURNAL_MAX_HTML_NODES = 100_000;
+export const JOURNAL_MAX_HTML_DEPTH = 4096;
 
 const MAX_NAME_CODEPOINTS = 1024;
 const MAX_TYPE_CODEPOINTS = 128;
@@ -245,7 +246,24 @@ function renderHtmlTree(root: HtmlNode, parts: string[]): void {
 
 /** Parse HTML as inert data and retain useful document structure as newlines. */
 export function htmlToJournalText(source: string): string {
-  const fragment = parseFragment(source);
+  let openElements = 0;
+  const fragment = parseFragment(source, {
+    treeAdapter: {
+      ...defaultTreeAdapter,
+      onItemPush() {
+        openElements += 1;
+        // Fragment parsing also keeps one synthetic root on the open-element stack.
+        if (openElements > JOURNAL_MAX_HTML_DEPTH + 1) {
+          throw new Error(
+            `Journal page HTML exceeds the maximum nesting depth of ${JOURNAL_MAX_HTML_DEPTH}`,
+          );
+        }
+      },
+      onItemPop() {
+        openElements -= 1;
+      },
+    },
+  });
   const parts: string[] = [];
   renderHtmlTree(fragment, parts);
   return parts
@@ -263,10 +281,13 @@ function pageTextSource(page: WorldJournalPage): string | null {
   if (page.text === undefined) {
     return '';
   }
-  if (typeof page.text !== 'object' || page.text === null) {
+  if (typeof page.text !== 'object' || page.text === null || Array.isArray(page.text)) {
     throw new Error('Journal page text metadata is malformed');
   }
-  const source = Reflect.get(page.text, 'content');
+  const source = Reflect.get(page.text, page.text.format === 2 ? 'markdown' : 'content');
+  if (source === null || source === undefined) {
+    return '';
+  }
   if (typeof source !== 'string') {
     throw new Error('Journal page content must be a string');
   }
@@ -286,6 +307,7 @@ function pageTitle(page: WorldJournalPage): JournalPageMetadata['title'] {
   if (
     typeof page.title !== 'object' ||
     page.title === null ||
+    Array.isArray(page.title) ||
     typeof page.title.show !== 'boolean' ||
     !Number.isSafeInteger(page.title.level) ||
     page.title.level < 1 ||
@@ -297,7 +319,7 @@ function pageTitle(page: WorldJournalPage): JournalPageMetadata['title'] {
 }
 
 function pageAsset(page: WorldJournalPage): JournalPageMetadata['asset'] {
-  if (page.src === undefined) {
+  if (page.src === undefined || page.src === null) {
     return undefined;
   }
   assertBoundedString(page.src, 'Journal page asset source', MAX_ASSET_SOURCE_CODEPOINTS);
@@ -310,7 +332,7 @@ function pageAsset(page: WorldJournalPage): JournalPageMetadata['asset'] {
     }
     caption = Reflect.get(settings, 'caption');
   }
-  if (caption === undefined) {
+  if (caption === undefined || caption === null) {
     return { src: page.src };
   }
   assertBoundedString(caption, 'Journal page asset caption', MAX_ASSET_CAPTION_CODEPOINTS);

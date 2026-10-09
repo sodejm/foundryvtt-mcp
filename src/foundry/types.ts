@@ -838,10 +838,10 @@ export interface WorldJournalPage {
   name: string;
   type: string;
   title?: { show: boolean; level: number };
-  text?: { content: string; format: number };
+  text?: { content?: string | null; markdown?: string | null; format: number };
   image?: Record<string, unknown>;
   video?: Record<string, unknown>;
-  src?: string;
+  src?: string | null;
   sort?: number;
   ownership?: Record<string, number>;
 }

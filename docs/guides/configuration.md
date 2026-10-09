@@ -98,7 +98,7 @@ failures use `InvalidParams` with a generic message; missing trusted context use
 `InvalidRequest`. Hidden and absent direct IDs return identical errors.
 
 Supported tools are `search_actors`, `get_actor_details`, `search_items`,
-`get_item_details`, `search_journals`, `get_journal`, `get_chat_messages`,
+`get_item_details`, `search_journals`, `get_journal`, `get_journal_page`, `get_chat_messages`,
 `get_users`, `search_world` and `get_world_summary`. Collection resources are
 `foundry://actors`, `foundry://items`, `foundry://journals` and `foundry://users`.
 Filtering occurs before sorting, pagination and counts. Actors/items require

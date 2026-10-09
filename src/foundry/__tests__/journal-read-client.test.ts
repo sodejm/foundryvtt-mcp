@@ -36,7 +36,7 @@ function journal(overrides: Partial<WorldJournal> = {}): WorldJournal {
         name: 'Page',
         type: 'text',
         sort: 0,
-        text: { format: 2, content: 'alpha' },
+        text: { format: 2, markdown: 'alpha' },
         ownership: { default: -1 },
       },
     ],
@@ -171,7 +171,7 @@ describe('journal read client', () => {
       name: `Page ${index + 1}`,
       type: 'text',
       sort: 5 - index,
-      text: { format: 2, content: '🐉'.repeat(index === 0 ? 501 : 1) },
+      text: { format: 2, markdown: '🐉'.repeat(index === 0 ? 501 : 1) },
       ownership: { default: -1 },
     }));
     const { client } = serviceClient([journal({ pages })]);
@@ -254,7 +254,7 @@ describe('journal read client', () => {
           _id: PAGE_ID,
           name: 'Page',
           type: 'text',
-          text: { format: 2, content },
+          text: { format: 2, markdown: content },
           ownership: { default: -1 },
         },
       ],
@@ -266,7 +266,7 @@ describe('journal read client', () => {
           _id: PAGE_ID,
           name: 'Other',
           type: 'text',
-          text: { format: 2, content },
+          text: { format: 2, markdown: content },
           ownership: { default: -1 },
         },
       ],
@@ -322,7 +322,7 @@ describe('journal read client', () => {
           name: 'Page',
           type: 'text',
           sort: 1,
-          text: { format: 2, content: 'x'.repeat(6_000) },
+          text: { format: 2, markdown: 'x'.repeat(6_000) },
           ownership: { default: -1 },
         },
         {
@@ -330,7 +330,7 @@ describe('journal read client', () => {
           name: 'Other',
           type: 'text',
           sort: 2,
-          text: { format: 2, content: 'other' },
+          text: { format: 2, markdown: 'other' },
           ownership: { default: -1 },
         },
       ],
@@ -346,7 +346,7 @@ describe('journal read client', () => {
       throw new Error('expected page');
     }
     if (mutation === 'content') {
-      page.text = { format: 2, content: 'y'.repeat(6_000) };
+      page.text = { format: 2, markdown: 'y'.repeat(6_000) };
     }
     if (mutation === 'sort') {
       page.sort = 3;
@@ -370,7 +370,7 @@ describe('journal read client', () => {
           _id: PAGE_ID,
           name: 'Page',
           type: 'text',
-          text: { format: 2, content: 'x'.repeat(6_000) },
+          text: { format: 2, markdown: 'x'.repeat(6_000) },
           ownership: { default: -1 },
         },
       ],
@@ -394,7 +394,7 @@ describe('journal read client', () => {
           _id: PAGE_ID,
           name: 'Visible',
           type: 'text',
-          text: { format: 2, content: 'visible' },
+          text: { format: 2, markdown: 'visible' },
           ownership: { default: -1 },
         },
         {
@@ -416,7 +416,7 @@ describe('journal read client', () => {
           _id: PAGE_ID,
           name: 'Explicitly allowed child',
           type: 'text',
-          text: { format: 2, content: 'parent still denies access' },
+          text: { format: 2, markdown: 'parent still denies access' },
           ownership: { [PLAYER]: 3 },
         },
       ],
@@ -453,7 +453,7 @@ describe('journal read client', () => {
             _id: PAGE_ID,
             name: 'Page',
             type: 'text',
-            text: { format: 2, content: 'x'.repeat(6_000) },
+            text: { format: 2, markdown: 'x'.repeat(6_000) },
             ownership: { default: -1 },
           },
         ],

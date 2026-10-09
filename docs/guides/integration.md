@@ -216,6 +216,81 @@ adapters fetch every backend page and reject repeated/non-progressing pages or
 inconsistent totals. REST journal/world searches and scene/journal/user pages
 remain unsupported and fail explicitly.
 
+### Complete journal pages
+
+Journal summaries and page content have separate contracts. `get_journal`
+returns schema version 3 with `pages` and the shared pagination fields; existing
+consumers must follow `nextCursor` to list every page. Previews are limited to
+500 Unicode code points and carry `contentTruncated`. Page IDs and verified
+UUIDs, type, sort, source format, title and available asset metadata identify the
+source document. Summary totals count only visible pages.
+
+`get_journal_page` accepts `journalId`, `pageId`, optional `format: "text" |
+"source"`, `limit` and `cursor`. Both tools require 16-character alphanumeric
+IDs and reject UUIDs, unknown arguments and empty cursors. Limits default to 4
+and allow 1–8; the summary limit counts pages and the content limit counts chunks.
+The content response uses schema version 1 and `documentType: "JournalEntryPage"`.
+It includes page metadata, the selected format, code-point `contentLength`,
+`chunks`, `contentTruncated` and `paginationPage` alongside the shared pagination
+and `readMetadata` fields. Each chunk has a zero-based `index` and code-point
+`start`/exclusive `end`, with at most 1,024 code points of `content`.
+
+For example, a structured consumer can collect complete text as follows:
+
+```ts
+const parts: string[] = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'get_journal_page',
+    arguments: { journalId, pageId, format: 'text', limit: 4, ...(cursor ? { cursor } : {}) },
+  });
+  const page = journalPageContentSchema.parse(result.structuredContent);
+  parts.push(...page.chunks.map(chunk => chunk.content));
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+const completeText = parts.join('');
+```
+
+Import `journalPageContentSchema` from `foundry/journal-contract`. The default
+`text` format parses HTML inertly, retains headings/paragraph/list breaks and
+decodes entities; Markdown is returned literally. `source` preserves the original
+HTML/Markdown string. Returning source never executes it; consumers must handle
+it as untrusted content. Empty text returns one empty chunk. Non-text pages
+return zero chunks and typed metadata, including visible image/video references.
+
+Content/page-order/ownership changes invalidate cursors for the whole visible
+journal in both service-identity and delegated modes. Continuations bind to the
+tool, IDs, format, limit, world, caller and session. Their five-minute expiry,
+reconnect and permission checks require restarting from the first page after
+invalidation. Hidden and absent journal/page IDs yield the same `InvalidParams`
+error. Native Socket.IO supports these reads; REST fails explicitly.
+
+Preparation rejects text sources exceeding 4 MiB, HTML trees exceeding 100,000
+nodes or 4,096 open elements, or journal snapshots exceeding 10,000 records/8 MiB. The final combined
+MCP text/structured response remains limited to 128 KiB. Capacity failures are
+explicit and never return silently shortened content.
+
+`tests/integration/journals.integration.test.ts` uses disposable `test1world`
+through the built MCP stdio process and compares results with actual source
+documents. After `npm run build`, start `node scripts/journal-test-control.mjs`
+with explicit `FOUNDRY_URL`, `FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` in a separate
+terminal. The controller binds to `127.0.0.1:3012`, requires `test1world`, and only
+creates, changes or removes journals whose names begin `MCP Journal Issue 6`.
+Set `FOUNDRY_JOURNAL_TEST_CONTROL_URL=http://127.0.0.1:3012` in the integration
+environment, then run:
+
+```sh
+npm run test:integration -- tests/integration/journals.integration.test.ts
+```
+
+The suite covers 0/499/500/501/10,000+ characters, HTML entities and nesting,
+Unicode, Markdown, empty/image/video pages, exact chunk reassembly, summary
+ordering, edits/reordering/deletion, cursor isolation, invalid IDs and advertised
+output schemas. Caller-permission tests separately compare inherited/explicit
+page visibility, content and asset redaction, and revocation with Foundry's
+OBSERVER oracle. Missing prerequisites fail; tests do not skip acceptance cases.
+
 ### Consuming freshness metadata
 
 Successful service-identity world reads include `readMetadata` with `freshness: "current"` or
@@ -273,7 +348,7 @@ snapshot consistency under writes, all five resources and invalid inputs.
 `tests/integration/caller-permissions.integration.test.ts` creates two temporary
 player users and owned documents in disposable `test1world`. It compares GM and
 player reads with Foundry's actual OBSERVER checks and each player's chat
-`isContentVisible` result through authenticated browser sessions. Its 13 cases
+`isContentVisible` result through authenticated browser sessions. Its cases
 exercise visible/hidden IDs, explicit/default/inherited grants, embedded items,
 journal pages, counts, filtering before pagination, cursor isolation, immediate
 revocation, forged identities, denied reads/writes, reconnects and membership
