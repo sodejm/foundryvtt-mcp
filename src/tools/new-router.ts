@@ -8,6 +8,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { FoundryClient } from '../foundry/client.js';
+import { parseErrorDiagnosisInput } from '../foundry/diagnosis-contract.js';
 import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
@@ -92,7 +93,7 @@ async function routeLegacyTool(
   args: Record<string, unknown>,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
-  diagnosticSystem: DiagnosticSystem,
+  _diagnosticSystem: DiagnosticSystem,
 ) {
   switch (name) {
     // Actor tools
@@ -160,7 +161,8 @@ async function routeLegacyTool(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      parseErrorDiagnosisInput(args);
+      return handleDiagnoseErrors(args);
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 

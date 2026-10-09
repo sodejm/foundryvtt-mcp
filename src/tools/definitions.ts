@@ -22,6 +22,10 @@ import {
   compendiumSearchOutputSchema,
 } from '../foundry/compendium-contract.js';
 import {
+  errorDiagnosisInputJsonSchema,
+  errorDiagnosisOutputJsonSchema,
+} from '../foundry/diagnosis-contract.js';
+import {
   journalPageInputJsonSchema,
   journalPageOutputSchema,
   journalSummaryInputJsonSchema,
@@ -509,16 +513,9 @@ export const diagnosticsTools = [
   {
     name: 'diagnose_errors',
     description:
-      'Stub: returns a fixed "no errors detected" summary regardless of input; real diagnostic logic is not implemented, so the summary reflects nothing about the server. For actual log content use get_recent_logs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        category: {
-          type: 'string',
-          description: 'Error category to focus on',
-        },
-      },
-    },
+      'Report that evidence-based error diagnosis is unavailable because no verified diagnostic source is implemented. Returns a versioned unavailable capability without probing logs or Foundry, inferring health, or echoing the optional category. Use get_recent_logs for actual log content.',
+    inputSchema: errorDiagnosisInputJsonSchema,
+    outputSchema: errorDiagnosisOutputJsonSchema,
   },
   {
     name: 'get_health_status',

@@ -32,6 +32,14 @@ export interface CapabilityReport {
   capabilities: Capability[];
 }
 
+/** Static fact shared by capability discovery and the unavailable diagnosis tool. */
+export const DIAGNOSTICS_UNAVAILABLE = Object.freeze({
+  feature: 'diagnostics' as const,
+  status: 'unavailable' as const,
+  reason: 'No verified diagnostic source is implemented.',
+  remediation: 'Inspect authoritative server logs or configure a verified diagnostic source.',
+});
+
 /** Static fact shared by capability discovery and the unavailable lookup tool. */
 export const RULES_LOOKUP_UNAVAILABLE = Object.freeze({
   feature: 'rulesLookup' as const,

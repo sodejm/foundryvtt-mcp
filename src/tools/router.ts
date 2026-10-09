@@ -5,6 +5,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { AttributePatch, FoundryClient } from '../foundry/client.js';
+import { parseErrorDiagnosisInput } from '../foundry/diagnosis-contract.js';
 import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type {
   ActorItemCreateSource,
@@ -338,7 +339,8 @@ export async function routeToolRequest(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      parseErrorDiagnosisInput(args);
+      return handleDiagnoseErrors(args);
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 
