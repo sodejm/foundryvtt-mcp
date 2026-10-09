@@ -440,7 +440,12 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
   unsupported notation (`4d6kh3`, `1d20r1`, `*`) rejected rather than dropped.
   Parentheses are the one transport difference: FoundryVTT evaluates them when
   `FOUNDRY_API_KEY` is set, the local roller rejects them otherwise
-- `lookup_rule` — **stub**: returns a templated placeholder, consults no rules source
+- `lookup_rule` — returns a versioned `rulesLookup: unavailable` capability result
+  because no verified rules provider is implemented. Accepts a nonblank `query`
+  up to 256 characters and optional nonblank `system` up to 128 characters;
+  rejects unknown fields. It returns matching JSON text and structured content
+  without generated mechanics or source claims. See the
+  [rule lookup contract](docs/guides/optional-capabilities.md#rule-lookup).
 
 ### Optional Foundry Capabilities
 

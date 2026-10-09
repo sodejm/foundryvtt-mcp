@@ -27,6 +27,7 @@
 | Macro execution | PRD-001 | planned | low |
 | Multi-world support | PRD-001 | planned | low |
 
-NPC/loot templates, rule placeholders and legacy diagnostics utilities remain
-partial. `get_capabilities` reports these Foundry-backed integrations as unavailable;
+NPC/loot templates and legacy diagnostics utilities remain partial. Rule lookup
+returns an explicit unavailable result with no generated rule content.
+`get_capabilities` reports these Foundry-backed integrations as unavailable;
 only compendium search currently has a verified optional adapter.

@@ -106,6 +106,67 @@ describe('built MCP optional capability workflow', () => {
     expect(text).toContain(page.capability.status);
     return { page, text };
   }
+  async function rule(args: Record<string, unknown>, mcp = client) {
+    const { result, text } = await call('lookup_rule', args, mcp);
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(text)).toEqual(result.structuredContent);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(128 * 1024);
+    expect(Object.keys(result.structuredContent!).sort()).toEqual(['capability', 'schemaVersion']);
+    expect(result.structuredContent).toMatchObject({ schemaVersion: 1, capability: {
+      feature: 'rulesLookup', status: 'unavailable', reason: expect.any(String), remediation: expect.any(String),
+    } });
+    const capability = result.structuredContent!.capability as Record<string, unknown>;
+    expect(Object.keys(capability).sort()).toEqual(['feature', 'reason', 'remediation', 'status']);
+    expect(String(capability.reason).length).toBeGreaterThan(0);
+    expect(String(capability.remediation).length).toBeGreaterThan(0);
+    expect(text).not.toContain('Core Rulebook');
+    return capability;
+  }
+  it.each([
+    { query: 'Opportunity attack' },
+    { query: 'Duplicate Spell', system: 'dnd5e' },
+    { query: 'MCP absent rule 72f53a', system: 'not-an-installed-system@999' },
+    { query: '规则 😀', system: '自定义' },
+    { query: '<script>SECRET_RULE_QUERY</script>' },
+    { query: 'x'.repeat(256), system: 's'.repeat(128) },
+  ])('reports unsupported rules without retrieval or query echo: %j', async args => {
+    const capability = await rule(args);
+    expect(JSON.stringify(capability)).not.toContain(args.query);
+    expect(requests).toEqual([]);
+  });
+  it('keeps rule availability consistent when authenticated compendium reads are available', async () => {
+    const capability = await rule({ query: 'Duplicate Spell' });
+    expect(requests).toEqual([]);
+    const { result } = await call('get_capabilities', {});
+    const report = capabilitiesReportSchema.parse(result.structuredContent);
+    expect(report.capabilities[0]?.status).toBe('available');
+    expect(report.capabilities.find(cap => cap.feature === 'rulesLookup')).toMatchObject(capability);
+    expect(requests).toEqual(['/search', '/get']);
+  });
+  it('reports unavailable rules without optional REST configuration', async () => {
+    const capability = await rule({ query: 'Opportunity attack' }, socketOnly);
+    const { result } = await call('get_capabilities', {}, socketOnly);
+    expect(capabilitiesReportSchema.parse(result.structuredContent).capabilities.find(cap => cap.feature === 'rulesLookup'))
+      .toMatchObject(capability);
+    expect(requests).toEqual([]);
+  });
+  it.each(['401', '403', '404', '503', 'timeout', 'malformed-search', 'malformed-get', 'read-denied'] as const)
+    ('does not probe optional sources for unsupported rules during %s', async mode => {
+      fault = mode;
+      await rule({ query: 'Duplicate Spell', system: 'dnd5e@6.0.6' });
+      expect(requests).toEqual([]);
+    });
+  it.each([
+    {}, { query: '' }, { query: ' \n\t' }, { query: 1 }, { query: null }, { query: [] },
+    { query: 'x'.repeat(257) }, { query: 'valid', system: '' }, { query: 'valid', system: '\t' },
+    { query: 'valid', system: 1 }, { query: 'valid', system: null },
+    { query: 'valid', system: 's'.repeat(129) }, { query: 'valid', extra: true },
+    { query: 'valid', limit: 1 }, { query: 'valid', source: 'invented-source' },
+  ])('rejects invalid rule input before source access: %j', async args => {
+    await expect(client.callTool({ name: 'lookup_rule', arguments: args }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(requests).toEqual([]);
+  });
   it('requires relay search and entity reads and keeps unsupported features unavailable', async () => {
     const { result, text } = await call('get_capabilities', {});
     const report = capabilitiesReportSchema.parse(result.structuredContent);

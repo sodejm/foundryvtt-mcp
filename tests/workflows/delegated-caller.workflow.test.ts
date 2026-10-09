@@ -174,6 +174,15 @@ describe('built delegated MCP transport boundary', () => {
       .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
   });
 
+  it('denies rule lookup before processing input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('lookup_rule');
+    for (const args of [{ query: 'Opportunity attack', system: 'dnd5e' }, { query: '' }]) {
+      await expect(client.callTool({ name: 'lookup_rule', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
   it('keeps service-identity operation available without a caller resolver', async () => {
     const { client, contexts } = await connect({ service: true, resolver: 'missing' });
     expect((await client.listTools()).tools.length).toBeGreaterThan(10);

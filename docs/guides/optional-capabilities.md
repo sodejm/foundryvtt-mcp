@@ -33,14 +33,54 @@ Each record includes `feature`, `status`, a fixed redacted `reason`, optional
 A key or public Foundry status response is insufficient verification. An empty
 installation needs at least one compendium entry to prove entity reading.
 `rulesLookup`, `diagnostics` and `contentGeneration` remain unavailable because
-their Foundry-backed adapters are not implemented and verified. Existing rule
-placeholders, NPC/loot templates and legacy diagnostics utilities do not establish
-support. `get_health_status` separately reports connection and world snapshot health.
+their Foundry-backed adapters are not implemented and verified. NPC/loot templates
+and legacy diagnostics utilities do not establish support. `get_health_status`
+separately reports connection and world snapshot health.
 
 The legacy `FOUNDRY_API_KEY` core REST connection path is separate from this
 adapter. Its status-probe concern is tracked in
 [upstream issue 230](https://github.com/laurigates/foundryvtt-mcp/issues/230);
 this capability check does not depend on that probe.
+
+## Rule Lookup
+
+`lookup_rule` accepts a required nonblank `query` of 1–256 characters and an
+optional nonblank `system` of 1–128 characters. Unknown fields, wrong types,
+whitespace-only values and excessive lengths fail with MCP `InvalidParams`.
+Omitting `system` does not select a default game system.
+
+For example, `{"query":"Opportunity attack","system":"dnd5e"}` returns:
+
+```json
+{
+  "schemaVersion": 1,
+  "capability": {
+    "feature": "rulesLookup",
+    "status": "unavailable",
+    "reason": "No verified rules provider is implemented.",
+    "remediation": "Consult an authoritative rules source or configure a verified rules provider."
+  }
+}
+```
+
+The strict advertised output schema permits only this unavailable envelope.
+JSON text matches `structuredContent`; the combined response is bounded to
+128 KiB. Capability discovery shares the same feature, status, reason and
+remediation, with its existing verification timestamp and transport metadata.
+
+No rule provider is currently implemented or configurable in this server.
+Lookup performs no Foundry, relay, compendium, journal or source-content access.
+Every valid query, including nonsense and an unknown system or version, returns
+unavailable. It has no successful matches, no-match or ambiguity results,
+provenance, invented mechanics or fabricated citations. Source denial, provider
+timeouts and malformed provider responses require an implemented provider and
+are not claimed as supported states. Delegated callers cannot discover or call
+the tool; caller authorization runs before input validation.
+
+This replaces the former generated placeholder text. Consumers should validate
+`schemaVersion` and `capability.status` rather than interpret text as retrieved
+rules. See [issue 9 validation](../validation/issue-9-truthful-rule-lookup.md)
+for the positive and negative test matrix.
 
 ## Search and Pagination
 

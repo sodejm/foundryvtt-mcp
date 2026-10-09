@@ -35,7 +35,7 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 | GM-4 | As a GM, I want to find a creature by name and pull its full stat block. | `search_actors`, `get_actor_details` | ⚠ integration covers `searchActors`; `get_actor_details` handler (`actors.ts:62`) and "not found" McpError branch untested |
 | GM-5 | As a GM, I want to refresh world data after editing content in Foundry without restarting the MCP. | `refresh_world_data` | ❌ no test asserts cache replacement after re-emit (`world.ts:92`, `client.ts:247`) — see DEF-2 |
 | GM-6 | As a GM, I want to generate an NPC or loot pile on demand so I can improvise encounters. | `generate_npc`, `generate_loot` | ❌ untested (`generation.ts:14`, `:57`); level (1–20) and CR (0–30) bounds unverified |
-| GM-7 | As a GM, I want to look up a rule mid-session without leaving chat. | `lookup_rule` | ❌ untested (`generation.ts:93`); system default ("D&D 5e") branch unverified |
+| GM-7 | As a GM, I want to look up a rule mid-session without leaving chat. | `lookup_rule` | Unsupported: no verified rules provider. Strict unavailable output, input bounds, capability agreement and delegated denial are covered by unit, workflow and live tests; see [issue 9 validation](../validation/issue-9-truthful-rule-lookup.md). |
 | GM-8 | As a GM, I want to know who's currently connected and their role so I know who to address. | `get_users` | ⚠ `getUsers` called in integration; `ROLE_NAMES` mapping (0–4) and "Role {n}" fallback at `users.ts:16` not asserted |
 | GM-9 | As a GM, I want to scan recent chat for a player decision I missed. | `get_chat_messages` | ❌ no handler test; **schema-vs-handler drift** — schema caps `limit` at 100, handler at `chat.ts:8` does not enforce. See DEF-1 |
 
@@ -137,9 +137,10 @@ become a tracked issue, not just a test gap.
    asserted — and it isn't. Compounded by DEF-2.
 4. **All 9 MCP resource URIs** are wired up but completely uncovered. One
    integration test that walks every URI would close most of this.
-5. **Procedural generation** (`generate_npc`/`generate_loot`/`lookup_rule`)
+5. **Procedural generation** (`generate_npc`/`generate_loot`)
    has no schema or range assertions on output — risky because output flows
-   straight to an LLM.
+   straight to an LLM. `lookup_rule` now has a strict, tested unavailable output
+   and returns no generated rules.
 6. **Diagnostics handlers are stubs or pass-throughs that drop schema-declared
    filters** (DEF-4). Tests would have caught the drift.
 7. **No Playwright E2E tests exist** despite the config and rules referencing
