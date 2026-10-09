@@ -266,13 +266,15 @@ function renderNode(node: DiceFormulaNode, root = false): string {
       let operand: DiceFormulaNode = node;
       let negative = false;
       while (operand.kind === 'unary') {
-        if (operand.operator === '-') negative = !negative;
+        if (operand.operator === '-') {
+          negative = !negative;
+        }
         operand = operand.operand;
       }
-      if (!negative) return renderNode(operand, root);
-      return root
-        ? `0 - (${renderNode(operand, true)})`
-        : `(0 - (${renderNode(operand, true)}))`;
+      if (!negative) {
+        return renderNode(operand, root);
+      }
+      return root ? `0 - (${renderNode(operand, true)})` : `(0 - (${renderNode(operand, true)}))`;
     }
     case 'binary': {
       const expression = `${renderNode(node.left, true)} ${node.operator} ${renderNode(node.right)}`;
