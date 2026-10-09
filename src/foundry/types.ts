@@ -833,25 +833,82 @@ export interface WorldScene {
 /**
  * Raw journal entry from worldData.
  */
+export interface WorldJournalPage {
+  _id: string;
+  name: string;
+  type: string;
+  title?: { show: boolean; level: number };
+  text?: { content: string; format: number };
+  image?: Record<string, unknown>;
+  video?: Record<string, unknown>;
+  src?: string;
+  sort?: number;
+  ownership?: Record<string, number>;
+}
+
 export interface WorldJournal {
   _id: string;
   name: string;
-  pages?: Array<{
-    _id: string;
-    name: string;
-    type: string;
-    title?: { show: boolean; level: number };
-    text?: { content: string; format: number };
-    image?: Record<string, unknown>;
-    video?: Record<string, unknown>;
-    src?: string;
-    sort?: number;
-    ownership?: Record<string, number>;
-  }>;
+  pages?: WorldJournalPage[];
   folder?: string | null;
   sort?: number;
   ownership?: Record<string, number>;
   flags?: Record<string, unknown>;
+}
+
+export type JournalSourceFormat = 'html' | 'markdown' | 'unknown' | 'none';
+export type JournalContentFormat = 'text' | 'source';
+
+export interface JournalPageMetadata {
+  id: string;
+  uuid: string;
+  name: string;
+  type: string;
+  sort: number;
+  sourceFormat: JournalSourceFormat;
+  title?: { show: boolean; level: number };
+  asset?: { src: string; caption?: string };
+}
+
+export interface JournalPageSummary extends JournalPageMetadata {
+  content: string;
+  contentTruncated: boolean;
+}
+
+export interface JournalContentChunk {
+  index: number;
+  start: number;
+  end: number;
+  content: string;
+}
+
+export interface JournalSummaryPageParams {
+  journalId: string;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface JournalPageContentParams extends JournalSummaryPageParams {
+  pageId: string;
+  format?: JournalContentFormat | undefined;
+}
+
+export interface JournalSummaryPage extends PaginationMetadata {
+  id: string;
+  uuid: string;
+  name: string;
+  pages: JournalPageSummary[];
+}
+
+export interface JournalPageContent extends Omit<PaginationMetadata, 'page'> {
+  journalId: string;
+  page: JournalPageMetadata;
+  /** Numeric paginator position; `page` is reserved for JournalEntryPage metadata. */
+  paginationPage: number;
+  format: JournalContentFormat;
+  contentLength: number;
+  chunks: JournalContentChunk[];
+  contentTruncated: boolean;
 }
 
 /**

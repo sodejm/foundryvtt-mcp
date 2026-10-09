@@ -10,6 +10,7 @@ export const delegatedTools: Readonly<Record<string, ReadSurface>> = Object.free
   get_item_details: 'items',
   search_journals: 'journals',
   get_journal: 'journals',
+  get_journal_page: 'journals',
   get_chat_messages: 'chat',
   get_users: 'users',
   search_world: 'search',

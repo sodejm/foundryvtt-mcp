@@ -26,6 +26,14 @@ import { compendiumParamsSchema } from './compendium-contract.js';
 import { evaluateDiceFormula } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
 import {
+  JOURNAL_DEFAULT_PAGE_LIMIT,
+  JOURNAL_MAX_PAGE_LIMIT,
+  JournalReadUnavailableError,
+  journalContentChunks,
+  journalPageSummary,
+  prepareJournalRead,
+} from './journal-read.js';
+import {
   type CollectionPage,
   type CollectionRecord,
   type PaginationParams,
@@ -47,7 +55,11 @@ import type {
   FoundryScene,
   FoundryWorld,
   ItemSearchResult,
+  JournalPageContent,
+  JournalPageContentParams,
   JournalPageCreateSource,
+  JournalSummaryPage,
+  JournalSummaryPageParams,
   WorldActor,
   WorldCombat,
   WorldData,
@@ -69,6 +81,26 @@ import {
 } from './world-cache.js';
 
 const WORLD_DATA_UNAVAILABLE_MESSAGE = 'World data unavailable — no valid snapshot has been loaded';
+
+const journalSummaryPageParamsSchema = z.strictObject({
+  journalId: z.unknown(),
+  limit: z.number().int().min(1).max(JOURNAL_MAX_PAGE_LIMIT).optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+});
+
+const journalPageContentParamsSchema = z.strictObject({
+  journalId: z.unknown(),
+  pageId: z.unknown(),
+  format: z.enum(['text', 'source']).optional(),
+  limit: z.number().int().min(1).max(JOURNAL_MAX_PAGE_LIMIT).optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+});
+
+function assertJournalReadId(id: unknown): asserts id is string {
+  if (typeof id !== 'string' || !FOUNDRY_ID_PATTERN.test(id)) {
+    throw new JournalReadUnavailableError();
+  }
+}
 
 /** Validate identity before any detail lookup, including callers outside MCP. */
 function assertReadId(id: unknown, field: string): asserts id is string {
@@ -2380,6 +2412,91 @@ export class FoundryClient {
 
   getJournal(journalId: string): WorldJournal | undefined {
     return this.readWorld('journals').journal.find((j) => j._id === journalId);
+  }
+
+  async getJournalSummaryPage(params: JournalSummaryPageParams): Promise<JournalSummaryPage> {
+    const validated = journalSummaryPageParamsSchema.parse(params);
+    assertJournalReadId(validated.journalId);
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST journal page reads are unsupported because no authenticated endpoint is available',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const journal = this.readWorld('journals').journal.find(
+      (candidate) => candidate._id === validated.journalId,
+    );
+    if (!journal) {
+      throw new JournalReadUnavailableError();
+    }
+    const prepared = prepareJournalRead(journal);
+    const result = this.paginator.paginate(
+      prepared.pages.map(journalPageSummary),
+      this.paginationParams(validated),
+      this.paginationContext('journal-summary', {
+        journalId: prepared.id,
+        digest: prepared.digest,
+      }),
+      this.getReadMetadata(),
+      JOURNAL_DEFAULT_PAGE_LIMIT,
+    );
+    const { records: pages, ...pagination } = result;
+    return {
+      id: prepared.id,
+      uuid: prepared.uuid,
+      name: prepared.name,
+      pages,
+      ...pagination,
+    };
+  }
+
+  async getJournalPageContent(params: JournalPageContentParams): Promise<JournalPageContent> {
+    const validated = journalPageContentParamsSchema.parse(params);
+    assertJournalReadId(validated.journalId);
+    assertJournalReadId(validated.pageId);
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST journal page reads are unsupported because no authenticated endpoint is available',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const journal = this.readWorld('journals').journal.find(
+      (candidate) => candidate._id === validated.journalId,
+    );
+    if (!journal) {
+      throw new JournalReadUnavailableError();
+    }
+    const prepared = prepareJournalRead(journal);
+    const page = prepared.pages.find((candidate) => candidate.metadata.id === validated.pageId);
+    if (!page) {
+      throw new JournalReadUnavailableError();
+    }
+    const format = validated.format ?? 'text';
+    const content = journalContentChunks(page, format);
+    const result = this.paginator.paginate(
+      content.chunks,
+      this.paginationParams(validated),
+      this.paginationContext('journal-page-content', {
+        journalId: prepared.id,
+        pageId: page.metadata.id,
+        format,
+        digest: prepared.digest,
+      }),
+      this.getReadMetadata(),
+      JOURNAL_DEFAULT_PAGE_LIMIT,
+    );
+    const { records: chunks, complete, page: paginationPage, ...pagination } = result;
+    return {
+      journalId: prepared.id,
+      page: page.metadata,
+      paginationPage,
+      format,
+      contentLength: content.contentLength,
+      chunks,
+      contentTruncated: !complete,
+      complete,
+      ...pagination,
+    };
   }
 
   // ==========================================================================

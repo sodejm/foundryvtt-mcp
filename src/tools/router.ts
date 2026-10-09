@@ -42,7 +42,11 @@ import {
 } from './handlers/item-mutations.js';
 import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleCreateJournalEntry } from './handlers/journal-mutations.js';
-import { handleGetJournal, handleSearchJournals } from './handlers/journals.js';
+import {
+  handleGetJournal,
+  handleGetJournalPage,
+  handleSearchJournals,
+} from './handlers/journals.js';
 import { handleReadResource } from './handlers/resources.js';
 import { handleGetSceneInfo } from './handlers/scenes.js';
 import { handleApplyStatusEffect, handleMoveToken } from './handlers/token-mutations.js';
@@ -243,10 +247,9 @@ export async function routeToolRequest(
         foundryClient,
       );
     case 'get_journal':
-      if (!('journalId' in args) || typeof args.journalId !== 'string') {
-        throw new Error('Missing required parameter: journalId');
-      }
-      return handleGetJournal(args as { journalId: string }, foundryClient);
+      return handleGetJournal(args, foundryClient);
+    case 'get_journal_page':
+      return handleGetJournalPage(args, foundryClient);
 
     // Journal mutation tools (WRITE) — Socket.IO modifyDocument protocol
     // (foundryClient); require FOUNDRY_WRITE_ENABLED=true + a GM user.

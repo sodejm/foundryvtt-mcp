@@ -12,6 +12,12 @@ import {
   compendiumSearchOutputSchema,
 } from '../foundry/compendium-contract.js';
 import {
+  journalPageInputJsonSchema,
+  journalPageOutputSchema,
+  journalSummaryInputJsonSchema,
+  journalSummaryOutputSchema,
+} from '../foundry/journal-contract.js';
+import {
   actorDetailsOutputSchema,
   actorSearchInputJsonSchema,
   actorSearchOutputSchema,
@@ -681,23 +687,22 @@ export const journalTools = [
     name: 'search_journals',
     outputSchema: collectionSearchOutputSchema,
     description:
-      'Search journal names and page content. Returns version 3 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page text.',
+      'Search journal names and page content. Returns version 3 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page IDs and previews, then get_journal_page for complete text or stored source.',
     inputSchema: worldSearchInputJsonSchema,
   },
   {
     name: 'get_journal',
+    outputSchema: journalSummaryOutputSchema,
     description:
-      'Get one journal entry by id with the text of its pages. Page bodies are HTML-stripped and each is truncated to its first 500 characters, marked with a trailing "...", so long pages come back partial. Use when: you have a journalId and need the text of its pages. Do not use when: you only have a title or keyword - run search_journals first.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        journalId: {
-          type: 'string',
-          description: 'The ID of the journal entry to retrieve',
-        },
-      },
-      required: ['journalId'],
-    },
+      'Read a bounded page list for one journalId from search_journals. Version 3 returns stable page IDs/UUIDs, type/order/source format and previews of at most 500 Unicode code points with contentTruncated. Default limit 4; maximum 8. Follow nextCursor with the same journalId/limit until complete. Use get_journal_page for complete content. Cursors expire after five minutes and are invalidated by visible content, order, ownership or session changes. Invalid inputs and missing/denied journals return InvalidParams; capacity failures return InternalError. Requires an authenticated Socket.IO GM; REST is unsupported.',
+    inputSchema: journalSummaryInputJsonSchema,
+  },
+  {
+    name: 'get_journal_page',
+    outputSchema: journalPageOutputSchema,
+    description:
+      'Retrieve complete journal-page content by journalId and pageId from get_journal. Version 1 returns page metadata and ordered chunks of at most 1024 Unicode code points, with exact start/end offsets and contentLength. The numeric response page is paginationPage; page holds document metadata. Default format text parses HTML inertly with structural newlines and leaves Markdown intact; format source returns the exact stored text string. Default limit 4; maximum 8 chunks. Concatenate chunks in order and follow nextCursor with identical IDs/format/limit until complete. contentTruncated reports remaining chunks. Empty text has one empty chunk; non-text pages have metadata and safe asset fields with zero chunks. Source is limited to 4 MiB; responses to 128 KiB. Cursors expire after five minutes and edits, ownership or session changes invalidate them. Invalid input, missing/denied pages and invalid cursors return InvalidParams. Requires an authenticated Socket.IO GM; REST is unsupported.',
+    inputSchema: journalPageInputJsonSchema,
   },
 ];
 
@@ -814,6 +819,10 @@ export function getAllTools(delegated = false) {
       "Read the caller's own user record and current presence. Other users and credential fields are omitted.",
     search_journals:
       'Search readable journal names and readable page content. Returns version 3 metadata records without page bodies. Journal and page permissions are both required. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
+    get_journal:
+      'Read caller-readable pages of one journal with version 3 IDs/UUIDs, types, order, source format and 500-Unicode-code-point previews with contentTruncated. Journal and page permissions are both required. Follow nextCursor with the same journalId/limit; default limit 4, maximum 8, expiry five minutes. Use get_journal_page for complete content. Visible edits and authorization/session changes invalidate cursors.',
+    get_journal_page:
+      'Read complete caller-readable page content with version 1 page metadata, 1024-Unicode-code-point chunks, exact offsets, contentLength and continuation. Journal and page permissions are both required. Format text parses HTML inertly and preserves Markdown; source returns exact stored text. Follow nextCursor with identical journalId/pageId/format/limit; default limit 4, maximum 8, expiry five minutes. page holds document metadata; paginationPage is the numeric pagination position. Missing and denied pages have the same error. Visible edits and authorization/session changes invalidate cursors.',
     search_world:
       'Search caller-readable actors, items and journals in one ordered stream. Returns version 3 metadata records with bounded snapshot pagination. Scenes are unavailable. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
     get_world_summary:
