@@ -69,8 +69,11 @@ describe('built MCP CLI structured read workflow', () => {
   let temporaryCwd: string;
   let actors = new Map<string, Record<string, unknown>>();
   let items = new Map<string, Record<string, unknown>>();
+  const backendSnapshots = new Map<string, { binding: string; records: Record<string, unknown>[] }>();
+  let backendSnapshotSequence = 0;
   let fault: 'none' | 'unavailable' | 'mismatched-id' | 'malformed-search'
-    | 'ignored-page' | 'duplicate-page' | 'nonprogress' | 'inconsistent-total' = 'none';
+    | 'ignored-page' | 'duplicate-page' | 'nonprogress' | 'inconsistent-total'
+    | 'missing-snapshot' | 'changed-snapshot' | 'omitted-snapshot' = 'none';
   let requests: string[] = [];
   let systemIdentity = { id: 'dnd5e', version: '6.0.6' };
   const schemas = new Map<string, object>();
@@ -79,6 +82,7 @@ describe('built MCP CLI structured read workflow', () => {
   beforeEach(() => {
     actors = new Map(actorFixtures.map(record => [record._id, structuredClone(record)]));
     items = new Map(itemFixtures.map(record => [record._id, structuredClone(record)]));
+    backendSnapshots.clear();
     fault = 'none';
     requests = [];
     systemIdentity = { id: 'dnd5e', version: '6.0.6' };
@@ -122,11 +126,25 @@ describe('built MCP CLI structured read workflow', () => {
       const query = (url.searchParams.get('query') ?? '').toLowerCase();
       const type = url.searchParams.get('type');
       const rarity = url.searchParams.get('rarity');
-      const records = [...collection.values()].filter(record => collectionName === 'items' || (
-        typeof record.name === 'string' && record.name.toLowerCase().includes(query)
-        && (!type || record.type === type) && (!rarity || record.rarity === rarity)));
       const limit = Number(url.searchParams.get('limit') ?? 10);
       const page = Number(url.searchParams.get('page') ?? 1);
+      const binding = JSON.stringify([collectionName, query, type, rarity, limit]);
+      const requestedSnapshot = url.searchParams.get('snapshotId');
+      const snapshotId = requestedSnapshot ?? `fixture-snapshot-${++backendSnapshotSequence}`;
+      if (!requestedSnapshot) {
+        backendSnapshots.set(snapshotId, { binding, records: structuredClone(
+          [...collection.values()].filter(record => collectionName === 'items' || (
+            typeof record.name === 'string' && record.name.toLowerCase().includes(query)
+            && (!type || record.type === type) && (!rarity || record.rarity === rarity))),
+        ) });
+      }
+      const snapshot = backendSnapshots.get(snapshotId);
+      if (!snapshot || snapshot.binding !== binding) {
+        response.statusCode = 400;
+        response.end(JSON.stringify({ error: 'Unknown or mismatched fixture snapshot' }));
+        return;
+      }
+      const records = snapshot.records;
       const offset = fault === 'duplicate-page' ? 0 : (page - 1) * limit;
       response.end(JSON.stringify({
         [collectionName]: fault === 'malformed-search'
@@ -134,6 +152,9 @@ describe('built MCP CLI structured read workflow', () => {
           : fault === 'nonprogress' && page > 1 ? [] : records.slice(offset, offset + limit),
         total: records.length + (fault === 'inconsistent-total' && page > 1 ? 1 : 0),
         page: fault === 'ignored-page' ? 1 : page, limit,
+        ...(fault === 'missing-snapshot' || (fault === 'omitted-snapshot' && page > 1) ? {} : {
+          snapshotId: fault === 'changed-snapshot' && page > 1 ? `${snapshotId}-changed` : snapshotId,
+        }),
       }));
     });
     await new Promise<void>((resolve, reject) => {
@@ -293,7 +314,8 @@ describe('built MCP CLI structured read workflow', () => {
     );
   });
 
-  it.each(['ignored-page', 'duplicate-page', 'nonprogress', 'inconsistent-total'] as const)(
+  it.each(['ignored-page', 'duplicate-page', 'nonprogress', 'inconsistent-total',
+    'missing-snapshot', 'changed-snapshot', 'omitted-snapshot'] as const)(
     'fails explicitly when the REST backend returns %s', async nextFault => {
       for (const name of ['search_actors', 'search_items']) {
         seed(name === 'search_actors' ? actors : items, 251);

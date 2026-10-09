@@ -178,6 +178,28 @@ for (const surface of [
       }
       client.disconnect();
     });
+    it('normalizes a successful REST detail envelope using its id alias', async () => {
+      const client = createClient(true);
+      const { _id, ...fields } = surface.sample;
+      get.mockResolvedValue({ data: { success: true, data: { ...fields, id: _id } } });
+      expect(await surface.detail(client, surface.id)).toMatchObject({
+        _id: surface.id,
+        name: 'Twin',
+      });
+      client.disconnect();
+    });
+    it.each([
+      { success: false, data: surface.sample },
+      { success: true, data: null },
+      { success: true, data: [] },
+      { success: true, data: { ...surface.sample, id: surface.other } },
+      { success: true, data: { ...surface.sample, _id: surface.other } },
+    ])('rejects failed, malformed, or mismatched REST envelopes %j', async (data) => {
+      const client = createClient(true);
+      get.mockResolvedValue({ data });
+      await expect(surface.detail(client, surface.id)).rejects.toThrow();
+      client.disconnect();
+    });
     it('resolves duplicate Socket.IO names to the correct world ID and world UUID', async () => {
       const client = createClient();
       setWorld(client);
