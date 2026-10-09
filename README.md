@@ -151,6 +151,9 @@ Ask your AI assistant things like:
 - `search_items` — find world equipment, spells, consumables with stable IDs
 - `get_item_details` — read one world item by ID
 - `get_scene_info` — current scene details
+- `get_scene_spatial` — structured scene dimensions, origin and grid units
+- `list_scene_tokens` — page through visible token positions and footprints
+- `get_scene_token` — read one token within its parent scene
 - `search_journals` — search notes and handouts
 - `get_journal` — list a journal's pages with bounded previews and stable page IDs
 - `get_journal_page` — retrieve a page's complete text or source in bounded chunks
@@ -240,6 +243,44 @@ text budget of 8,192. Text clipping preserves surrogate pairs and reports
 These tools require native Socket.IO; REST returns an explicit unsupported error.
 See the [integration guide](docs/guides/integration.md#bounded-actor-sheets-and-owned-items)
 for schema imports, profile fixtures and live test setup.
+
+### Structured scene and token reads
+
+The three spatial tools return schema version 1, with advertised output schemas
+and matching JSON text and `structuredContent`. Existing `get_scene_info` and
+token mutation tools retain their contracts. Use an explicit `sceneId` from the
+current world, or omit it to select the active scene:
+
+```json
+{"name":"get_scene_spatial","arguments":{"sceneId":"Scene00000000001"}}
+{"name":"list_scene_tokens","arguments":{"sceneId":"Scene00000000001","limit":100}}
+{"name":"get_scene_token","arguments":{"sceneId":"Scene00000000001","tokenId":"Token00000000001"}}
+```
+
+Scene output distinguishes source width, height, padding and shifts from derived
+canvas dimensions and origin. It names gridless, square and all four hex grid
+types. Token positions use pixels, footprints use grid spaces, rotation uses
+degrees, and elevation uses the scene's distance units. Token detail includes
+optional texture metadata; texture scaling is independent of the footprint and
+is omitted from list summaries. Missing optional values remain absent; zero is
+preserved. No grid-to-pixel or distance conversion is implied.
+
+Token pages default to ten records and allow 1–100, with optional name `query`
+and opaque `cursor`. Repeat the same scene selection, query and limit with
+`nextCursor` until `complete`. Select duplicate names by stable token ID and
+verified `Scene.<sceneId>.Token.<tokenId>` UUID. Cursors expire after five minutes,
+bind to the world, caller and session, and invalidate after token, scene or
+permission changes. Active-scene selection also invalidates when that scene
+changes. Combined MCP responses remain bounded to 128 KiB; reduce the limit if
+a page exceeds this bound.
+
+Delegated reads check scene and token visibility before counts, pages, details
+and actor references. Hidden tokens, secret dispositions and inaccessible linked
+or synthetic actors are filtered using the caller's permissions. Synthetic actor
+overrides inherit nullable fields and merge explicit ownership with their base
+actor. Native Socket.IO is required; REST reports an explicit unsupported error.
+See the [integration guide](docs/guides/integration.md#structured-scene-and-token-reads)
+for schema imports and live fixture setup.
 
 ### Complete journal page reads
 
@@ -358,8 +399,9 @@ Players receive only their own sanitized user record, and summary counts include
 only visible records. Missing authentication, revoked permissions, disconnected
 backends and stale cursors fail closed. Errors omit privileged backend details.
 
-Delegated discovery exposes fifteen read tools and four collection resources (actors,
-items, journals and users). Scenes, tokens, combat, compendia, rules, settings,
+Delegated discovery exposes eighteen read tools and four collection resources (actors,
+items, journals and users). The three structured scene/token tools use their
+own visibility contract. Legacy scene/token reads and resources, combat, compendia, rules, settings,
 diagnostics, refresh and every write are disabled for all delegated callers,
 including GMs. REST/API-key backends are unavailable in delegated mode.
 

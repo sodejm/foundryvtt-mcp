@@ -317,6 +317,112 @@ reads. Caller-permission integration separately verifies observer grants,
 hidden parents/items, redaction and immediate revocation using Foundry's
 native permission oracle. Missing prerequisites fail instead of skipping.
 
+### Structured scene and token reads
+
+`get_scene_spatial`, `list_scene_tokens` and `get_scene_token` return schema
+version 1 with advertised output schemas and matching JSON text and
+`structuredContent`. Import `sceneSpatialOutputSchema`,
+`sceneTokenListOutputSchema` and `sceneTokenOutputSchema` from
+`foundry/scene-spatial-contract`. These contracts require native Socket.IO;
+REST returns an explicit unsupported error. Existing `get_scene_info`, legacy
+token reads and mutation tools remain compatible.
+
+All three tools accept optional `sceneId`; omission selects the active scene.
+`get_scene_token` also requires `tokenId`. IDs must be 16 alphanumeric characters,
+and a token from another scene cannot resolve under the requested parent.
+The scene record separates `source` dimensions/padding/shifts from derived
+`dimensions`, including origin, rows and columns. The grid type is one of
+`gridless`, `square`, `hex-odd-r`, `hex-even-r`, `hex-odd-q` or `hex-even-q`.
+Native Foundry dimensions are reproduced for each type; arbitrary coordinate,
+range and distance conversions are outside this contract.
+
+| Field | Unit or meaning |
+| --- | --- |
+| `source.widthPixels`, `source.heightPixels`, shifts | Pixels |
+| `source.paddingRatio` | Ratio |
+| `dimensions` width, height and origin | Pixels |
+| `grid.sizePixels` | Pixels |
+| `grid.distance`, `grid.distanceUnits` | Optional scene distance and unit label |
+| Token `xPixels`, `yPixels` | Pixels, including negative coordinates |
+| Token `widthGridSpaces`, `heightGridSpaces` | Footprint in grid spaces |
+| Token `rotationDegrees` | Degrees |
+| Optional token `elevation` | Scene distance |
+| Optional detail `texture.scaleX`, `texture.scaleY` | Art scale, independent of footprint |
+
+List records include stable IDs, embedded UUIDs, parent scene identity, token
+name, position, footprint, rotation, hidden state, optional elevation and
+observable actor references. Detail includes the same fields plus optional
+texture source/scaling. Lists omit texture metadata to keep ordinary 100-token
+pages bounded. Missing optional values are absent; zero and empty unit labels
+are retained when present. Ownership, flags, actor deltas and raw system data
+are never returned by these tools.
+
+`list_scene_tokens` accepts optional `query`, `limit` and `cursor`. Limits default
+to 10 and allow 1–100; query and cursor strings are bounded to 1,024 characters.
+Use stable IDs when names repeat, and keep scene selection, query and limit
+unchanged during traversal:
+
+```ts
+const tokens = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'list_scene_tokens',
+    arguments: { sceneId, limit: 100, ...(cursor ? { cursor } : {}) },
+  });
+  const page = sceneTokenListOutputSchema.parse(result.structuredContent);
+  tokens.push(...page.records);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+if (tokens[0]) {
+  const result = await client.callTool({
+    name: 'get_scene_token',
+    arguments: { sceneId, tokenId: tokens[0].id },
+  });
+  const detail = sceneTokenOutputSchema.parse(result.structuredContent);
+  console.log(detail.token.xPixels, detail.token.widthGridSpaces, detail.token.texture);
+}
+```
+
+Empty scenes return complete empty pages. Cursors expire after five minutes and
+bind to the world, caller, session, scene selection, query and limit. Token edits,
+hiding, deletion, scene dimensions, permission changes and active-scene changes
+invalidate affected continuations in both modes. Restart from the first page
+after invalidation. Responses preserve freshness metadata and the combined
+128 KiB text/structured limit; oversized pages fail and require a smaller limit.
+Source capacity is bounded to 10,000 scenes, actors and tokens per scene.
+
+Delegated reads require scene OBSERVER permission and evaluate token and actor
+visibility before counts, pagination or serialization. Players cannot retrieve
+hidden tokens, secret dispositions or tokens whose linked/synthetic actors are
+inaccessible. Actorless visible tokens are supported. Synthetic actor deltas
+inherit nullable name/type/ownership fields and merge explicit ownership with
+the base actor. Hidden and missing IDs share generic errors. Raw scene/token
+resources and legacy scene/token reads remain unavailable in delegated mode.
+
+`tests/integration/scene-spatial.integration.test.ts` uses the built MCP stdio
+server and delegated callers against disposable DND5e `test1world`. Start
+`node scripts/scene-test-control.mjs` with explicit `FOUNDRY_URL`,
+`FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` outside source. The controller binds
+to `127.0.0.1:3014`, requires that world/system and a GM browser, and manages only
+scenes, actors and users prefixed `MCP Scene Issue 8`. It restores the original
+active scene during cleanup. Set
+`FOUNDRY_SCENE_TEST_CONTROL_URL=http://127.0.0.1:3014`, then run:
+
+```sh
+npm run build
+npm run test:integration -- tests/integration/scene-spatial.integration.test.ts
+```
+
+Fixtures cover thirteen scenes, all six grid types, padded gridless and
+zero-padding hex geometry, 258 tokens, duplicate/Unicode names, negative
+coordinates, zero elevation, independent art scaling, linked/synthetic actors
+and two player callers. Native dimensions and permission oracles verify MCP
+output. Tests also exercise edits, hiding, deletion, active-scene changes,
+revocation, cursor isolation, strict inputs and serialization bounds. Missing
+prerequisites fail instead of skipping acceptance cases.
+
 ### Complete journal pages
 
 Journal summaries and page content have separate contracts. `get_journal`

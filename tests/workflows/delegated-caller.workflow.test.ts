@@ -74,12 +74,13 @@ describe('built delegated MCP transport boundary', () => {
     return { client, contexts, metadata, setToken: (value?: string) => { token = value; } };
   }
 
-  it('advertises only the fifteen verified tools and four collections', async () => {
+  it('advertises only the eighteen verified tools and four collections', async () => {
     const { client } = await connect();
     expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([
       'get_actor_details', 'get_actor_item', 'get_actor_section', 'get_actor_sheet',
       'get_chat_messages', 'get_item_details', 'get_journal',
-      'get_journal_page', 'get_users', 'get_world_summary', 'list_actor_items',
+      'get_journal_page', 'get_scene_spatial', 'get_scene_token', 'get_users',
+      'get_world_summary', 'list_actor_items', 'list_scene_tokens',
       'search_actors', 'search_items', 'search_journals', 'search_world',
     ]);
     expect((await client.listResources()).resources.map(resource => resource.uri).sort())
