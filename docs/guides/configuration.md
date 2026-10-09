@@ -173,4 +173,6 @@ See [optional capabilities](optional-capabilities.md) for tested versions and li
 
 The legacy `FOUNDRY_API_KEY` setting does not enable verified Foundry diagnostics.
 Rules lookup, Foundry-backed generation and optional diagnostics are reported as
-unavailable until compatible adapters are implemented and verified.
+unavailable until compatible adapters are implemented and verified. Local
+[creative NPC and loot previews](content-generation.md) require no provider
+credentials, report their limitations and do not persist world data.

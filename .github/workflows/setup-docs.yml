@@ -54,14 +54,16 @@ jobs:
 
       - name: Setup summary
         run: |
-          echo "## 🚀 Documentation Site Setup Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Go to your repository **Settings** → **Pages**" >> $GITHUB_STEP_SUMMARY
-          echo "2. Set **Source** to 'GitHub Actions'" >> $GITHUB_STEP_SUMMARY
-          echo "3. The documentation will be available at: \`https://[username].github.io/[repository]/\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Automatic Updates:" >> $GITHUB_STEP_SUMMARY
-          echo "- Documentation will auto-update when you push to main branch" >> $GITHUB_STEP_SUMMARY
-          echo "- The \`docs.yml\` workflow handles GitHub Pages deployment" >> $GITHUB_STEP_SUMMARY
-          echo "- The \`update-docs.yml\` workflow commits docs to the repository" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 🚀 Documentation Site Setup Complete"
+            echo ""
+            echo "### Next Steps:"
+            echo "1. Go to your repository **Settings** → **Pages**"
+            echo "2. Set **Source** to 'GitHub Actions'"
+            echo "3. The documentation will be available at: \`https://[username].github.io/[repository]/\`"
+            echo ""
+            echo "### Automatic Updates:"
+            echo "- Documentation will auto-update when you push to main branch"
+            echo "- The \`docs.yml\` workflow handles GitHub Pages deployment"
+            echo "- The \`update-docs.yml\` workflow commits docs to the repository"
+          } >> "$GITHUB_STEP_SUMMARY"

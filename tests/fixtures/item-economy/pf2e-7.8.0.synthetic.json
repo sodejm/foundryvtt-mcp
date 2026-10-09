@@ -1,0 +1,22 @@
+{
+  "type": "equipment",
+  "system": {
+    "price": {
+      "value": {
+        "cp": 0,
+        "sp": 2,
+        "gp": 3,
+        "pp": 0,
+        "ignored": 999
+      },
+      "per": 2
+    },
+    "traits": {
+      "rarity": "uncommon",
+      "value": ["synthetic-trait"]
+    },
+    "description": {
+      "value": "not projected"
+    }
+  }
+}

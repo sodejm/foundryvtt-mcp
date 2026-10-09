@@ -6,6 +6,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
@@ -40,12 +41,26 @@ import {
 } from './caller-context.js';
 import {
   type CapabilityReport,
+  CONTENT_GENERATION_UNAVAILABLE,
   DIAGNOSTICS_UNAVAILABLE,
   RULES_LOOKUP_UNAVAILABLE,
 } from './capabilities.js';
 import { compendiumParamsSchema } from './compendium-contract.js';
-import { evaluateDiceFormula } from './dice-formula.js';
+import { type DiceRollInput, diceRollOutputSchema, parseDiceRollInput } from './dice-contract.js';
+import {
+  evaluateParsedDiceFormula,
+  InvalidDiceFormulaError,
+  parseDiceFormula,
+} from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
+import type { ItemEconomy } from './item-economy-contract.js';
+import { itemEconomyAliases, restItemSystemIdentity } from './item-economy-read.js';
+import {
+  assertItemRarityFilter,
+  type ItemEconomyIdentity,
+  itemMatchesRarity,
+  normalizeItemEconomy,
+} from './item-normalization.js';
 import {
   JOURNAL_DEFAULT_PAGE_LIMIT,
   JOURNAL_MAX_PAGE_LIMIT,
@@ -69,6 +84,7 @@ import {
   itemDocumentSchema,
 } from './read-contract.js';
 import { CompendiumRestAdapter } from './rest-compendium.js';
+import { DiceRestAdapter } from './rest-dice.js';
 import {
   projectSceneSpatial,
   type SceneIdentity,
@@ -159,14 +175,36 @@ const restActorPageSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
 
+const restItemWireSchema = itemDocumentSchema.omit({ economy: true, price: true, rarity: true });
+type NormalizedFoundryItem = FoundryItem & { economy: ItemEconomy };
 const restItemPageSchema = z.object({
-  items: z.array(itemDocumentSchema),
+  items: z.array(restItemWireSchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
+
+/** Accept raw documents and the bridge's successful detail envelope. Identity
+ * aliases must agree; a failed envelope must never become a document. */
+function restDetailDocument(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const envelope = value as Record<string, unknown>;
+  const document =
+    'success' in envelope
+      ? z.object({ success: z.literal(true), data: z.record(z.string(), z.unknown()) }).parse(value)
+          .data
+      : envelope;
+  if (document.id !== undefined && document._id !== undefined && document.id !== document._id) {
+    throw new Error('REST document identity aliases disagree');
+  }
+  return { ...document, _id: document._id ?? document.id };
+}
 
 /** REST module payloads do not establish UUID scope. Preserve existing internal
  * fields for other client callers, but remove unverified UUIDs before display. */
@@ -177,51 +215,23 @@ function restActor(value: unknown, expectedId?: string): FoundryActor {
   }
   return actor as FoundryActor;
 }
-function restItem(value: unknown, expectedId?: string): FoundryItem {
-  const { uuid: _uuid, ...item } = itemDocumentSchema.parse(value);
+function restItem(
+  value: unknown,
+  identity: ItemEconomyIdentity = { id: 'unknown' },
+  expectedId?: string,
+): NormalizedFoundryItem {
+  const {
+    uuid: _uuid,
+    economy: _economy,
+    price: _price,
+    rarity: _rarity,
+    ...item
+  } = restItemWireSchema.parse(value);
   if (expectedId !== undefined && item._id !== expectedId) {
     throw new Error('Item response ID mismatch');
   }
-  return item as FoundryItem;
-}
-
-/**
- * Characters a dice formula may contain. A cheap sanity gate, not a grammar:
- * it rejects Foundry modifier syntax (`4d6kh3`), attribute references
- * (`1d20+STR`) and arithmetic this server never forwards (`*`, `/`), while
- * still allowing parentheses through to FoundryVTT's own `Roll` engine on the
- * REST transport. See {@link FoundryClient.rollDice}.
- */
-const DICE_FORMULA_ALPHABET = /^[0-9d\s+\-()]+$/;
-
-/** Single-character form of {@link DICE_FORMULA_ALPHABET}, for locating a violation. */
-const DICE_FORMULA_CHARACTER = /[0-9d\s+\-()]/;
-
-/** Upper bound on formula length, common to both transports. */
-const MAX_DICE_FORMULA_LENGTH = 100;
-
-/**
- * Builds the REST-path rejection for a formula outside the dice alphabet.
- *
- * The local parser cannot be borrowed for this: it rejects parentheses, which
- * REST *does* support, so for `(1d20+5)*2` it would name the wrong problem.
- * This scans for the first character the alphabet does not admit and reports
- * it by name and position, so the REST path is as specific about what it
- * refused as the local one (#219).
- */
-function alphabetViolation(formula: string): Error {
-  if (formula === '') {
-    return new Error('Invalid dice formula: the formula is empty.');
-  }
-  const index = [...formula].findIndex((char) => !DICE_FORMULA_CHARACTER.test(char));
-  if (index === -1) {
-    return new Error(`Invalid dice formula: ${formula}`);
-  }
-  return new Error(
-    `Invalid dice formula "${formula}": unexpected "${formula[index]}" at position ${index}. ` +
-      'Supported syntax: dice terms (NdS, or dS for a single die) and whole numbers, joined by ' +
-      '+ or -, optionally grouped in parentheses.',
-  );
+  const economy = normalizeItemEconomy(item, identity);
+  return { ...item, economy, ...itemEconomyAliases(economy) } as NormalizedFoundryItem;
 }
 
 /**
@@ -264,21 +274,6 @@ const SORT_INTEGER_DENSITY = 100000;
  */
 const TOKEN_ACTOR_UUID_PATTERN =
   /^(Actor\.[a-zA-Z0-9]{16}|Scene\.[a-zA-Z0-9]{16}\.Token\.[a-zA-Z0-9]{16}\.Actor\.[a-zA-Z0-9]{16})$/;
-
-/**
- * Minimal Zod schema for the `/api/dice/roll` REST response.
- *
- * The REST module is external input, so the body is validated rather than read
- * off an `any`: a 200 whose payload carries no numeric `total` would otherwise
- * produce a `DiceRoll` with `total: undefined` while the type claims `number`,
- * and `roll_dice` would render that straight to the caller. A body that does
- * not match is treated like any other REST failure and falls through to the
- * local roller.
- */
-const RestDiceRollSchema = z.object({
-  total: z.number(),
-  terms: z.array(z.object({ results: z.array(z.number()).optional() })).optional(),
-});
 
 /**
  * Minimal Zod schema for the WorldData Socket.IO payload.
@@ -1520,11 +1515,22 @@ export class FoundryClient {
     const records: FoundryActor[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/actors', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/actors', {
+          params: {
+            ...requestFilters,
+            page,
+            limit: 100,
+            ...(snapshotId === undefined ? {} : { snapshotId }),
+          },
+        }),
       );
       const result = restActorPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST actor pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST actor pagination ignored requested page ${page}`);
       }
@@ -1559,26 +1565,41 @@ export class FoundryClient {
       if (result.actors.length === 0) {
         throw new Error('REST actor pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST actor pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST actor pagination exceeded the maximum supported page count');
   }
 
-  private async fetchAllRestItems(filters: {
-    query?: string | undefined;
-    type?: string | undefined;
-    rarity?: string | undefined;
-  }): Promise<FoundryItem[]> {
-    const requestFilters = Object.fromEntries(
-      Object.entries(filters).filter((entry) => entry[1] !== undefined),
-    );
+  private async restItemIdentity(): Promise<ItemEconomyIdentity> {
+    try {
+      const response = await this.executeWithRetry(() => this.http.get('/api/world'));
+      return restItemSystemIdentity(response.data);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return { id: 'unknown' };
+      }
+      throw error;
+    }
+  }
+
+  private async fetchAllRestItems(): Promise<FoundryItem[]> {
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/items', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/items', {
+          params: { page, limit: 100, ...(snapshotId === undefined ? {} : { snapshotId }) },
+        }),
       );
       const result = restItemPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST item pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST item pagination ignored requested page ${page}`);
       }
@@ -1613,6 +1634,10 @@ export class FoundryClient {
       if (result.items.length === 0) {
         throw new Error('REST item pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST item pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST item pagination exceeded the maximum supported page count');
   }
@@ -1649,7 +1674,7 @@ export class FoundryClient {
     assertReadId(actorId, 'actorId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
-      return restActor(response.data, actorId);
+      return restActor(restDetailDocument(response.data), actorId);
     }
 
     const actor = this.readWorld('actors').actors.find((a) => a._id === actorId);
@@ -1733,7 +1758,7 @@ export class FoundryClient {
     const delegated = this.isDelegatedMode();
     const items = Array.isArray(actor.items) ? actor.items : [];
     const visibleProjection = items.map((item) => ({
-      summary: publicActorItemSummary(actor._id, item),
+      summary: publicActorItemSummary(actor._id, item, system),
       fields: actorItemFields(item, system.profile, delegated),
       sort: typeof item.sort === 'number' ? item.sort : null,
     }));
@@ -1780,7 +1805,7 @@ export class FoundryClient {
     }
     const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'ActorItemCollection',
       actor: publicActorIdentity(actor),
       ...page,
@@ -1802,11 +1827,11 @@ export class FoundryClient {
     const system = actorSystemIdentity(world);
     const delegated = this.isDelegatedMode();
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'ActorItem',
       actor: publicActorIdentity(actor),
       item: {
-        ...publicActorItemSummary(actor._id, item),
+        ...publicActorItemSummary(actor._id, item, system),
         parentActorId: actor._id,
         fields: actorItemFields(item, system.profile, delegated),
         systemFieldsSupported: system.profile !== 'generic' || !delegated,
@@ -1894,23 +1919,35 @@ export class FoundryClient {
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('item-search', filters);
-    let records: FoundryItem[] | undefined;
+    let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
+      let identity: ItemEconomyIdentity;
       if (this.config.apiKey) {
-        records = await this.fetchAllRestItems(filters);
+        const rawItems = await this.fetchAllRestItems();
+        identity =
+          rawItems.some((item) => item.system !== undefined) || params.rarity
+            ? await this.restItemIdentity()
+            : { id: 'unknown' };
+        records = rawItems
+          .filter(
+            (item) =>
+              (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
+              (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
+          )
+          .map((item) => restItem(item, identity));
       } else {
         const worldData = this.readWorld('items');
+        identity = actorSystemIdentity(worldData);
         records = worldData.items
           .filter(
             (item) =>
               (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
               (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
           )
-          .map(worldItemToFoundry)
-          .filter(
-            (item) => !params.rarity || item.rarity?.toLowerCase() === params.rarity.toLowerCase(),
-          );
+          .map((item) => worldItemToFoundry(item, identity));
       }
+      assertItemRarityFilter(identity, params.rarity);
+      records = records.filter((item) => itemMatchesRarity(item.economy, params.rarity));
       records.sort(compareFoundryRecords);
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
@@ -1924,13 +1961,16 @@ export class FoundryClient {
     assertReadId(itemId, 'itemId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
-      return restItem(response.data, itemId);
+      const raw = restItemWireSchema.parse(restDetailDocument(response.data));
+      const identity = raw.system !== undefined ? await this.restItemIdentity() : { id: 'unknown' };
+      return restItem(raw, identity, itemId);
     }
-    const item = this.readWorld('items').items.find((entry) => entry._id === itemId);
+    const world = this.readWorld('items');
+    const item = world.items.find((entry) => entry._id === itemId);
     if (!item) {
       throw new Error(`Item not found: ${itemId}`);
     }
-    return worldItemToFoundry(item);
+    return worldItemToFoundry(item, actorSystemIdentity(world));
   }
 
   // ==========================================================================
@@ -1960,11 +2000,7 @@ export class FoundryClient {
           transport: 'rest',
         },
         {
-          feature: 'contentGeneration',
-          status: 'unavailable',
-          reason: 'No verified Foundry-backed adapter is implemented for this feature.',
-          remediation:
-            'Use this feature only after a compatible Foundry integration is implemented and verified.',
+          ...CONTENT_GENERATION_UNAVAILABLE,
           verifiedAt,
           transport: 'rest',
         },
@@ -3021,7 +3057,7 @@ export class FoundryClient {
             type: record.type,
           }));
         } else {
-          const items = await this.fetchAllRestItems({});
+          const items = await this.fetchAllRestItems();
           records = items.map((record) => ({
             id: record._id,
             name: record.name,
@@ -3114,90 +3150,79 @@ export class FoundryClient {
   // Dice rolling
   // ==========================================================================
 
-  /**
-   * Rolls a dice formula.
-   *
-   * Validation is deliberately **per transport**, because the two transports
-   * are not equally capable (#219):
-   *
-   *  - **REST (`FOUNDRY_API_KEY`)** posts the formula to `/api/dice/roll`,
-   *    where FoundryVTT's own `Roll` engine evaluates it. That engine
-   *    understands more than this module does — parentheses, for one — so only
-   *    the `DICE_FORMULA_ALPHABET` check applies here. Imposing the local
-   *    parser's narrower grammar would take away a capability the transport
-   *    has. What the alphabet does refuse is refused by name and position
-   *    (`unexpected "k" at position 3`, via `alphabetViolation`), so the
-   *    two transports are equally specific about what they would not evaluate.
-   *  - **Socket.IO / no API key** has no remote evaluator: `fallbackDiceRoll`
-   *    is the roller, so the grammar its parser can represent is the grammar
-   *    accepted, and that parser is the *only* gate. No alphabet pre-check runs
-   *    ahead of it, so its specific message (`unexpected "k" at position 3`)
-   *    reaches the caller instead of a generic `Invalid dice formula: 4d6kh3`.
-   *    Nothing is ever dropped from a total in silence.
-   *
-   * The length cap is common to both. A REST roll that cannot reach FoundryVTT
-   * falls through to the local roller, which then applies the strict grammar —
-   * a formula only Foundry could evaluate errors out rather than being
-   * mis-totalled locally.
-   */
-  async rollDice(formula: string, reason?: string): Promise<DiceRoll> {
+  /** Validates the whole bounded formula before choosing exactly one evaluator. */
+  async rollDice(
+    formula: string,
+    reason?: string,
+    engine: DiceRollInput['engine'] = 'auto',
+  ): Promise<DiceRoll> {
     if (this.isDelegatedMode()) {
       throw new CallerAuthorizationError();
     }
-    if (typeof formula !== 'string' || formula.length > MAX_DICE_FORMULA_LENGTH) {
-      throw new Error(`Invalid dice formula: ${formula}`);
-    }
-
-    if (this.config.apiKey) {
-      if (!formula || !DICE_FORMULA_ALPHABET.test(formula)) {
-        throw alphabetViolation(formula);
-      }
-
-      try {
-        const response = await this.http.post('/api/dice/roll', {
-          formula,
-          flavor: reason,
-        });
-
-        const rolled = RestDiceRollSchema.parse(response.data);
-
-        const result: DiceRoll = {
-          formula,
-          total: rolled.total,
-          breakdown: rolled.terms?.map((term) => term.results?.join(', ')).join(' + ') || formula,
-          timestamp: new Date().toISOString(),
-        };
-        if (reason) {
-          result.reason = reason;
-        }
-        return result;
-      } catch {
-        // Fall through to local roll
-      }
-    }
-
-    return this.fallbackDiceRoll(formula, reason);
-  }
-
-  /**
-   * Rolls locally, when FoundryVTT is not doing it for us.
-   *
-   * Delegates the whole formula to {@link evaluateDiceFormula}, which consumes
-   * the input end to end and throws on any leftover it cannot represent (#219).
-   */
-  private fallbackDiceRoll(formula: string, reason?: string): DiceRoll {
-    const { total, breakdown } = evaluateDiceFormula(formula);
-
-    const result: DiceRoll = {
+    const input = parseDiceRollInput({
       formula,
-      total,
-      breakdown,
-      timestamp: new Date().toISOString(),
-    };
-    if (reason) {
-      result.reason = reason;
+      engine,
+      ...(reason === undefined ? {} : { reason }),
+    });
+    let parsed: ReturnType<typeof parseDiceFormula>;
+    try {
+      parsed = parseDiceFormula(input.formula);
+    } catch (error) {
+      if (error instanceof InvalidDiceFormulaError) {
+        throw new McpError(ErrorCode.InvalidParams, error.message);
+      }
+      throw error;
     }
-    return result;
+
+    const { restUrl, restApiKey, restClientId } = this.config;
+    const configured = [restUrl, restApiKey, restClientId];
+    const complete =
+      typeof restUrl === 'string' &&
+      restUrl.trim().length > 0 &&
+      typeof restApiKey === 'string' &&
+      restApiKey.trim().length > 0 &&
+      typeof restClientId === 'string' &&
+      restClientId.trim().length > 0;
+    const partial = configured.some((value) => value !== undefined) && !complete;
+    if (input.engine !== 'local') {
+      if (partial) {
+        throw new Error(
+          'Configure all FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID for dice.',
+        );
+      }
+      if (!complete && this.config.apiKey !== undefined) {
+        throw new Error(
+          'Legacy dice REST transport is unsupported; configure FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID.',
+        );
+      }
+      if (!complete && input.engine === 'foundry') {
+        throw new Error('Foundry dice REST transport is not configured.');
+      }
+    }
+    const native = input.engine !== 'local' && complete;
+    const result = native
+      ? await new DiceRestAdapter({
+          baseUrl: restUrl,
+          apiKey: restApiKey,
+          clientId: restClientId,
+          userId: this.config.userId,
+          timeout: this.config.timeout,
+        }).roll(parsed, input.reason)
+      : { ...evaluateParsedDiceFormula(parsed), timestamp: new Date().toISOString() };
+    return diceRollOutputSchema.parse({
+      schemaVersion: 1,
+      engine: native ? 'foundry' : 'local',
+      normalizedFormula: result.normalizedFormula,
+      dice: result.dice.map((die, termIndex) => ({ ...die, termIndex })),
+      total: result.total,
+      breakdown: result.breakdown,
+      timestamp: result.timestamp,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      fallback:
+        input.engine === 'auto' && !native
+          ? { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' }
+          : null,
+    });
   }
 
   // ==========================================================================
@@ -3383,9 +3408,17 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
   return actor;
 }
 
-function worldItemToFoundry(i: WorldItem): FoundryItem {
+function worldItemToFoundry(i: WorldItem, identity: ItemEconomyIdentity): NormalizedFoundryItem {
   worldReadDocumentSchema.parse(i);
-  const item: FoundryItem = { _id: i._id, uuid: `Item.${i._id}`, name: i.name, type: i.type };
+  const economy = normalizeItemEconomy(i, identity);
+  const item: NormalizedFoundryItem = {
+    _id: i._id,
+    uuid: `Item.${i._id}`,
+    name: i.name,
+    type: i.type,
+    economy,
+    ...itemEconomyAliases(economy),
+  };
   if (i.img !== undefined) {
     item.img = i.img;
   }
@@ -3393,12 +3426,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
   if (desc !== null) {
     item.description = desc;
   }
-  const rarity = extractString(i.system, 'rarity');
-  if (rarity !== null) {
-    item.rarity = rarity;
-  }
-  // Preserve existing common world-item values without normalizing game systems
-  // or changing the transport-specific rarity-filter behavior (#13).
   for (const key of ['weight', 'quantity'] as const) {
     const value =
       key === 'weight'
@@ -3413,14 +3440,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
     if (typeof value === 'boolean') {
       item[key] = value;
     }
-  }
-  const price = i.system.price;
-  if (
-    isRecord(price) &&
-    typeof price.value === 'number' &&
-    typeof price.denomination === 'string'
-  ) {
-    item.price = { value: price.value, denomination: price.denomination };
   }
   itemDocumentSchema.parse(item);
   return item;

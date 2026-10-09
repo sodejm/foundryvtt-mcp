@@ -29,12 +29,12 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 
 | ID | Story | Tools | Coverage |
 |---|---|---|---|
-| GM-1 | As a GM, I want to roll dice with modifiers so I can resolve attacks/saves at the table. | `roll_dice` | ⚠ `RollDiceTool` covered by `registry.test.ts`; legacy handler in `dice.ts:16` and formula-bounds branch (max 100 chars) untested |
+| GM-1 | As a GM, I want to roll dice with modifiers so I can resolve attacks/saves at the table. | `roll_dice` | ✓ Bounded formulas, keep/drop modifiers, engine provenance and one-attempt failures covered by unit, built MCP workflow and native Foundry parity tests; see [issue 12 validation](../validation/issue-12-bounded-dice.md) |
 | GM-2 | As a GM, I want to see the initiative order with HP/AC so I can run combat. | `get_combat_state` | ❌ no handler test (`combat.ts:8`); "no active combat" branch (`combat.ts:15-19`) unverified |
 | GM-3 | As a GM, I want to see the active scene's lighting/dimensions so I can describe the environment. | `get_scene_info` | ⚠ integration covers `getScenes`/`getCurrentScene`; handler default-current branch (`scenes.ts:13`) untested |
 | GM-4 | As a GM, I want to find a creature by name and pull its full stat block. | `search_actors`, `get_actor_details` | ⚠ integration covers `searchActors`; `get_actor_details` handler (`actors.ts:62`) and "not found" McpError branch untested |
 | GM-5 | As a GM, I want to refresh world data after editing content in Foundry without restarting the MCP. | `refresh_world_data` | ❌ no test asserts cache replacement after re-emit (`world.ts:92`, `client.ts:247`) — see DEF-2 |
-| GM-6 | As a GM, I want to generate an NPC or loot pile on demand so I can improvise encounters. | `generate_npc`, `generate_loot` | ❌ untested (`generation.ts:14`, `:57`); level (1–20) and CR (0–30) bounds unverified |
+| GM-6 | As a GM, I want to generate an NPC or loot pile on demand so I can improvise encounters. | `generate_npc`, `generate_loot` | Creative previews only: strict schemas, input bounds, option effects, deterministic variation, currency arithmetic, unknown item valuation and no mutation are covered by unit, workflow and live tests. Verified system generation remains unavailable; see [issue 11 validation](../validation/issue-11-truthful-generation.md). |
 | GM-7 | As a GM, I want to look up a rule mid-session without leaving chat. | `lookup_rule` | Unsupported: no verified rules provider. Strict unavailable output, input bounds, capability agreement and delegated denial are covered by unit, workflow and live tests; see [issue 9 validation](../validation/issue-9-truthful-rule-lookup.md). |
 | GM-8 | As a GM, I want to know who's currently connected and their role so I know who to address. | `get_users` | ⚠ `getUsers` called in integration; `ROLE_NAMES` mapping (0–4) and "Role {n}" fallback at `users.ts:16` not asserted |
 | GM-9 | As a GM, I want to scan recent chat for a player decision I missed. | `get_chat_messages` | ❌ no handler test; **schema-vs-handler drift** — schema caps `limit` at 100, handler at `chat.ts:8` does not enforce. See DEF-1 |
@@ -43,7 +43,7 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 
 | ID | Story | Tools | Coverage |
 |---|---|---|---|
-| PL-1 | As a player, I want to roll my own dice through the assistant. | `roll_dice` | ⚠ same as GM-1 |
+| PL-1 | As a player, I want to roll my own dice through the assistant. | `roll_dice` | ⚠ Dice evaluation is verified for the service identity; delegated caller rolling remains denied, with authorization-denial tests. See [dice contract](../guides/dice.md) |
 | PL-2 | As a player, I want to find my character and check my own stats. | `search_actors`, `get_actor_details` | ⚠ partial (see GM-4) |
 | PL-3 | As a player, I want to search items I might own or buy. | `search_items` | ⚠ integration covers `searchItems`; `type`/`rarity`/`limit` filter branches at `items.ts:13` untested |
 | PL-4 | As a player, I want to read campaign notes/journals to recall plot. | `search_journals`, `get_journal` | ❌ no handler test (`journals.ts:9`, `:47`); page HTML stripping and 500-char truncation at `:60` unverified |
@@ -139,10 +139,11 @@ become a tracked issue, not just a test gap.
    asserted — and it isn't. Compounded by DEF-2.
 4. **All 9 MCP resource URIs** are wired up but completely uncovered. One
    integration test that walks every URI would close most of this.
-5. **Procedural generation** (`generate_npc`/`generate_loot`)
-   has no schema or range assertions on output — risky because output flows
-   straight to an LLM. `lookup_rule` now has a strict, tested unavailable output
-   and returns no generated rules.
+5. **Verified system generation remains unavailable.** The local
+   `generate_npc`/`generate_loot` creative previews have strict, tested schemas,
+   bounded inputs and output, explicit limitations and valuation, and no world
+   mutation. `lookup_rule` has a strict, tested unavailable output and returns
+   no generated rules.
 6. **A verified Foundry diagnostic source remains unavailable.** The diagnosis
    contract and legacy log/health preservation now have unit and built-workflow
    tests (DEF-4); these do not establish provider evidence or a clean error window.

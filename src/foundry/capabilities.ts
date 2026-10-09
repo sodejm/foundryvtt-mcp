@@ -47,3 +47,13 @@ export const RULES_LOOKUP_UNAVAILABLE = Object.freeze({
   reason: 'No verified rules provider is implemented.',
   remediation: 'Consult an authoritative rules source or configure a verified rules provider.',
 });
+
+/** Static fact shared by capability discovery and local creative preview tools. */
+export const CONTENT_GENERATION_UNAVAILABLE = Object.freeze({
+  feature: 'contentGeneration' as const,
+  status: 'unavailable' as const,
+  reason:
+    'Verified system-specific generation is unavailable; local world-independent creative previews are available.',
+  remediation:
+    'Use generate_npc or generate_loot for a non-persisted creative preview, or consult a verified system-specific source.',
+});

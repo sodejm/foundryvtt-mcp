@@ -16,7 +16,7 @@ const recordSchema = z.object({
   name: z.string(),
 }).passthrough();
 const pageSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.union([z.literal(3), z.literal(4)]),
   records: z.array(recordSchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
@@ -122,6 +122,7 @@ describe('live bounded pagination through MCP stdio', () => {
     expect(schema, `${name} output schema`).toBeDefined();
     expect(ajv.validate(schema!, response.structuredContent), JSON.stringify(ajv.errors)).toBe(true);
     const page = pageSchema.parse(response.structuredContent);
+    expect(page.schemaVersion).toBe(name === 'search_items' ? 4 : 3);
     const text = response.content as Array<{ type: string; text?: string }>;
     const rendered = text.map(block => block.text ?? '').join('\n');
     for (const record of page.records) expect(rendered).toContain(record.id);

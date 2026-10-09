@@ -200,6 +200,34 @@ function installInConsumer(tarball) {
   return { consumer, serverPath };
 }
 
+// Validate the documented subpaths from a real installed consumer.
+function verifyConsumerImports({ consumer }) {
+  const source = join(consumer, 'imports.mts');
+  writeFileSync(source, `
+import type { FoundryActor } from 'foundryvtt-mcp/foundry/types';
+import { actorRecordSchema, type ActorReadRecord } from 'foundryvtt-mcp/foundry/read-contract';
+import { documentIdSchema } from 'foundryvtt-mcp/dist/foundry/read-contract.js';
+const actor: FoundryActor | undefined = undefined;
+const record: ActorReadRecord | undefined = undefined;
+void [actor, record, actorRecordSchema, documentIdSchema];
+`);
+  const compile = spawnSync(process.execPath, [
+    join(repoRoot, 'node_modules/typescript/bin/tsc'), '--noEmit',
+    '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022',
+    '--skipLibCheck', source,
+  ], { cwd: consumer, encoding: 'utf8' });
+  if (compile.status !== 0) fail('consumer TypeScript imports failed', compile.stdout + compile.stderr);
+  const runtime = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+import 'foundryvtt-mcp/foundry/types';
+import { documentIdSchema } from 'foundryvtt-mcp/foundry/read-contract';
+import { actorRecordSchema } from 'foundryvtt-mcp/dist/foundry/read-contract.js';
+if (!documentIdSchema.safeParse('Actor00000000001').success ||
+    documentIdSchema.safeParse('../escape').success || !actorRecordSchema) process.exit(1);
+`], { cwd: consumer, encoding: 'utf8' });
+  if (runtime.status !== 0) fail('consumer runtime imports failed', runtime.stdout + runtime.stderr);
+  console.log('✅ Documented TypeScript and runtime subpaths resolve from the installed package');
+}
+
 // ── 4. Spawn the installed server and wait for the banner ────────────────
 function runInstalledServer({ consumer, serverPath }) {
   return new Promise((resolve) => {
@@ -296,4 +324,5 @@ function runInstalledServer({ consumer, serverPath }) {
 validateFilesEntries();
 const tarball = packTarball();
 const installed = installInConsumer(tarball);
+verifyConsumerImports(installed);
 await runInstalledServer(installed);

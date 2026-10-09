@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FoundryClient } from '../client.js';
+import { normalizeItemEconomy } from '../item-normalization.js';
 import type { WorldData } from '../types.js';
 
 vi.mock('axios');
@@ -48,7 +49,12 @@ const worldItem = {
   name: 'Twin',
   type: 'loot',
   img: '',
-  system: { ...item, description: { value: '' } },
+  system: {
+    ...item,
+    price: { value: 0, denomination: 'gp' },
+    rarities: [],
+    description: { value: '' },
+  },
 };
 let get: ReturnType<typeof vi.fn>;
 function createClient(rest = false) {
@@ -64,7 +70,7 @@ function setWorld(client: FoundryClient, overrides: Partial<WorldData> = {}) {
     userId: GM,
     release: {},
     world: { id: 'test-world', title: 'Test World' },
-    system: {},
+    system: { id: 'dnd5e', version: '6.0.6' },
     modules: [],
     demoMode: false,
     actors: [worldActor, { ...worldActor, _id: B }],
@@ -85,6 +91,11 @@ function setWorld(client: FoundryClient, overrides: Partial<WorldData> = {}) {
     ...overrides,
   };
   Reflect.set(client, 'worldData', world);
+  Reflect.set(client, 'snapshotWorldId', world.world.id);
+  Reflect.set(client, 'snapshotId', 'economy-snapshot-1');
+  Reflect.set(client, 'snapshotRevision', 1);
+  Reflect.set(client, 'snapshotCapturedAt', '2026-10-09T00:00:00.000Z');
+  Reflect.set(client, 'snapshotObservedAt', '2026-10-09T00:00:00.000Z');
   return world;
 }
 beforeEach(() => {
@@ -141,16 +152,52 @@ for (const surface of [
             ? search.items
             : [];
       expect(records).toHaveLength(2);
-      expect(records[0]).toEqual(surface.sample);
+      expect(records[0]).toEqual(
+        surface.name === 'Actor'
+          ? surface.sample
+          : (() => {
+              const { price, rarity, ...base } = item;
+              return { ...base, economy: normalizeItemEconomy(item, { id: 'unknown' }) };
+            })(),
+      );
       expect(records[1]).not.toHaveProperty('uuid');
       for (const id of [surface.id, surface.other]) {
         get.mockResolvedValueOnce({
           data: { ...surface.sample, _id: id, uuid: `${surface.name}.${id}` },
         });
         const record = await surface.detail(client, id);
-        expect(record).toEqual({ ...surface.sample, _id: id });
+        expect(record).toEqual(
+          surface.name === 'Actor'
+            ? { ...surface.sample, _id: id }
+            : (() => {
+                const { price, rarity, ...base } = item;
+                return { ...base, _id: id, economy: normalizeItemEconomy(item, { id: 'unknown' }) };
+              })(),
+        );
         expect(get).toHaveBeenLastCalledWith(`${surface.endpoint}/${id}`);
       }
+      client.disconnect();
+    });
+    it('normalizes a successful REST detail envelope using its id alias', async () => {
+      const client = createClient(true);
+      const { _id, ...fields } = surface.sample;
+      get.mockResolvedValue({ data: { success: true, data: { ...fields, id: _id } } });
+      expect(await surface.detail(client, surface.id)).toMatchObject({
+        _id: surface.id,
+        name: 'Twin',
+      });
+      client.disconnect();
+    });
+    it.each([
+      { success: false, data: surface.sample },
+      { success: true, data: null },
+      { success: true, data: [] },
+      { success: true, data: { ...surface.sample, id: surface.other } },
+      { success: true, data: { ...surface.sample, _id: surface.other } },
+    ])('rejects failed, malformed, or mismatched REST envelopes %j', async (data) => {
+      const client = createClient(true);
+      get.mockResolvedValue({ data });
+      await expect(surface.detail(client, surface.id)).rejects.toThrow();
       client.disconnect();
     });
     it('resolves duplicate Socket.IO names to the correct world ID and world UUID', async () => {
@@ -260,9 +307,22 @@ describe('Socket.IO value fidelity', () => {
   it('preserves zero, false and empty item values and omits missing optionals', async () => {
     const client = createClient();
     setWorld(client);
-    expect(await client.getItem(I)).toMatchObject({ ...item, uuid: `Item.${I}`, img: '' });
+    const { rarity, ...base } = item;
+    expect(await client.getItem(I)).toMatchObject({
+      ...base,
+      price: { value: 0, denomination: 'gp' },
+      economy: { rarity: { status: 'known', values: [] } },
+      uuid: `Item.${I}`,
+      img: '',
+    });
     setWorld(client, { items: [{ _id: I, name: '', type: '', system: {} }] });
-    expect(await client.getItem(I)).toEqual({ _id: I, uuid: `Item.${I}`, name: '', type: '' });
+    expect(await client.getItem(I)).toEqual({
+      _id: I,
+      uuid: `Item.${I}`,
+      name: '',
+      type: '',
+      economy: normalizeItemEconomy({ type: '', system: {} }, { id: 'dnd5e', version: '6.0.6' }),
+    });
     client.disconnect();
   });
 
@@ -319,6 +379,115 @@ describe('Socket.IO value fidelity', () => {
     await expect(client.searchActors({})).rejects.toThrow();
     await expect(client.getItem(I)).rejects.toThrow();
     await expect(client.searchItems({})).rejects.toThrow();
+    client.disconnect();
+  });
+});
+
+describe('item economy transport and ownership boundaries', () => {
+  const system = {
+    price: { value: { cp: 0, sp: 2, gp: 3, pp: 0 }, per: 2 },
+    traits: { rarity: 'unique', value: ['not-public'] },
+    description: { value: '' },
+  };
+  const pfItem = { _id: I, name: 'PF fixture', type: 'equipment', system };
+
+  it('projects identical PF2e economy for socket world, owned and REST records', async () => {
+    const identity = { id: 'pf2e', version: '7.8.0' };
+    const socket = createClient();
+    setWorld(socket, {
+      system: identity,
+      items: [pfItem],
+      actors: [{ ...worldActor, items: [pfItem] }],
+    });
+    const world = await socket.getItem(I);
+    const owned = socket.getActorItem(A, I);
+    expect(owned.schemaVersion).toBe(2);
+    expect(owned.item.economy).toEqual(world.economy);
+    expect(socket.listActorItems({ actorId: A }).records[0]?.economy).toEqual(world.economy);
+    expect(owned.item).toMatchObject({ uuid: `Actor.${A}.Item.${I}`, parentActorId: A });
+    expect(world).not.toHaveProperty('price');
+    expect(
+      (await socket.searchItems({ query: 'PF', type: 'EQUIPMENT', rarity: 'UNIQUE' })).total,
+    ).toBe(1);
+    const rest = createClient(true);
+    get.mockImplementation(async (url: string) => ({
+      data:
+        url === '/api/world'
+          ? { system: identity }
+          : url === '/api/items'
+            ? { items: [pfItem], total: 1, page: 1, limit: 100 }
+            : pfItem,
+    }));
+    expect((await rest.getItem(I)).economy).toEqual(world.economy);
+    expect(
+      (await rest.searchItems({ query: 'pf', type: 'EQUIPMENT', rarity: 'unique' })).items[0]
+        ?.economy,
+    ).toEqual(world.economy);
+    expect(get).toHaveBeenCalledWith('/api/items', { params: { page: 1, limit: 100 } });
+    socket.disconnect();
+    rest.disconnect();
+  });
+
+  it.each([
+    [{ id: 'homebrew', version: '1.0' }, 'unsupported-system'],
+    [{ id: 'dnd5e', version: '99.0.0' }, 'unsupported-version'],
+    [{ id: 'dnd5e' }, 'unsupported-version'],
+  ])('keeps unknown economy explicit across world and owned reads: %j', async (identity, status) => {
+    const client = createClient();
+    const unknown = { ...pfItem, system: { price: 0, rarity: 'Commun', private: 'not-public' } };
+    setWorld(client, {
+      system: identity,
+      items: [unknown],
+      actors: [{ ...worldActor, items: [unknown] }],
+    });
+    const result = await client.getItem(I);
+    expect(result.economy).toMatchObject({
+      adapter: { status },
+      source: { price: 0, rarity: 'Commun' },
+      price: { status: 'unsupported', currencies: [] },
+      rarity: { status: 'unsupported', values: [] },
+    });
+    expect(client.getActorItem(A, I).item.economy).toEqual(result.economy);
+    expect(result).not.toHaveProperty('price');
+    expect(result).not.toHaveProperty('rarity');
+    expect(JSON.stringify(result.economy)).not.toContain('not-public');
+    await expect(client.searchItems({ rarity: 'common' })).rejects.toMatchObject({ code: -32602 });
+    client.disconnect();
+  });
+
+  it('uses explicit unknown economy when REST cannot establish system identity', async () => {
+    const client = createClient(true);
+    vi.mocked(axios.isAxiosError).mockReturnValue(true);
+    get.mockImplementation(async (url: string) => {
+      if (url === '/api/world') {
+        throw { response: { status: 404 } };
+      }
+      return {
+        data: url === '/api/items' ? { items: [pfItem], total: 1, page: 1, limit: 100 } : pfItem,
+      };
+    });
+    expect((await client.getItem(I)).economy?.adapter.status).toBe('unsupported-system');
+    expect((await client.searchItems({})).items[0]?.economy?.adapter.status).toBe(
+      'unsupported-system',
+    );
+    await expect(client.searchItems({ rarity: 'unique' })).rejects.toMatchObject({ code: -32602 });
+    client.disconnect();
+    vi.mocked(axios.isAxiosError).mockReset();
+  });
+
+  it('propagates unavailable or malformed REST identity instead of guessing a system', async () => {
+    const client = createClient(true);
+    get.mockImplementation(async (url: string) => {
+      if (url === '/api/world') {
+        throw new Error('Identity unavailable');
+      }
+      return { data: pfItem };
+    });
+    await expect(client.getItem(I)).rejects.toThrow('Identity unavailable');
+    get.mockImplementation(async (url: string) => ({
+      data: url === '/api/world' ? { system: {} } : pfItem,
+    }));
+    await expect(client.getItem(I)).rejects.toThrow();
     client.disconnect();
   });
 });

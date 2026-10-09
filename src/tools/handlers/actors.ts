@@ -30,7 +30,7 @@ import { availableReadMetadata, withToolError } from './utils.js';
 function actorStructuredResponse<T extends Record<string, unknown>>(structuredContent: T) {
   return boundedReadResponse({
     structuredContent,
-    content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }],
   });
 }
 
