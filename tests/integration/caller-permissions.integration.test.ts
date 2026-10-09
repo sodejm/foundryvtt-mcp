@@ -33,6 +33,19 @@ describe('live delegated caller permissions', () => {
   let gm = '';
   let journalA = '';
   let journalShared = '';
+  let journalAInheritedPage = '';
+  let journalASecretPage = '';
+  let sharedAPage = '';
+  let sharedBPage = '';
+  let sharedLongPage = '';
+  let sharedHiddenImagePage = '';
+  let sharedHiddenVideoPage = '';
+  const sharedSummaryPages: string[] = [];
+  const longJournalText = `${prefix} long page opening\n${'journal-content-'.repeat(500)}`;
+  const editedLongJournalText = `${prefix} edited long page opening\n${'updated-content-'.repeat(500)}`;
+  const hiddenImageSrc = `/caller-fixtures/${process.pid}-hidden-image.webp`;
+  const hiddenVideoSrc = `/caller-fixtures/${process.pid}-hidden-video.webm`;
+  const hiddenImageCaption = `${prefix} hidden image caption`;
   let secretEmbedded = '';
   let visibleEmbedded = '';
   let sceneId = '';
@@ -53,8 +66,11 @@ describe('live delegated caller permissions', () => {
     expect(result).toHaveLength(1);
     return result[0]!;
   }
-  async function update(type: string, data: Record<string, unknown>) {
-    await fixtureWriter().modifyDocument(type, 'update', { updates: [data] });
+  async function update(type: string, data: Record<string, unknown>, parentUuid?: string) {
+    await fixtureWriter().modifyDocument(type, 'update', {
+      updates: [data],
+      ...(parentUuid && { parentUuid }),
+    });
   }
   async function call(name: string, args: Record<string, unknown> = {}) {
     const result = await mcp!.callTool({ name, arguments: args });
@@ -91,6 +107,62 @@ describe('live delegated caller permissions', () => {
       return ids.filter(id => game[collection].get(id)?.testUserPermission(user, 'OBSERVER'));
     }, { collection, ids, userId });
   }
+  async function journalPageOracle(journalId: string, ids: string[], userId: string) {
+    return pages.get(gm)!.evaluate(({ journalId, ids, userId }) => {
+      const game = (globalThis as any).game;
+      const user = game.users.get(userId);
+      const journal = game.journal.get(journalId);
+      if (!journal?.testUserPermission(user, 'OBSERVER')) return [];
+      return ids.filter(id => journal.pages.get(id)?.testUserPermission(user, 'OBSERVER'));
+    }, { journalId, ids, userId });
+  }
+  async function toolError(name: string, args: Record<string, unknown>) {
+    try {
+      await call(name, args);
+      throw new Error('Expected the journal read to fail');
+    } catch (error) {
+      return { code: (error as any).code, message: (error as Error).message };
+    }
+  }
+  async function collectJournalSummary(journalId: string, limit = 2) {
+    const records: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    let first: Record<string, any> | undefined;
+    do {
+      const response = (await call('get_journal', {
+        journalId,
+        limit,
+        ...(cursor && { cursor }),
+      })).structuredContent as Record<string, any>;
+      first ??= response;
+      records.push(...response.pages);
+      cursor = response.nextCursor;
+    } while (cursor);
+    return { first: first!, records };
+  }
+  async function collectJournalPage(
+    journalId: string,
+    pageId: string,
+    format: 'text' | 'source',
+    limit = 2,
+  ) {
+    const chunks: Array<{ content: string }> = [];
+    let cursor: string | undefined;
+    let first: Record<string, any> | undefined;
+    do {
+      const response = (await call('get_journal_page', {
+        journalId,
+        pageId,
+        format,
+        limit,
+        ...(cursor && { cursor }),
+      })).structuredContent as Record<string, any>;
+      first ??= response;
+      chunks.push(...response.chunks);
+      cursor = response.nextCursor;
+    } while (cursor);
+    return { first: first!, content: chunks.map(chunk => chunk.content).join('') };
+  }
 
   beforeAll(async () => {
     writer = await createConnectedClient({ writeEnabled: true });
@@ -112,21 +184,71 @@ describe('live delegated caller permissions', () => {
     for (const userId of [a, b]) {
       items.push((await create('Item', { name: `${prefix} Item ${userId}`, type: 'loot', ownership: owner(userId) }))._id);
     }
-    journalA = (await create('JournalEntry', {
-      name: `${prefix} Journal A`, ownership: owner(a), pages: [
-        { name: `${prefix} Inherited Page`, type: 'text', ownership: { default: -1 }, text: { content: '<p>Visible inherited text</p>' } },
-        { name: `${prefix} Secret Page`, type: 'text', ownership: owner(b), text: { content: '<p>Secret page text</p>' } },
-      ],
-    }))._id;
+    journalA = (await create('JournalEntry', { name: `${prefix} Journal A`, ownership: owner(a) }))._id;
     journals.push(journalA);
+    journalAInheritedPage = (await create('JournalEntryPage', {
+      name: `${prefix} Inherited Page`,
+      type: 'text',
+      ownership: { default: -1 },
+      text: { format: 1, content: '<p>Visible inherited text</p>' },
+    }, `JournalEntry.${journalA}`))._id;
+    journalASecretPage = (await create('JournalEntryPage', {
+      name: `${prefix} Secret Page`,
+      type: 'text',
+      ownership: owner(b),
+      text: { format: 1, content: '<p>Secret page text</p>' },
+    }, `JournalEntry.${journalA}`))._id;
     journals.push((await create('JournalEntry', { name: `${prefix} Journal B`, ownership: owner(b) }))._id);
     journalShared = (await create('JournalEntry', {
-      name: `${prefix} Shared Journal`, ownership: { default: 2 }, pages: [
-        { name: `${prefix} A Page`, type: 'text', ownership: owner(a), text: { content: '<p>A shared entry text</p>' } },
-        { name: `${prefix} B Page`, type: 'text', ownership: owner(b), text: { content: '<p>B shared entry text</p>' } },
-      ],
+      name: `${prefix} Shared Journal`, ownership: { default: 2 },
     }))._id;
     journals.push(journalShared);
+    sharedAPage = (await create('JournalEntryPage', {
+      name: `${prefix} A Page`,
+      type: 'text',
+      sort: 100_000,
+      ownership: owner(a),
+      text: { format: 1, content: '<p>A shared entry text</p>' },
+    }, `JournalEntry.${journalShared}`))._id;
+    sharedBPage = (await create('JournalEntryPage', {
+      name: `${prefix} B Page`,
+      type: 'text',
+      sort: 200_000,
+      ownership: owner(b),
+      text: { format: 1, content: '<p>B shared entry text</p>' },
+    }, `JournalEntry.${journalShared}`))._id;
+    sharedLongPage = (await create('JournalEntryPage', {
+      name: `${prefix} Shared Long Page`,
+      type: 'text',
+      sort: 300_000,
+      ownership: { default: -1 },
+      text: { format: 2, markdown: longJournalText },
+    }, `JournalEntry.${journalShared}`))._id;
+    for (let index = 1; index <= 6; index += 1) {
+      sharedSummaryPages.push((await create('JournalEntryPage', {
+        name: `${prefix} Shared Summary ${index}`,
+        type: 'text',
+        sort: (index + 3) * 100_000,
+        ownership: { default: -1 },
+        text: { format: 2, markdown: `${prefix} summary page ${index}` },
+      }, `JournalEntry.${journalShared}`))._id);
+    }
+    sharedHiddenImagePage = (await create('JournalEntryPage', {
+      name: `${prefix} Hidden Image Page`,
+      type: 'image',
+      sort: 1_000_000,
+      ownership: owner(b),
+      src: hiddenImageSrc,
+      image: { caption: hiddenImageCaption },
+    }, `JournalEntry.${journalShared}`))._id;
+    sharedHiddenVideoPage = (await create('JournalEntryPage', {
+      name: `${prefix} Hidden Video Page`,
+      type: 'video',
+      sort: 1_100_000,
+      ownership: owner(b),
+      src: hiddenVideoSrc,
+      video: { controls: true, volume: 0.5 },
+    }, `JournalEntry.${journalShared}`))._id;
     sceneId = (await create('Scene', { name: `${prefix} Secret Scene`, active: false, width: 1000, height: 1000 }))._id;
     await create('Token', { name: `${prefix} Hidden Token`, actorId: actors[0], actorLink: true, hidden: true, x: 100, y: 200 }, `Scene.${sceneId}`);
     for (const [label, author, whisper, blind] of [
@@ -139,6 +261,17 @@ describe('live delegated caller permissions', () => {
     await openPlayer(gm, process.env.FOUNDRY_PASSWORD ?? '');
     await openPlayer(a, '');
     await openPlayer(b, '');
+    const runtime = await pages.get(gm)!.evaluate(() => {
+      const game = (globalThis as any).game;
+      return {
+        foundry: game.version ?? game.release?.version,
+        systemId: game.system.id,
+        systemVersion: game.system.version,
+      };
+    });
+    console.info(
+      `Caller permissions runtime Foundry ${runtime.foundry}, ${runtime.systemId} ${runtime.systemVersion}`,
+    );
     backend = new BuiltFoundryClient({
       baseUrl: process.env.FOUNDRY_URL ?? 'http://127.0.0.1:30001',
       username: process.env.FOUNDRY_USERNAME ?? 'Gamemaster', password: process.env.FOUNDRY_PASSWORD ?? '',
@@ -237,6 +370,96 @@ describe('live delegated caller permissions', () => {
     expect(sharedB).not.toContain('A shared entry text');
   });
 
+  it('returns only OBSERVER-readable journal-page metadata, content, and assets', async () => {
+    token = 'a';
+    const allSharedPages = [
+      sharedAPage,
+      sharedBPage,
+      sharedLongPage,
+      ...sharedSummaryPages,
+      sharedHiddenImagePage,
+      sharedHiddenVideoPage,
+    ];
+    const expectedA = (await journalPageOracle(journalShared, allSharedPages, a)).sort();
+    const summaryA = await collectJournalSummary(journalShared);
+    expect(summaryA.first.schemaVersion).toBe(3);
+    expect(summaryA.first.id).toBe(journalShared);
+    expect(summaryA.first.uuid).toBe(`JournalEntry.${journalShared}`);
+    expect(summaryA.first.total).toBe(expectedA.length);
+    expect(summaryA.records.map(page => page.id).sort()).toEqual(expectedA);
+    const serializedA = JSON.stringify(summaryA.records);
+    for (const hidden of [
+      sharedBPage,
+      sharedHiddenImagePage,
+      sharedHiddenVideoPage,
+      hiddenImageSrc,
+      hiddenVideoSrc,
+      hiddenImageCaption,
+    ]) expect(serializedA).not.toContain(hidden);
+
+    const inherited = await collectJournalPage(journalA, journalAInheritedPage, 'source');
+    expect(inherited.first.journalId).toBe(journalA);
+    expect(inherited.first.page.id).toBe(journalAInheritedPage);
+    expect(inherited.first.page.uuid).toBe(
+      `JournalEntry.${journalA}.JournalEntryPage.${journalAInheritedPage}`,
+    );
+    expect(inherited.content).toBe('<p>Visible inherited text</p>');
+    const completeLongPage = await collectJournalPage(journalShared, sharedLongPage, 'source', 1);
+    expect(completeLongPage.first.schemaVersion).toBe(1);
+    expect(completeLongPage.first.format).toBe('source');
+    expect(completeLongPage.first.page.id).toBe(sharedLongPage);
+    expect(completeLongPage.first.page.uuid).toBe(
+      `JournalEntry.${journalShared}.JournalEntryPage.${sharedLongPage}`,
+    );
+    expect(completeLongPage.first.contentLength).toBe(Array.from(longJournalText).length);
+    expect(completeLongPage.content).toBe(longJournalText);
+
+    token = 'b';
+    const expectedB = (await journalPageOracle(journalShared, allSharedPages, b)).sort();
+    const summaryB = await collectJournalSummary(journalShared);
+    expect(summaryB.first.total).toBe(expectedB.length);
+    expect(summaryB.records.map(page => page.id).sort()).toEqual(expectedB);
+    for (const [pageId, src, type] of [
+      [sharedHiddenImagePage, hiddenImageSrc, 'image'],
+      [sharedHiddenVideoPage, hiddenVideoSrc, 'video'],
+    ] as const) {
+      const asset = (await call('get_journal_page', {
+        journalId: journalShared,
+        pageId,
+        format: 'source',
+      })).structuredContent as Record<string, any>;
+      expect(asset.page).toMatchObject({
+        id: pageId,
+        uuid: `JournalEntry.${journalShared}.JournalEntryPage.${pageId}`,
+        type,
+        asset: type === 'image' ? { src, caption: hiddenImageCaption } : { src },
+      });
+      expect(asset).toMatchObject({ contentLength: 0, chunks: [], complete: true });
+    }
+  });
+
+  it('uses indistinguishable errors for denied parents, denied pages, and absent pages', async () => {
+    token = 'a';
+    const deniedPage = await toolError('get_journal_page', {
+      journalId: journalA,
+      pageId: journalASecretPage,
+    });
+    const deniedParent = await toolError('get_journal_page', {
+      journalId: journals[1],
+      pageId: sharedBPage,
+    });
+    const absentPage = await toolError('get_journal_page', {
+      journalId: journalShared,
+      pageId: 'zzzzzzzzzzzzzzzz',
+    });
+    expect(deniedPage).toEqual(deniedParent);
+    expect(deniedPage).toEqual(absentPage);
+    expect(deniedPage.code).toBe(ErrorCode.InvalidParams);
+    for (const sensitive of [journalASecretPage, journals[1], hiddenImageSrc, hiddenVideoSrc]) {
+      expect(deniedPage.message).not.toContain(sensitive);
+    }
+  });
+
   it('serves visible direct IDs and returns indistinguishable errors for hidden and absent IDs', async () => {
     token = 'a';
     for (const [name, key, visible, hidden] of [
@@ -288,6 +511,77 @@ describe('live delegated caller permissions', () => {
     await expect(resource(page.nextUri)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
   });
 
+  it('binds journal summary and page-content cursors to caller, session, world, and format', async () => {
+    token = 'a';
+    const summary = (await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent as Record<string, any>;
+    const content = (await call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'text',
+      limit: 1,
+    })).structuredContent as Record<string, any>;
+    expect(summary.nextCursor).toEqual(expect.any(String));
+    expect(content.nextCursor).toEqual(expect.any(String));
+
+    token = 'b';
+    await expect(call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+      cursor: summary.nextCursor,
+    })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    await expect(call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'text',
+      limit: 1,
+      cursor: content.nextCursor,
+    })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+
+    token = 'a';
+    try {
+      sessionId = 'new-journal-session';
+      for (const [name, args] of [
+        ['get_journal', { journalId: journalShared, limit: 2, cursor: summary.nextCursor }],
+        ['get_journal_page', {
+          journalId: journalShared,
+          pageId: sharedLongPage,
+          format: 'text',
+          limit: 1,
+          cursor: content.nextCursor,
+        }],
+      ] as const) {
+        await expect(call(name, args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      }
+      sessionId = 'live-caller-session';
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+        format: 'source',
+        limit: 1,
+        cursor: content.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      worldId = 'other-world';
+      await expect(call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+        cursor: summary.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+        format: 'text',
+        limit: 1,
+        cursor: content.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    } finally {
+      sessionId = 'live-caller-session';
+      worldId = 'test1world';
+    }
+  });
+
   it('honors immediate revocation and invalidates previously authorized cursors', async () => {
     token = 'a';
     const first = (await call('search_actors', { query: prefix, limit: 1 })).structuredContent!;
@@ -300,6 +594,210 @@ describe('live delegated caller permissions', () => {
       await expect(call('get_actor_details', { actorId: actors[0] })).rejects.toMatchObject({ code: ErrorCode.InternalError });
       await expect(call('search_actors', { query: prefix, limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
     } finally { await update('Actor', { _id: actors[0], ownership: owner(a) }); }
+  });
+
+  it('applies immediate journal page and parent revocation to fresh reads and old cursors', async () => {
+    token = 'a';
+    const pageSummary = (await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent as Record<string, any>;
+    const pageContent = (await call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'source',
+      limit: 1,
+    })).structuredContent as Record<string, any>;
+    try {
+      await update(
+        'JournalEntryPage',
+        { _id: sharedLongPage, ownership: owner(b) },
+        `JournalEntry.${journalShared}`,
+      );
+      await waitFor(async () =>
+        !(await journalPageOracle(journalShared, [sharedLongPage], a)).length,
+      );
+      await expect(call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+        cursor: pageSummary.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+        format: 'source',
+        limit: 1,
+        cursor: pageContent.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      const afterPageRevocation = await collectJournalSummary(journalShared);
+      expect(afterPageRevocation.records.map(page => page.id)).not.toContain(sharedLongPage);
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally {
+      await update(
+        'JournalEntryPage',
+        { _id: sharedLongPage, ownership: { default: -1 } },
+        `JournalEntry.${journalShared}`,
+      );
+      await waitFor(async () =>
+        (await journalPageOracle(journalShared, [sharedLongPage], a)).length === 1,
+      );
+    }
+
+    const parentSummary = (await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent as Record<string, any>;
+    const parentContent = (await call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'source',
+      limit: 1,
+    })).structuredContent as Record<string, any>;
+    try {
+      await update('JournalEntry', { _id: journalShared, ownership: owner(b) });
+      await waitFor(async () => !(await oracle('journal', [journalShared], a)).length);
+      for (const [name, args] of [
+        ['get_journal', {
+          journalId: journalShared,
+          limit: 2,
+          cursor: parentSummary.nextCursor,
+        }],
+        ['get_journal_page', {
+          journalId: journalShared,
+          pageId: sharedLongPage,
+          format: 'source',
+          limit: 1,
+          cursor: parentContent.nextCursor,
+        }],
+      ] as const) {
+        await expect(call(name, args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      }
+      await expect(call('get_journal', { journalId: journalShared })).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+      });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally {
+      await update('JournalEntry', { _id: journalShared, ownership: { default: 2 } });
+      await waitFor(async () => (await oracle('journal', [journalShared], a)).length === 1);
+    }
+  });
+
+  it('invalidates journal cursors after live edits, reordering, and deletion', async () => {
+    token = 'a';
+    const originalSummary = (await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent as Record<string, any>;
+    const originalContent = (await call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'source',
+      limit: 1,
+    })).structuredContent as Record<string, any>;
+    try {
+      await update(
+        'JournalEntryPage',
+        { _id: sharedLongPage, sort: 50_000, text: { format: 2, markdown: editedLongJournalText } },
+        `JournalEntry.${journalShared}`,
+      );
+      await waitFor(async () => pages.get(gm)!.evaluate(({ journalId, pageId, content }) => {
+        const page = (globalThis as any).game.journal.get(journalId)?.pages.get(pageId);
+        return page?.sort === 50_000 && page?.text?.markdown === content;
+      }, { journalId: journalShared, pageId: sharedLongPage, content: editedLongJournalText }));
+      await expect(call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+        cursor: originalSummary.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: sharedLongPage,
+        format: 'source',
+        limit: 1,
+        cursor: originalContent.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      const reordered = (await call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+      })).structuredContent as Record<string, any>;
+      expect(reordered.pages[0].id).toBe(sharedLongPage);
+      expect((await collectJournalPage(journalShared, sharedLongPage, 'source', 1)).content)
+        .toBe(editedLongJournalText);
+    } finally {
+      await update(
+        'JournalEntryPage',
+        { _id: sharedLongPage, sort: 300_000, text: { format: 2, markdown: longJournalText } },
+        `JournalEntry.${journalShared}`,
+      );
+      await waitFor(async () => pages.get(gm)!.evaluate(({ journalId, pageId, content }) => {
+        const page = (globalThis as any).game.journal.get(journalId)?.pages.get(pageId);
+        return page?.sort === 300_000 && page?.text?.markdown === content;
+      }, { journalId: journalShared, pageId: sharedLongPage, content: longJournalText }));
+    }
+
+    const ephemeralContent = `${prefix} ephemeral page\n${'ephemeral-content-'.repeat(300)}`;
+    const ephemeralPage = (await create('JournalEntryPage', {
+      name: `${prefix} Ephemeral Page`,
+      type: 'text',
+      sort: 1_200_000,
+      ownership: { default: -1 },
+      text: { format: 2, markdown: ephemeralContent },
+    }, `JournalEntry.${journalShared}`))._id;
+    let deleted = false;
+    try {
+      await waitFor(async () =>
+        (await journalPageOracle(journalShared, [ephemeralPage], a)).length === 1,
+      );
+      const beforeDeletionSummary = (await call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+      })).structuredContent as Record<string, any>;
+      const beforeDeletionContent = (await call('get_journal_page', {
+        journalId: journalShared,
+        pageId: ephemeralPage,
+        format: 'source',
+        limit: 1,
+      })).structuredContent as Record<string, any>;
+      expect(beforeDeletionSummary.nextCursor).toEqual(expect.any(String));
+      expect(beforeDeletionContent.nextCursor).toEqual(expect.any(String));
+      await fixtureWriter().modifyDocument('JournalEntryPage', 'delete', {
+        ids: [ephemeralPage],
+        parentUuid: `JournalEntry.${journalShared}`,
+      });
+      deleted = true;
+      await waitFor(async () =>
+        !(await journalPageOracle(journalShared, [ephemeralPage], a)).length,
+      );
+      await expect(call('get_journal', {
+        journalId: journalShared,
+        limit: 2,
+        cursor: beforeDeletionSummary.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: ephemeralPage,
+        format: 'source',
+        limit: 1,
+        cursor: beforeDeletionContent.nextCursor,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      await expect(call('get_journal_page', {
+        journalId: journalShared,
+        pageId: ephemeralPage,
+      })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally {
+      if (!deleted) {
+        await fixtureWriter().modifyDocument('JournalEntryPage', 'delete', {
+          ids: [ephemeralPage],
+          parentUuid: `JournalEntry.${journalShared}`,
+        });
+      }
+    }
   });
 
   it('denies unknown authentication, forged arguments, unsupported reads, and every delegated write', async () => {
@@ -321,12 +819,45 @@ describe('live delegated caller permissions', () => {
   it('fails closed on backend disconnect, then resumes fresh reads after reconnect', async () => {
     token = 'a';
     const first = (await call('search_actors', { query: prefix, limit: 1 })).structuredContent!;
+    const journalSummary = (await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent as Record<string, any>;
+    const journalContent = (await call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'source',
+      limit: 1,
+    })).structuredContent as Record<string, any>;
     await backend!.disconnect();
     await expect(call('search_actors', { query: prefix })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
     await expect(resource('foundry://actors')).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    await expect(call('get_journal', { journalId: journalShared })).rejects.toMatchObject({
+      code: ErrorCode.InvalidRequest,
+    });
+    await expect(call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+    })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
     await backend!.connect();
     expect((await call('search_actors', { query: prefix })).structuredContent!.total).toBe(3);
+    expect((await call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+    })).structuredContent!.pages).toHaveLength(2);
     await expect(call('search_actors', { query: prefix, limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    await expect(call('get_journal', {
+      journalId: journalShared,
+      limit: 2,
+      cursor: journalSummary.nextCursor,
+    })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    await expect(call('get_journal_page', {
+      journalId: journalShared,
+      pageId: sharedLongPage,
+      format: 'source',
+      limit: 1,
+      cursor: journalContent.nextCursor,
+    })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
   });
 
   it('rejects banned and removed world members without using the backend GM identity', async () => {
