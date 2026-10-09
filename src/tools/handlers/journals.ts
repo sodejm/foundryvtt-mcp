@@ -18,26 +18,30 @@ export async function handleSearchJournals(
   foundryClient: FoundryClient,
 ) {
   const params = parseReadInput(worldSearchInputSchema, args);
-  return withToolError('search journals', async () => {
-    const page = await foundryClient.searchJournalsPage(params);
-    const structuredContent = collectionSearchSchema.parse({
-      schemaVersion: 3,
-      scope: 'journals',
-      ...page,
-    });
-    const formatted = structuredContent.records
-      .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
-      .join('\n');
-    return boundedReadResponse({
-      structuredContent,
-      content: [
-        {
-          type: 'text' as const,
-          text: `**Journal Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
-        },
-      ],
-    });
-  });
+  return withToolError(
+    'search journals',
+    async () => {
+      const page = await foundryClient.searchJournalsPage(params);
+      const structuredContent = collectionSearchSchema.parse({
+        schemaVersion: 3,
+        scope: 'journals',
+        ...page,
+      });
+      const formatted = structuredContent.records
+        .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
+        .join('\n');
+      return boundedReadResponse({
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `**Journal Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
+          },
+        ],
+      });
+    },
+    foundryClient,
+  );
 }
 
 export async function handleGetJournal(args: { journalId: string }, foundryClient: FoundryClient) {
@@ -45,7 +49,12 @@ export async function handleGetJournal(args: { journalId: string }, foundryClien
     const journal = foundryClient.getJournal(args.journalId);
 
     if (!journal) {
-      throw new McpError(ErrorCode.InvalidParams, `Journal not found: ${args.journalId}`);
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        foundryClient.isDelegatedMode?.()
+          ? 'Journal unavailable'
+          : `Journal not found: ${args.journalId}`,
+      );
     }
 
     const pages =

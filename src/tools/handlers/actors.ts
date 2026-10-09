@@ -21,32 +21,36 @@ export async function handleSearchActors(
   foundryClient: FoundryClient,
 ) {
   const { query, type, limit, cursor } = parseReadInput(actorSearchInputSchema, args);
-  return withToolError('search actors', async () => {
-    const searchParams = {
-      query: query ?? '',
-      ...(limit !== undefined && { limit }),
-      ...(cursor !== undefined && { cursor }),
-      ...(type !== undefined && { type }),
-    };
-    const result = actorSearchDocumentSchema.parse(await foundryClient.searchActors(searchParams));
-    const structuredContent = actorSearchSchema.parse({
-      schemaVersion: 3,
-      documentType: 'Actor',
-      records: result.actors.map(actorReadRecord),
-      ...paginationSchema.parse(result),
-    });
-    const actorList = structuredContent.records
-      .map(
-        (actor) =>
-          `- **${actor.name}** (${actor.type}) - Level ${actor.level ?? 'Unknown'} - HP: ${actor.hp?.value ?? 'Unknown'}/${actor.hp?.max ?? 'Unknown'} - ID: ${actor.id}`,
-      )
-      .join('\n');
-    return boundedReadResponse({
-      structuredContent,
-      content: [
-        {
-          type: 'text' as const,
-          text: `🎭 **Actor Search Results**
+  return withToolError(
+    'search actors',
+    async () => {
+      const searchParams = {
+        query: query ?? '',
+        ...(limit !== undefined && { limit }),
+        ...(cursor !== undefined && { cursor }),
+        ...(type !== undefined && { type }),
+      };
+      const result = actorSearchDocumentSchema.parse(
+        await foundryClient.searchActors(searchParams),
+      );
+      const structuredContent = actorSearchSchema.parse({
+        schemaVersion: 3,
+        documentType: 'Actor',
+        records: result.actors.map(actorReadRecord),
+        ...paginationSchema.parse(result),
+      });
+      const actorList = structuredContent.records
+        .map(
+          (actor) =>
+            `- **${actor.name}** (${actor.type}) - Level ${actor.level ?? 'Unknown'} - HP: ${actor.hp?.value ?? 'Unknown'}/${actor.hp?.max ?? 'Unknown'} - ID: ${actor.id}`,
+        )
+        .join('\n');
+      return boundedReadResponse({
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `🎭 **Actor Search Results**
 **Query:** ${query || 'All actors'}
 **Type Filter:** ${type || 'All types'}
 **Results:** ${structuredContent.records.length}/${structuredContent.total} total
@@ -54,10 +58,12 @@ export async function handleSearchActors(
 ${actorList || 'No actors found matching the criteria.'}
 
 ${paginationText(structuredContent)}`,
-        },
-      ],
-    });
-  });
+          },
+        ],
+      });
+    },
+    foundryClient,
+  );
 }
 
 export async function handleGetActorDetails(
@@ -71,31 +77,33 @@ export async function handleGetActorDetails(
       'Invalid actorId: expected 16 alphanumeric characters',
     );
   }
-  return withToolError('get actor details', async () => {
-    const actor = actorReadRecord(await foundryClient.getActor(actorId));
-    if (actor.id !== actorId) {
-      throw new Error('Actor response ID mismatch');
-    }
-    const structuredContent = actorDetailsSchema.parse({
-      schemaVersion: 2,
-      documentType: 'Actor',
-      record: actor,
-      readMetadata: availableReadMetadata(foundryClient),
-    });
-    const abilities = actor.abilities
-      ? Object.entries(actor.abilities)
-          .map(([key, ability]) => {
-            const mod = ability.mod;
-            return `**${key.toUpperCase()}:** ${ability.value ?? 'Unknown'} (${mod === undefined ? 'Unknown' : `${mod >= 0 ? '+' : ''}${mod}`})`;
-          })
-          .join('\n')
-      : 'No ability scores available';
-    return {
-      structuredContent,
-      content: [
-        {
-          type: 'text' as const,
-          text: `🎭 **Actor Details: ${actor.name}**
+  return withToolError(
+    'get actor details',
+    async () => {
+      const actor = actorReadRecord(await foundryClient.getActor(actorId));
+      if (actor.id !== actorId) {
+        throw new Error('Actor response ID mismatch');
+      }
+      const structuredContent = actorDetailsSchema.parse({
+        schemaVersion: 2,
+        documentType: 'Actor',
+        record: actor,
+        readMetadata: availableReadMetadata(foundryClient),
+      });
+      const abilities = actor.abilities
+        ? Object.entries(actor.abilities)
+            .map(([key, ability]) => {
+              const mod = ability.mod;
+              return `**${key.toUpperCase()}:** ${ability.value ?? 'Unknown'} (${mod === undefined ? 'Unknown' : `${mod >= 0 ? '+' : ''}${mod}`})`;
+            })
+            .join('\n')
+        : 'No ability scores available';
+      return {
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `🎭 **Actor Details: ${actor.name}**
 **ID:** ${actor.id}
 **Type:** ${actor.type}
 **Level:** ${actor.level ?? 'Unknown'}
@@ -106,8 +114,10 @@ export async function handleGetActorDetails(
 ${abilities}
 
 **Biography:** ${actor.biography ?? 'No biography available.'}\n\n${readMetadataText(structuredContent.readMetadata)}`,
-        },
-      ],
-    };
-  });
+          },
+        ],
+      };
+    },
+    foundryClient,
+  );
 }

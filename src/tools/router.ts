@@ -12,6 +12,7 @@ import type {
 } from '../foundry/types.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
+import { assertResourceAllowed, assertToolAllowed } from './authorization.js';
 import type { ToolContext, ToolResult } from './base.js';
 import { handleUpdateActorAttribute } from './handlers/actor-mutations.js';
 import { handleGetActorDetails, handleSearchActors } from './handlers/actors.js';
@@ -63,7 +64,10 @@ export async function routeToolRequest(
   diagnosticsClient: DiagnosticsClient,
   diagnosticSystem: DiagnosticSystem,
 ): Promise<ToolResult> {
-  logger.debug(`Routing tool request: ${name}`, { args });
+  assertToolAllowed(name, foundryClient);
+  if (!foundryClient.isDelegatedMode?.()) {
+    logger.debug(`Routing tool request: ${name}`, { args });
+  }
 
   // Try the new registry system first
   if (toolRegistry.has(name)) {
@@ -81,7 +85,9 @@ export async function routeToolRequest(
       }
       throw new McpError(
         ErrorCode.InternalError,
-        `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        foundryClient.isDelegatedMode?.()
+          ? 'Delegated read unavailable'
+          : `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
     }
   }
@@ -335,6 +341,9 @@ export async function routeResourceRequest(
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
 ) {
-  logger.debug(`Routing resource request: ${uri}`);
+  assertResourceAllowed(uri, foundryClient);
+  if (!foundryClient.isDelegatedMode?.()) {
+    logger.debug(`Routing resource request: ${uri}`);
+  }
   return handleReadResource(uri, foundryClient, diagnosticsClient);
 }

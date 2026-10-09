@@ -16,6 +16,7 @@ import {
   resourcePageInputSchema,
 } from '../../foundry/read-contract.js';
 import { logger } from '../../utils/logger.js';
+import { assertResourceAllowed } from '../authorization.js';
 import { getTurnOrder } from './combat-order.js';
 import { availableReadMetadata, withToolError } from './utils.js';
 
@@ -24,28 +25,33 @@ export async function handleReadResource(
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
 ) {
-  return withToolError('read resource', async () => {
-    const collection = parseCollectionUri(uri);
-    if (collection) {
-      return getCollectionResource(uri, collection.name, collection.params, foundryClient);
-    }
-    switch (uri) {
-      case 'foundry://scenes/current':
-        return await getCurrentSceneResource(foundryClient);
+  assertResourceAllowed(uri, foundryClient);
+  return withToolError(
+    'read resource',
+    async () => {
+      const collection = parseCollectionUri(uri);
+      if (collection) {
+        return getCollectionResource(uri, collection.name, collection.params, foundryClient);
+      }
+      switch (uri) {
+        case 'foundry://scenes/current':
+          return await getCurrentSceneResource(foundryClient);
 
-      case 'foundry://world/settings':
-        return await getWorldSettingsResource(foundryClient);
+        case 'foundry://world/settings':
+          return await getWorldSettingsResource(foundryClient);
 
-      case 'foundry://combat':
-        return await getCombatResource(foundryClient);
+        case 'foundry://combat':
+          return await getCombatResource(foundryClient);
 
-      case 'foundry://system/diagnostics':
-        return await getSystemDiagnosticsResource(diagnosticsClient);
+        case 'foundry://system/diagnostics':
+          return await getSystemDiagnosticsResource(diagnosticsClient);
 
-      default:
-        throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI: ${uri}`);
-    }
-  });
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI: ${uri}`);
+      }
+    },
+    foundryClient,
+  );
 }
 
 type CollectionName = 'actors' | 'items' | 'scenes' | 'journals' | 'users';

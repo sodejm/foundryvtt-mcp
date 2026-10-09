@@ -364,7 +364,8 @@ describe('delegated caller authorization', () => {
         user(GM, 3),
       ],
     });
-    const result = await runAuthorized(client, mock, context(), value, () => ({
+    const result = await runAuthorized(client, mock, context(), value, async () => ({
+      world: await client.getWorldInfo(),
       users: client.getUsers(),
       summary: client.getWorldSummary(),
       metadata: client.getReadMetadata(),
@@ -381,6 +382,12 @@ describe('delegated caller authorization', () => {
         },
       ],
       activeUsers: [PLAYER_ONE],
+    });
+    expect(result.world).toMatchObject({
+      id: WORLD,
+      title: 'Test World',
+      created: result.metadata.capturedAt,
+      modified: result.metadata.observedAt,
     });
     expect(result.summary).toEqual({ actors: 1, items: 0, journals: 0, users: 1, messages: 1 });
     expect(result.metadata).toMatchObject({

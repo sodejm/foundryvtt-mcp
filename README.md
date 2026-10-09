@@ -120,6 +120,7 @@ To configure manually, see the [Configuration Guide](docs/guides/configuration.m
 | `FOUNDRY_PASSWORD` | Yes | FoundryVTT user password |
 | `FOUNDRY_USER_ID` | No | Bypass username-to-ID resolution |
 | `FOUNDRY_API_KEY` | No | REST API module key (enables diagnostics tools) |
+| `FOUNDRY_AUTHORIZATION_MODE` | No | `service-identity` (default) or `delegated`; delegated reads require an authenticated host resolver |
 | `FOUNDRY_WRITE_ENABLED` | No | Enable game-state mutations — `true` required for the write tools (default: `false`) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, or `error` (default: `info`) |
 | `FOUNDRY_TIMEOUT` | No | Request timeout in ms (default: `10000`) |
@@ -204,8 +205,10 @@ filters and limit on each continuation call; stop when `nextCursor` is null and
 strings are limited to 1024 characters; type and rarity selectors to 128.
 
 Each traversal captures an immutable snapshot sorted by normalized name,
-document type and case-sensitive ID. Creates, updates and deletes do not alter
-that traversal. A new first-page call reads the current cache. Cursors expire
+document type and case-sensitive ID. In service-identity mode, creates, updates
+and deletes do not alter that traversal. Delegated reads revalidate permissions
+and invalidate cursors when the authorized view changes. A new first-page call
+reads the current view. Cursors expire
 after five minutes and are bound to the world, caller/session, filters and page
 size. Corrupt, expired or mismatched cursors fail explicitly; reconnecting also
 invalidates cursors. Restart from the first page to obtain a new snapshot.
@@ -218,7 +221,7 @@ evicted snapshots require a new first-page call.
 
 ### World freshness and recovery
 
-World reads include `readMetadata` in structured results and readable freshness
+In service-identity mode, world reads include `readMetadata` in structured results and readable freshness
 text. A validated socket snapshot is `current` while its live stream is connected.
 After transport loss, retained records are `stale`; reads still succeed and label
 them accordingly. Without a validated snapshot, reads fail as unavailable rather
@@ -247,11 +250,30 @@ attempts. `FoundryClientConfig` can override these limits. Recovery buffers at
 most 1,000 incoming events; overflow aborts recovery and leaves retained data
 stale until a subsequent refresh succeeds.
 
-Socket.IO pagination currently requires a GM session while player visibility
-filtering is developed. REST actor/item pagination uses the authenticated
+Service-identity Socket.IO pagination requires a GM session. REST actor/item pagination uses the authenticated
 backend's visible collection and requires working backend pagination; it rejects
 ignored pages, repeated IDs and inconsistent totals. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.
+
+### Authenticated player reads
+
+`service-identity` exposes the configured backend account's data. Use `delegated`
+for player access through an embedding host that authenticates each caller and
+resolves `{callerId, userId, worldId, sessionId}` from trusted host state. The
+exported `FoundryMCPServer` accepts this resolver; the stdio executable has no
+resolver and rejects delegated reads. See the [configuration guide](docs/guides/configuration.md#delegated-callers).
+
+Delegated reads require a fresh authoritative socket response for each request.
+Actors/items require OBSERVER permission; embedded items and journal pages also
+require parent permission. Chat follows author, whisper and blind visibility.
+Players receive only their own sanitized user record, and summary counts include
+only visible records. Missing authentication, revoked permissions, disconnected
+backends and stale cursors fail closed. Errors omit privileged backend details.
+
+Delegated discovery exposes ten read tools and four collection resources (actors,
+items, journals and users). Scenes, tokens, combat, compendia, rules, settings,
+diagnostics, refresh and every write are disabled for all delegated callers,
+including GMs. REST/API-key backends are unavailable in delegated mode.
 
 ### Write Operations (require `FOUNDRY_WRITE_ENABLED=true`)
 

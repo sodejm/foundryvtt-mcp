@@ -15,6 +15,7 @@ import {
   itemSearchOutputSchema,
   worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
+import { delegatedTools } from './authorization.js';
 
 /**
  * Shared write-safety clause appended to every mutation tool description.
@@ -816,8 +817,8 @@ export const worldTools = [
 /**
  * Get all tool definitions combined
  */
-export function getAllTools() {
-  return [
+export function getAllTools(delegated = false) {
+  const tools = [
     ...diceTools,
     ...actorTools,
     ...actorMutationTools,
@@ -836,6 +837,25 @@ export function getAllTools() {
     ...generationTools,
     ...diagnosticsTools,
   ];
+  if (!delegated) {
+    return tools;
+  }
+  const descriptions: Record<string, string> = {
+    get_users:
+      "Read the caller's own user record and current presence. Other users and credential fields are omitted.",
+    search_journals:
+      'Search readable journal names and readable page content. Returns version 3 metadata records without page bodies. Journal and page permissions are both required. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
+    search_world:
+      'Search caller-readable actors, items and journals in one ordered stream. Returns version 3 metadata records with bounded snapshot pagination. Scenes are unavailable. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
+    get_world_summary:
+      "Read world metadata and counts of caller-readable actors, items, journals, chat messages and the caller's own user record. Unsupported collections are omitted.",
+  };
+  return tools
+    .filter((tool) => Object.hasOwn(delegatedTools, tool.name))
+    .map((tool) => ({
+      ...tool,
+      description: `${descriptions[tool.name] ?? tool.description.replace('Socket reads require a GM; REST uses the authenticated backend view.', 'Service mode uses the backend identity.')} DELEGATED: requires a trusted caller resolver and fresh authorization; results and pagination include only caller-readable records. Unsupported surfaces and writes are unavailable.`,
+    }));
 }
 
 /**

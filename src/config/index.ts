@@ -58,6 +58,7 @@ const ConfigSchema = z.object({
     retryAttempts: z.number().default(3),
     retryDelay: z.number().default(1000),
     writeEnabled: z.boolean().default(false),
+    authorizationMode: z.enum(['service-identity', 'delegated']).default('service-identity'),
   }),
 
   cache: z.object({
@@ -104,6 +105,7 @@ function loadConfig(): Config {
       username: process.env.FOUNDRY_USERNAME,
       password: process.env.FOUNDRY_PASSWORD,
       userId: process.env.FOUNDRY_USER_ID,
+      authorizationMode: process.env.FOUNDRY_AUTHORIZATION_MODE,
       socketPath: process.env.FOUNDRY_SOCKET_PATH,
       timeout: process.env.FOUNDRY_TIMEOUT ? parseInt(process.env.FOUNDRY_TIMEOUT, 10) : undefined,
       retryAttempts: process.env.FOUNDRY_RETRY_ATTEMPTS

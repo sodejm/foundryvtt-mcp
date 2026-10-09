@@ -2202,7 +2202,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async getWorldInfo(): Promise<FoundryWorld> {
-    this.assertReadSurfaceAllowed('diagnostics');
+    this.assertReadSurfaceAllowed('world-summary');
     if (this.config.apiKey) {
       return this.executeWithRetry(async () => {
         const response = await this.http.get('/api/world');
@@ -2210,13 +2210,13 @@ export class FoundryClient {
       });
     }
 
-    const worldData = this.requireWorldData();
+    const worldData = this.readWorld('world-summary');
+    const metadata = this.getReadMetadata();
     const w = worldData.world as Record<string, unknown>;
     const s = worldData.system as Record<string, unknown>;
     const r = worldData.release as Record<string, unknown>;
-    const created = normalizeTimestamp(w.created) ?? this.snapshotCapturedAt;
-    const modified =
-      normalizeTimestamp(w.modified) ?? this.snapshotObservedAt ?? this.snapshotCapturedAt;
+    const created = normalizeTimestamp(w.created) ?? metadata.capturedAt;
+    const modified = normalizeTimestamp(w.modified) ?? metadata.observedAt ?? metadata.capturedAt;
     if (!created || !modified) {
       throw new Error('World data unavailable — snapshot timestamps are missing');
     }

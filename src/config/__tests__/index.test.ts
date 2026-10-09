@@ -82,6 +82,7 @@ describe('Config', () => {
       expect(config.foundry.timeout).toBe(10000);
       expect(config.foundry.retryAttempts).toBe(3);
       expect(config.foundry.retryDelay).toBe(1000);
+      expect(config.foundry.authorizationMode).toBe('service-identity');
       expect(config.cache.enabled).toBe(true);
       expect(config.cache.ttlSeconds).toBe(300);
       expect(config.cache.maxSize).toBe(1000);
@@ -89,6 +90,20 @@ describe('Config', () => {
   });
 
   describe('configuration validation', () => {
+    it('accepts delegated authorization mode', async () => {
+      process.env = { ...mockEnv, FOUNDRY_AUTHORIZATION_MODE: 'delegated' };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.authorizationMode).toBe('delegated');
+    });
+
+    it('rejects unknown authorization modes', async () => {
+      process.env = { ...mockEnv, FOUNDRY_AUTHORIZATION_MODE: 'player' };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(() => config.foundry.authorizationMode).toThrow();
+    });
+
     it('should throw error when FOUNDRY_URL is missing in test environment', async () => {
       process.env = { NODE_ENV: 'test' };
 

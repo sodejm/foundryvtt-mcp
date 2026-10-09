@@ -156,11 +156,12 @@ nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
 Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
 world/search returns `records: []`; an unavailable world snapshot returns an
-error. Reads may retain cached data after transport loss with `freshness: "stale"`; pagination
+error. Service-identity reads may retain cached data after transport loss with `freshness: "stale"`; pagination
 cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
 error. This adds no fallback to owned items or compendiums. Socket pagination
-requires a GM session until player visibility filtering is supported. REST
+requires a GM session in service-identity mode. Delegated socket reads instead
+require trusted caller context and a fresh permission-filtered view. REST
 pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
@@ -180,8 +181,10 @@ type/rarity selectors 128; empty cursors are invalid.
 
 The server sorts by NFKC-normalized, lowercased name, document type and finally
 case-sensitive document ID. Pages share an immutable snapshot with an exact
-`total`, `snapshotId` and five-minute `expiresAt`. Writes during a traversal do
-not change its records. Start without a cursor to read the latest cache.
+`total`, `snapshotId` and five-minute `expiresAt`. In service-identity mode, writes
+during a traversal do not change its records. Delegated reads revalidate the
+authorized view on every continuation and invalidate the cursor when it changes.
+Start without a cursor to read the latest view.
 Corrupt, expired, evicted or context-mismatched cursors fail; start a new
 traversal after reconnecting or changing worlds, callers, queries or filters.
 The server retains at most 32 snapshots per client within an aggregate 8 MiB
@@ -192,6 +195,8 @@ Collection resources (`foundry://actors`, `items`, `scenes`, `journals`, `users`
 now return `{schemaVersion: 3, collection, records, ...pagination, nextUri}`.
 Start at, for example, `foundry://actors?limit=25` and follow `nextUri` until null.
 The five `resources/templates/list` entries advertise `{?limit,cursor}`.
+Delegated discovery includes only actors, items, journals and users, with four
+templates; other resources are denied even if requested directly.
 Resource limits default to 100, with the same maximum of 100. Old consumers
 must switch from unbounded arrays to `records` and continuation links. Singleton
 resources, such as `foundry://scenes/current`, retain existing fields and add
@@ -207,7 +212,7 @@ remain unsupported and fail explicitly.
 
 ### Consuming freshness metadata
 
-Successful world reads include `readMetadata` with `freshness: "current"` or
+Successful service-identity world reads include `readMetadata` with `freshness: "current"` or
 `"stale"`. Without a validated source snapshot they return an error. Presence,
 chat, combat, scene and summary reads follow the same policy as document reads.
 Use `get_health_status` to inspect unavailable cache state; a successful REST
@@ -234,6 +239,13 @@ delay. Configure `timeout`, `retryAttempts` and `retryDelay` on
 `FoundryClientConfig` to change this budget. The refresh event buffer is capped
 at 1,000 events; overflow fails recovery without publishing a partial snapshot.
 
+Delegated reads require a fresh authoritative socket response for each MCP
+request. They never serve retained stale data or use REST to authorize access.
+Every continuation rechecks the caller, membership, ownership and source session;
+revocation or a changed authorized view invalidates the cursor. See
+[delegated caller configuration](configuration.md#delegated-callers) for the host
+resolver, supported surfaces and conservative visibility restrictions.
+
 Run `npm run test:reads:coverage` for the full unit suite with 100% statement,
 branch, function and line coverage enforced for the shared read contract and
 actor/item handlers. Run `npm run test:workflow` for the built CLI over real MCP
@@ -251,3 +263,14 @@ disposable world ID `test1world`. It creates uniquely named fixtures (251 actors
 251 items, journals and scenes), exercises the built MCP CLI, and deletes only
 its own fixtures afterward. It verifies exact traversals, duplicate names,
 snapshot consistency under writes, all five resources and invalid inputs.
+
+`tests/integration/caller-permissions.integration.test.ts` creates two temporary
+player users and owned documents in disposable `test1world`. It compares GM and
+player reads with Foundry's actual OBSERVER checks and each player's chat
+`isContentVisible` result through authenticated browser sessions. Its 13 cases
+exercise visible/hidden IDs, explicit/default/inherited grants, embedded items,
+journal pages, counts, filtering before pagination, cursor isolation, immediate
+revocation, forged identities, denied reads/writes, reconnects and membership
+loss. It fails on missing prerequisites and cleans up its owned fixtures.
+The built MCP resolver workflow also covers absent/throwing host resolvers,
+concurrent callers and generic error redaction without trusting request metadata.
