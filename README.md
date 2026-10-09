@@ -394,8 +394,11 @@ most 1,000 incoming events; overflow aborts recovery and leaves retained data
 stale until a subsequent refresh succeeds.
 
 Service-identity Socket.IO pagination requires a GM session. REST actor/item pagination uses the authenticated
-backend's visible collection and requires working backend pagination; it rejects
-ignored pages, repeated IDs and inconsistent totals. REST journal/world searches
+backend's visible collection. A multi-page REST result requires a backend-issued
+`snapshotId` identifying an immutable collection: the client sends it on subsequent
+requests and requires the same token on every response. Legacy backends without
+this contract support only results completed in one backend page. Changed or missing
+tokens, ignored pages, repeated IDs and inconsistent totals fail the read. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.
 
 ### Authenticated player reads

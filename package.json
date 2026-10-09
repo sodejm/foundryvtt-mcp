@@ -3,6 +3,13 @@
   "version": "1.5.3",
   "description": "Model Context Protocol server for FoundryVTT integration",
   "main": "dist/index.js",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./foundry/types": { "types": "./dist/foundry/types.d.ts", "import": "./dist/foundry/types.js" },
+    "./foundry/read-contract": { "types": "./dist/foundry/read-contract.d.ts", "import": "./dist/foundry/read-contract.js" },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "foundryvtt-mcp": "dist/index.js"
   },

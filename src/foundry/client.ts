@@ -175,6 +175,7 @@ const restActorPageSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
 
 const restItemWireSchema = itemDocumentSchema.omit({ economy: true, price: true, rarity: true });
@@ -184,7 +185,26 @@ const restItemPageSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
+
+/** Accept raw documents and the bridge's successful detail envelope. Identity
+ * aliases must agree; a failed envelope must never become a document. */
+function restDetailDocument(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const envelope = value as Record<string, unknown>;
+  const document =
+    'success' in envelope
+      ? z.object({ success: z.literal(true), data: z.record(z.string(), z.unknown()) }).parse(value)
+          .data
+      : envelope;
+  if (document.id !== undefined && document._id !== undefined && document.id !== document._id) {
+    throw new Error('REST document identity aliases disagree');
+  }
+  return { ...document, _id: document._id ?? document.id };
+}
 
 /** REST module payloads do not establish UUID scope. Preserve existing internal
  * fields for other client callers, but remove unverified UUIDs before display. */
@@ -1495,11 +1515,22 @@ export class FoundryClient {
     const records: FoundryActor[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/actors', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/actors', {
+          params: {
+            ...requestFilters,
+            page,
+            limit: 100,
+            ...(snapshotId === undefined ? {} : { snapshotId }),
+          },
+        }),
       );
       const result = restActorPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST actor pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST actor pagination ignored requested page ${page}`);
       }
@@ -1534,6 +1565,10 @@ export class FoundryClient {
       if (result.actors.length === 0) {
         throw new Error('REST actor pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST actor pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST actor pagination exceeded the maximum supported page count');
   }
@@ -1554,11 +1589,17 @@ export class FoundryClient {
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/items', { params: { page, limit: 100 } }),
+        this.http.get('/api/items', {
+          params: { page, limit: 100, ...(snapshotId === undefined ? {} : { snapshotId }) },
+        }),
       );
       const result = restItemPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST item pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST item pagination ignored requested page ${page}`);
       }
@@ -1593,6 +1634,10 @@ export class FoundryClient {
       if (result.items.length === 0) {
         throw new Error('REST item pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST item pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST item pagination exceeded the maximum supported page count');
   }
@@ -1629,7 +1674,7 @@ export class FoundryClient {
     assertReadId(actorId, 'actorId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
-      return restActor(response.data, actorId);
+      return restActor(restDetailDocument(response.data), actorId);
     }
 
     const actor = this.readWorld('actors').actors.find((a) => a._id === actorId);
@@ -1916,7 +1961,7 @@ export class FoundryClient {
     assertReadId(itemId, 'itemId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
-      const raw = restItemWireSchema.parse(response.data);
+      const raw = restItemWireSchema.parse(restDetailDocument(response.data));
       const identity = raw.system !== undefined ? await this.restItemIdentity() : { id: 'unknown' };
       return restItem(raw, identity, itemId);
     }
