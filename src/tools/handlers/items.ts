@@ -1,6 +1,7 @@
 /** World-item search and detail handlers; excludes embedded and compendium items. */
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import { itemEconomyText } from '../../foundry/item-economy-read.js';
 import {
   boundedReadResponse,
   documentIdSchema,
@@ -33,17 +34,15 @@ export async function handleSearchItems(
       };
       const result = itemSearchDocumentSchema.parse(await foundryClient.searchItems(searchParams));
       const structuredContent = itemSearchSchema.parse({
-        schemaVersion: 3,
+        schemaVersion: 4,
         documentType: 'Item',
         records: result.items.map(itemReadRecord),
         ...paginationSchema.parse(result),
       });
       const itemList = structuredContent.records
         .map((item) => {
-          const price = item.price
-            ? `${item.price.value} ${item.price.denomination}`
-            : 'Unknown price';
-          return `- **${item.name}** (${item.type}) - ${item.rarity ?? 'Unknown rarity'} - ${price} - ID: ${item.id}`;
+          const { price, rarity } = itemEconomyText(item.economy);
+          return `- **${item.name}** (${item.type}) - ${rarity} - ${price} - ID: ${item.id}`;
         })
         .join('\n');
       return boundedReadResponse({
@@ -85,12 +84,12 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
         throw new Error('Item response ID mismatch');
       }
       const structuredContent = itemDetailsSchema.parse({
-        schemaVersion: 2,
+        schemaVersion: 3,
         documentType: 'Item',
         record: item,
         readMetadata: availableReadMetadata(foundryClient),
       });
-      const price = item.price ? `${item.price.value} ${item.price.denomination}` : 'Unknown price';
+      const { price, rarity } = itemEconomyText(item.economy);
       return {
         structuredContent,
         content: [
@@ -99,7 +98,7 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
             text: `⚔️ **Item Details: ${item.name}**
 **ID:** ${item.id}
 **Type:** ${item.type}
-**Rarity:** ${item.rarity ?? 'Unknown rarity'}
+**Rarity:** ${rarity}
 **Price:** ${price}
 **Weight:** ${item.weight ?? 'Unknown'}
 **Quantity:** ${item.quantity ?? 'Unknown'}

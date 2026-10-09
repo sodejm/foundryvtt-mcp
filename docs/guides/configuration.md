@@ -98,8 +98,10 @@ failures use `InvalidParams` with a generic message; missing trusted context use
 `InvalidRequest`. Hidden and absent direct IDs return identical errors.
 
 Supported tools are `search_actors`, `get_actor_details`, `search_items`,
+`get_actor_sheet`, `get_actor_section`, `list_actor_items`, `get_actor_item`,
 `get_item_details`, `search_journals`, `get_journal`, `get_journal_page`, `get_chat_messages`,
-`get_users`, `search_world` and `get_world_summary`. Collection resources are
+`get_users`, `search_world`, `get_world_summary`, `get_scene_spatial`,
+`list_scene_tokens` and `get_scene_token`. Collection resources are
 `foundry://actors`, `foundry://items`, `foundry://journals` and `foundry://users`.
 Filtering occurs before sorting, pagination and counts. Actors/items require
 OBSERVER or OWNER; explicit, default and inherited ownership are honored, and
@@ -109,9 +111,22 @@ author, whisper-recipient and blind-message visibility. Players see only their
 own user record, stripped of credentials and flags; assigned characters are
 included only when visible. Summary counts derive from these visible collections.
 
-Scenes, tokens, combat, compendia, rules, settings, diagnostics, refresh and all
-writes remain disabled in delegated mode, including for GM callers. These
-surfaces need their own complete visibility/write contracts before enabling them.
+Actor-sheet reads use conservative DND5e and PF2e field profiles. Actor and
+embedded-item permissions are checked before fields, inventory counts and IDs
+are serialized. Rich actor biographies and item descriptions are withheld from
+delegated callers, including delegated GMs. Unknown-system sheet, section and
+inventory reads fail closed because no field-visibility profile is established;
+service-identity mode supports a bounded primitive system-path fallback.
+
+Structured spatial reads check scene OBSERVER permission and token visibility
+before counts, pages or details. Hidden tokens, secret dispositions and tokens
+with inaccessible linked or synthetic actors are excluded for players. Actor
+references are emitted only when observable. See the
+[spatial read contract](integration.md#structured-scene-and-token-reads).
+
+Legacy scene/token reads and resources, combat, compendia, rules, settings,
+diagnostics, refresh and all writes remain disabled in delegated mode, including
+for GM callers. These surfaces need their own visibility/write contracts.
 
 ## FoundryVTT Authentication
 
@@ -158,4 +173,6 @@ See [optional capabilities](optional-capabilities.md) for tested versions and li
 
 The legacy `FOUNDRY_API_KEY` setting does not enable verified Foundry diagnostics.
 Rules lookup, Foundry-backed generation and optional diagnostics are reported as
-unavailable until compatible adapters are implemented and verified.
+unavailable until compatible adapters are implemented and verified. Local
+[creative NPC and loot previews](content-generation.md) require no provider
+credentials, report their limitations and do not persist world data.

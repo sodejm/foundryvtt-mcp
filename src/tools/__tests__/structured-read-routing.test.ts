@@ -23,7 +23,7 @@ for (const route of [routeToolRequest, routeNewToolRequest]) {
         system,
       );
       expect(result.structuredContent).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         documentType: 'Item',
         record: { id: item._id },
       });

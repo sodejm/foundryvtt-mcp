@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   review:
+    if: github.repository == 'laurigates/foundryvtt-mcp'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

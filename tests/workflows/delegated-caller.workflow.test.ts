@@ -74,12 +74,14 @@ describe('built delegated MCP transport boundary', () => {
     return { client, contexts, metadata, setToken: (value?: string) => { token = value; } };
   }
 
-  it('advertises only the eleven verified tools and four collections', async () => {
+  it('advertises only the eighteen verified tools and four collections', async () => {
     const { client } = await connect();
     expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([
-      'get_actor_details', 'get_chat_messages', 'get_item_details', 'get_journal',
-      'get_journal_page', 'get_users', 'get_world_summary', 'search_actors',
-      'search_items', 'search_journals', 'search_world',
+      'get_actor_details', 'get_actor_item', 'get_actor_section', 'get_actor_sheet',
+      'get_chat_messages', 'get_item_details', 'get_journal',
+      'get_journal_page', 'get_scene_spatial', 'get_scene_token', 'get_users',
+      'get_world_summary', 'list_actor_items', 'list_scene_tokens',
+      'search_actors', 'search_items', 'search_journals', 'search_world',
     ]);
     expect((await client.listResources()).resources.map(resource => resource.uri).sort())
       .toEqual(['foundry://actors', 'foundry://items', 'foundry://journals', 'foundry://users']);
@@ -170,6 +172,46 @@ describe('built delegated MCP transport boundary', () => {
     }
     await expect(client.readResource({ uri: 'foundry://world/settings' }))
       .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+  });
+
+  it('denies rule lookup before processing input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('lookup_rule');
+    for (const args of [{ query: 'Opportunity attack', system: 'dnd5e' }, { query: '' }]) {
+      await expect(client.callTool({ name: 'lookup_rule', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
+  it('denies error diagnosis before processing input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('diagnose_errors');
+    for (const args of [{ category: 'module' }, { category: '' }, { timeframe: 3600 }]) {
+      await expect(client.callTool({ name: 'diagnose_errors', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
+  it('denies dice rolls before validating input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('roll_dice');
+    for (const args of [
+      { formula: '1d6', engine: 'foundry' },
+      { formula: '1d6', engine: 'local' },
+      { formula: null, engine: 'invalid' },
+    ]) {
+      await expect(client.callTool({ name: 'roll_dice', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
+  it.each(['generate_npc', 'generate_loot'])('denies %s before validating input even with a trusted caller', async name => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain(name);
+    for (const args of [{}, { level: 0 }, { challengeRating: 31 }, { persist: true }]) {
+      await expect(client.callTool({ name, arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
   });
 
   it('keeps service-identity operation available without a caller resolver', async () => {

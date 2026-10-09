@@ -6,11 +6,32 @@
  */
 
 import {
+  actorItemInputJsonSchema,
+  actorItemListInputJsonSchema,
+  actorItemListOutputJsonSchema,
+  actorItemOutputJsonSchema,
+  actorSectionInputJsonSchema,
+  actorSectionOutputJsonSchema,
+  actorSheetInputJsonSchema,
+  actorSheetOutputJsonSchema,
+} from '../foundry/actor-sheet-contract.js';
+import {
   capabilitiesInputJsonSchema,
   capabilitiesOutputSchema,
   compendiumSearchInputJsonSchema,
   compendiumSearchOutputSchema,
 } from '../foundry/compendium-contract.js';
+import {
+  errorDiagnosisInputJsonSchema,
+  errorDiagnosisOutputJsonSchema,
+} from '../foundry/diagnosis-contract.js';
+import { diceRollInputJsonSchema, diceRollOutputJsonSchema } from '../foundry/dice-contract.js';
+import {
+  lootGenerationInputJsonSchema,
+  lootGenerationOutputJsonSchema,
+  npcGenerationInputJsonSchema,
+  npcGenerationOutputJsonSchema,
+} from '../foundry/generation-contract.js';
 import {
   journalPageInputJsonSchema,
   journalPageOutputSchema,
@@ -27,6 +48,15 @@ import {
   itemSearchOutputSchema,
   worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
+import { ruleLookupInputJsonSchema, ruleLookupOutputJsonSchema } from '../foundry/rule-contract.js';
+import {
+  sceneSpatialInputJsonSchema,
+  sceneSpatialOutputJsonSchema,
+  sceneTokenInputJsonSchema,
+  sceneTokenListInputJsonSchema,
+  sceneTokenListOutputJsonSchema,
+  sceneTokenOutputJsonSchema,
+} from '../foundry/scene-spatial-contract.js';
 import { delegatedTools } from './authorization.js';
 
 /**
@@ -55,29 +85,15 @@ const CONFIRM_FIRST =
  * *listed*, so a divergence would be invisible.
  */
 export const ROLL_DICE_DESCRIPTION =
-  'Roll dice and return the total with a per-term breakdown. Dice terms and whole numbers joined by + or -, with whitespace allowed anywhere ("1d20+5", "1d20 + 5", "1d20+5+3", "2d6 + 1d4", "3d6"; a count-less "d20" means one die), always work and every term counts towards the total - that is the portable grammar, safe on either transport. Multiplication and Foundry modifier syntax such as "4d6kh3" or "1d20r1" are rejected on both transports, with an error naming the offending character and its position, never dropped from the total in silence. Parentheses are the one difference: with FOUNDRY_API_KEY set the formula goes to FoundryVTT\'s own Roll engine, which evaluates them, while the default Socket.IO transport rolls locally and rejects them by name - and a REST roll that cannot reach the server falls back to that same local roller, so a parenthesised formula can still fail there. Prefer the expanded form when it matters. Use when: the user asks for a check, save, attack, damage, or any random result.';
+  'Roll a bounded formula with dice (NdS or dS), whole numbers, +/-, unary signs, parentheses, and kh/kl/dh/dl keep/drop modifiers. Input is limited to 100 characters, 999 dice per term, 1000 dice overall, 1000000 sides, constants through 1000000000, and 10 parenthesis levels. Other modifiers, references, scripting, multiplication, and division are rejected before rolling. Select engine auto (default), local, or foundry. Auto uses a complete paired Foundry REST configuration or reports local provenance when no transport is configured. Partial or legacy REST configuration fails. Foundry rolls once without creating chat; transport or verification failures never retry or fall back. Results include normalizedFormula, engine, ordered active/inactive die outcomes, verified total, breakdown, timestamp, and explicit fallback metadata.';
 
-/**
- * Dice rolling tool definitions
- */
+/** Dice rolling tool definitions. */
 export const diceTools = [
   {
     name: 'roll_dice',
     description: ROLL_DICE_DESCRIPTION,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        formula: {
-          type: 'string',
-          description: 'Dice formula (e.g., "1d20+5", "3d6")',
-        },
-        reason: {
-          type: 'string',
-          description: 'Optional reason for the roll',
-        },
-      },
-      required: ['formula'],
-    },
+    inputSchema: diceRollInputJsonSchema,
+    outputSchema: diceRollOutputJsonSchema,
   },
 ];
 
@@ -108,6 +124,34 @@ export const actorTools = [
       },
       required: ['actorId'],
     },
+  },
+  {
+    name: 'get_actor_sheet',
+    outputSchema: actorSheetOutputJsonSchema,
+    description:
+      'Read a bounded version 1 actor-sheet index for a 16-character actorId. Returns public actor and system identity, supported section names with field counts, owned-item count and read metadata. Follow with get_actor_section or list_actor_items. The REST backend rejects this read when it cannot prove field permissions.',
+    inputSchema: actorSheetInputJsonSchema,
+  },
+  {
+    name: 'get_actor_section',
+    outputSchema: actorSectionOutputJsonSchema,
+    description:
+      'Read one bounded version 1 actor-sheet section. Normalized profile fields use stable keys; conservative fallback fields are labeled system-path. Missing fields remain present=false and numeric zero values remain zero. Supported sections are attributes, abilities, skills, details, currency, resources and system.',
+    inputSchema: actorSectionInputJsonSchema,
+  },
+  {
+    name: 'list_actor_items',
+    outputSchema: actorItemListOutputJsonSchema,
+    description:
+      'List version 2 permission-projected items embedded in one actor with bounded snapshot pagination and typed item economy. Sorts by name then item ID, preserves duplicate names, and returns parent-bound Actor.<actorId>.Item.<itemId> UUIDs. Economy reports exact system adapter, bounded source candidates, price currencies/quantity and rarity statuses without guessed defaults. Follow nextCursor with the same actorId, query, type and limit. Any visible inventory or permission change invalidates the cursor.',
+    inputSchema: actorItemListInputJsonSchema,
+  },
+  {
+    name: 'get_actor_item',
+    outputSchema: actorItemOutputJsonSchema,
+    description:
+      'Read one version 2 permission-projected item embedded in the specified actor. Both IDs must be 16 alphanumeric characters. The item is resolved only within its parent actor and returns typed item economy plus bounded normalized or system-path primitive fields; missing, denied, deleted and wrong-parent targets share an unavailable error. Economy preserves zero and distinguishes missing, invalid, not-applicable and unsupported values.',
+    inputSchema: actorItemInputJsonSchema,
   },
 ];
 
@@ -153,14 +197,14 @@ export const itemTools = [
     name: 'search_items',
     outputSchema: itemSearchOutputSchema,
     description:
-      'Search world items by name, type and rarity. Returns version 3 structuredContent with stable IDs, mapped fields, bounded snapshot pagination and readMetadata freshness/source timestamps. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
+      'Search world items by name, type and canonical rarity, applying all filters before pagination on both transports. Returns version 4 structuredContent with stable IDs, typed item economy, bounded snapshot pagination and readMetadata freshness/source timestamps. Economy includes exact system adapter, bounded source candidates and explicit price/rarity statuses. Unsupported system/version or invalid rarity filters fail with InvalidParams. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
     inputSchema: itemSearchInputJsonSchema,
   },
   {
     name: 'get_item_details',
     outputSchema: itemDetailsOutputSchema,
     description:
-      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 2 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
+      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 3 structuredContent and text with identity, typed item economy and available description, weight, quantity, equipped and identified values. Economy preserves zero, separates bounded source candidates from normalized currencies and rarities, and distinguishes missing, invalid, not-applicable and unsupported values. Legacy price/rarity aliases appear only for an unambiguous known value. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -312,6 +356,27 @@ export const sceneTools = [
       },
     },
   },
+  {
+    name: 'get_scene_spatial',
+    description:
+      'Return bounded, versioned spatial metadata for an observable scene, including native canvas dimensions and origin, grid orientation and size, source pixel dimensions, padding, shifts, and explicit units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneSpatialInputJsonSchema,
+    outputSchema: sceneSpatialOutputJsonSchema,
+  },
+  {
+    name: 'list_scene_tokens',
+    description:
+      'List observable token summaries for an observable scene with stable snapshot pagination. Coordinates are canvas pixels, token width and height are grid spaces, rotation is degrees, and elevation uses scene distance units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenListInputJsonSchema,
+    outputSchema: sceneTokenListOutputJsonSchema,
+  },
+  {
+    name: 'get_scene_token',
+    description:
+      'Return one observable token detail by tokenId within an observable scene, including texture scaling when available. Actor references are included only when the caller can observe the effective linked or synthetic actor. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenInputJsonSchema,
+    outputSchema: sceneTokenOutputJsonSchema,
+  },
 ];
 
 /**
@@ -321,67 +386,23 @@ export const generationTools = [
   {
     name: 'generate_npc',
     description:
-      'Generate a random NPC (name, race, class, HP, ability scores, background) as text. Use when: the user needs a throwaway NPC on the spot. Do not use when: the NPC must exist in FoundryVTT - this creates no documents, and the result still has to be entered into the world by hand.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        level: {
-          type: 'number',
-          description: 'Character level (1-20)',
-          minimum: 1,
-          maximum: 20,
-          default: 1,
-        },
-        race: {
-          type: 'string',
-          description: 'Character race (optional)',
-        },
-        class: {
-          type: 'string',
-          description: 'Character class (optional)',
-        },
-      },
-    },
+      'Create a bounded, system-neutral NPC creative preview. Every option affects the preview; no Foundry document is created and no game-system rules are claimed.',
+    inputSchema: npcGenerationInputJsonSchema,
+    outputSchema: npcGenerationOutputJsonSchema,
   },
   {
     name: 'generate_loot',
     description:
-      "Generate random treasure for an encounter as text. Only the currency amounts vary: they scale with the challenge rating, while the item list is fixed (a Healing Potion and a Silver Ring) and the treasureType argument is accepted but not used. Use when: the user wants a quick coin total for an encounter. Do not use when: the loot should end up in an actor's inventory - this creates no documents; use create_actor_item for that.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        challengeRating: {
-          type: 'number',
-          description: 'Challenge rating for loot generation',
-          minimum: 0,
-          maximum: 30,
-        },
-        treasureType: {
-          type: 'string',
-          description:
-            'Type of treasure (hoard, individual, etc.). Accepted but not used - the generated result is the same whichever value is passed.',
-        },
-      },
-    },
+      'Create bounded fictional loot as a world-independent creative preview. Returns traceable fictional currency arithmetic and explicitly unknown item and overall values; no Foundry document is created.',
+    inputSchema: lootGenerationInputJsonSchema,
+    outputSchema: lootGenerationOutputJsonSchema,
   },
   {
     name: 'lookup_rule',
     description:
-      'Stub: builds a templated placeholder from the query and consults no rules source, so the text it returns carries no rules content. No tool in this server looks rules up.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Rule or mechanic to look up',
-        },
-        system: {
-          type: 'string',
-          description: 'Game system (D&D 5e, Pathfinder, etc.)',
-        },
-      },
-      required: ['query'],
-    },
+      'Validate a bounded rules query and report that rules lookup is unavailable because no verified rules provider is implemented. Returns no generated rule text or source claims.',
+    inputSchema: ruleLookupInputJsonSchema,
+    outputSchema: ruleLookupOutputJsonSchema,
   },
 ];
 
@@ -453,16 +474,9 @@ export const diagnosticsTools = [
   {
     name: 'diagnose_errors',
     description:
-      'Stub: returns a fixed "no errors detected" summary regardless of input; real diagnostic logic is not implemented, so the summary reflects nothing about the server. For actual log content use get_recent_logs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        category: {
-          type: 'string',
-          description: 'Error category to focus on',
-        },
-      },
-    },
+      'Report that evidence-based error diagnosis is unavailable because no verified diagnostic source is implemented. Returns a versioned unavailable capability without probing logs or Foundry, inferring health, or echoing the optional category. Use get_recent_logs for actual log content.',
+    inputSchema: errorDiagnosisInputJsonSchema,
+    outputSchema: errorDiagnosisOutputJsonSchema,
   },
   {
     name: 'get_health_status',

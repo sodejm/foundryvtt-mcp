@@ -6,6 +6,10 @@ import type { FoundryClient } from '../foundry/client.js';
 export const delegatedTools: Readonly<Record<string, ReadSurface>> = Object.freeze({
   search_actors: 'actors',
   get_actor_details: 'actors',
+  get_actor_sheet: 'actors',
+  get_actor_section: 'actors',
+  list_actor_items: 'actors',
+  get_actor_item: 'actors',
   search_items: 'items',
   get_item_details: 'items',
   search_journals: 'journals',
@@ -15,6 +19,9 @@ export const delegatedTools: Readonly<Record<string, ReadSurface>> = Object.free
   get_users: 'users',
   search_world: 'search',
   get_world_summary: 'world-summary',
+  get_scene_spatial: 'scene-spatial',
+  list_scene_tokens: 'scene-spatial',
+  get_scene_token: 'scene-spatial',
 });
 
 const delegatedResources = new Set(['actors', 'items', 'journals', 'users']);

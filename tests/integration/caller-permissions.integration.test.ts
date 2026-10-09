@@ -48,6 +48,7 @@ describe('live delegated caller permissions', () => {
   const hiddenImageCaption = `${prefix} hidden image caption`;
   let secretEmbedded = '';
   let visibleEmbedded = '';
+  let secondVisibleEmbedded = '';
   let sceneId = '';
   let token = 'a';
   let sessionId = 'live-caller-session';
@@ -92,11 +93,21 @@ describe('live delegated caller permissions', () => {
   async function openPlayer(userId: string, password: string) {
     const baseUrl = process.env.FOUNDRY_URL ?? 'http://127.0.0.1:30001';
     const authenticated = await authenticateFoundry(baseUrl, userId, password);
-    const browserContext = await browser!.newContext();
+    const browserContext = await browser!.newContext({ viewport: { width: 1366, height: 768 } });
+    // These browsers exercise document permissions, so Foundry's client-only
+    // no-canvas setting avoids unrelated headless WebGL initialization failures.
+    await browserContext.addInitScript(() => localStorage.setItem('core.noCanvas', 'true'));
     await browserContext.addCookies([{ name: 'session', value: authenticated.session, url: baseUrl }]);
     const page = await browserContext.newPage();
-    await page.goto(`${baseUrl}/game`);
-    await page.waitForFunction(() => (globalThis as any).game?.ready === true);
+    await page.goto(`${baseUrl}/game`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForFunction(() => (globalThis as any).game?.ready === true
+      || !!document.querySelector('#login-form'), null, { polling: 100, timeout: 60_000 });
+    if (await page.locator('#login-form').count()) {
+      await page.locator('select[name="userid"]').selectOption(userId);
+      await page.locator('input[name="password"]').fill(password);
+      await page.locator('button[data-action="join"]').click();
+    }
+    await page.waitForFunction(() => (globalThis as any).game?.ready === true, null, { polling: 100, timeout: 60_000 });
     expect(await page.evaluate(() => (globalThis as any).game.user.id)).toBe(userId);
     pages.set(userId, page);
   }
@@ -180,6 +191,7 @@ describe('live delegated caller permissions', () => {
       actors.push((await create('Actor', { name: `${prefix} ${label}`, type: 'npc', ownership }))._id);
     }
     visibleEmbedded = (await create('Item', { name: `${prefix} Inherited Gear`, type: 'loot', ownership: { default: -1 } }, `Actor.${actors[0]}`))._id;
+    secondVisibleEmbedded = (await create('Item', { name: `${prefix} Second Inherited Gear`, type: 'loot', ownership: { default: -1 }, system: { quantity: 0 } }, `Actor.${actors[0]}`))._id;
     secretEmbedded = (await create('Item', { name: `${prefix} Secret Gear`, type: 'loot', ownership: owner(b) }, `Actor.${actors[0]}`))._id;
     for (const userId of [a, b]) {
       items.push((await create('Item', { name: `${prefix} Item ${userId}`, type: 'loot', ownership: owner(userId) }))._id);
@@ -479,6 +491,83 @@ describe('live delegated caller permissions', () => {
     }
   });
 
+  it('exposes only observer-readable actor sheets and embedded items through the built tools', async () => {
+    token = 'a';
+    for (const [name, extra] of [
+      ['get_actor_sheet', {}], ['get_actor_section', { section: 'attributes' }],
+    ] as const) {
+      const response = (await call(name, { actorId: actors[0], ...extra })).structuredContent as Record<string, any>;
+      expect(response.actor.id).toBe(actors[0]);
+      expect(response.actor.uuid).toBe(`Actor.${actors[0]}`);
+      expect(response.system).toMatchObject({ id: 'dnd5e', version: '6.0.6', profile: 'dnd5e' });
+      const denied = await toolError(name, { actorId: actors[2], ...extra });
+      expect(denied).toEqual(await toolError(name, { actorId: 'zzzzzzzzzzzzzzzz', ...extra }));
+      expect(denied.message).not.toContain(actors[2]);
+    }
+    const response = (await call('list_actor_items', { actorId: actors[0] })).structuredContent as Record<string, any>;
+    const nativePermissions = await pages.get(gm)!.evaluate(({ actorId, userId }) => {
+      const game = (globalThis as any).game;
+      const actor = game.actors.get(actorId);
+      const user = game.users.get(userId);
+      return {
+        actorVisible: actor.testUserPermission(user, 'OBSERVER'),
+        itemIds: actor.items.filter((item: any) => item.testUserPermission(user, 'OBSERVER')).map((item: any) => item.id),
+        ownership: actor.items.map((item: any) => ({ id: item.id, ownership: item.toObject().ownership })),
+      };
+    }, { actorId: actors[0], userId: a });
+    // Foundry 14 embedded Items inherit the parent's native permission regardless
+    // of their ownership field. The MCP contract also honors explicit item denies.
+    expect(nativePermissions.actorVisible).toBe(true);
+    expect(nativePermissions.itemIds.sort()).toEqual([visibleEmbedded, secondVisibleEmbedded, secretEmbedded].sort());
+    expect(nativePermissions.ownership.find((item: any) => item.id === secretEmbedded)?.ownership)
+      .toMatchObject({ default: 0, [b]: 2 });
+    expect(response.records.map((item: any) => item.id).sort())
+      .toEqual([visibleEmbedded, secondVisibleEmbedded].sort());
+    expect(response.total).toBe(2);
+    expect(JSON.stringify(response)).not.toContain(secretEmbedded);
+    const detail = (await call('get_actor_item', { actorId: actors[0], itemId: secondVisibleEmbedded })).structuredContent as Record<string, any>;
+    expect(detail.item).toMatchObject({ id: secondVisibleEmbedded, uuid: `Actor.${actors[0]}.Item.${secondVisibleEmbedded}` });
+    expect(detail.item.fields.some((field: any) => field.path === 'system.quantity' && field.present && field.value === 0)).toBe(true);
+    const hidden = await toolError('get_actor_item', { actorId: actors[0], itemId: secretEmbedded });
+    expect(hidden).toEqual(await toolError('get_actor_item', { actorId: actors[0], itemId: 'zzzzzzzzzzzzzzzz' }));
+    expect(hidden).toEqual(await toolError('get_actor_item', { actorId: actors[1], itemId: visibleEmbedded }));
+    expect(hidden.message).not.toContain(secretEmbedded);
+    token = 'b';
+    expect(await toolError('list_actor_items', { actorId: actors[0] }))
+      .toEqual(await toolError('list_actor_items', { actorId: 'zzzzzzzzzzzzzzzz' }));
+    expect(await toolError('get_actor_item', { actorId: actors[0], itemId: secretEmbedded })).toEqual(hidden);
+  });
+
+  it('binds live owned-item continuation to caller, session, actor and embedded permissions', async () => {
+    token = 'a';
+    const first = (await call('list_actor_items', { actorId: actors[0], limit: 1 })).structuredContent as Record<string, any>;
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const next = (await call('list_actor_items', { actorId: actors[0], limit: 1, cursor: first.nextCursor })).structuredContent as Record<string, any>;
+    expect(next.snapshotId).toBe(first.snapshotId);
+    expect(next.records[0].id).not.toBe(first.records[0].id);
+    for (const args of [
+      { actorId: actors[1], limit: 1 }, { actorId: actors[0], limit: 2 },
+      { actorId: actors[0], limit: 1, query: 'Second' }, { actorId: actors[0], limit: 1, type: 'weapon' },
+    ]) await expect(call('list_actor_items', { ...args, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    token = 'gm';
+    await expect(call('list_actor_items', { actorId: actors[0], limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    token = 'a';
+    try {
+      sessionId = 'changed-owned-item-session';
+      await expect(call('list_actor_items', { actorId: actors[0], limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally { sessionId = 'live-caller-session'; }
+    try {
+      await update('Item', { _id: secondVisibleEmbedded, ownership: owner(b) }, `Actor.${actors[0]}`);
+      await waitFor(async () => {
+        const projected = (await call('list_actor_items', { actorId: actors[0] })).structuredContent as Record<string, any>;
+        return projected.total === 1;
+      });
+      const absent = await toolError('get_actor_item', { actorId: actors[0], itemId: 'zzzzzzzzzzzzzzzz' });
+      expect(await toolError('get_actor_item', { actorId: actors[0], itemId: secondVisibleEmbedded })).toEqual(absent);
+      await expect(call('list_actor_items', { actorId: actors[0], limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally { await update('Item', { _id: secondVisibleEmbedded, ownership: { default: -1 } }, `Actor.${actors[0]}`); }
+  });
+
   it('filters before pagination and fences cursor reuse by caller, world, and session', async () => {
     token = 'a';
     const first = (await call('search_actors', { query: prefix, limit: 1 })).structuredContent!;
@@ -585,6 +674,7 @@ describe('live delegated caller permissions', () => {
   it('honors immediate revocation and invalidates previously authorized cursors', async () => {
     token = 'a';
     const first = (await call('search_actors', { query: prefix, limit: 1 })).structuredContent!;
+    const inventory = (await call('list_actor_items', { actorId: actors[0], limit: 1 })).structuredContent as Record<string, any>;
     try {
       await update('Actor', { _id: actors[0], ownership: { default: 0, [a]: 0 } });
       await waitFor(async () => !(await oracle('actors', [actors[0]], a)).length);
@@ -592,6 +682,18 @@ describe('live delegated caller permissions', () => {
       expect(after.total).toBe(2);
       expect(JSON.stringify(after)).not.toContain(actors[0]);
       await expect(call('get_actor_details', { actorId: actors[0] })).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      for (const [name, extra] of [
+        ['get_actor_sheet', {}], ['get_actor_section', { section: 'attributes' }],
+        ['list_actor_items', {}], ['get_actor_item', { itemId: visibleEmbedded }],
+      ] as const) {
+        expect(await toolError(name, { actorId: actors[0], ...extra }))
+          .toEqual(await toolError(name, { actorId: 'zzzzzzzzzzzzzzzz', ...extra }));
+      }
+      const revokedInventory = await toolError('list_actor_items', { actorId: actors[0], limit: 1, cursor: inventory.nextCursor });
+      expect(revokedInventory.code).toBe(ErrorCode.InternalError);
+      expect(revokedInventory).toEqual(await toolError('list_actor_items', {
+        actorId: 'zzzzzzzzzzzzzzzz', limit: 1, cursor: inventory.nextCursor,
+      }));
       await expect(call('search_actors', { query: prefix, limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
     } finally { await update('Actor', { _id: actors[0], ownership: owner(a) }); }
   });
@@ -812,9 +914,13 @@ describe('live delegated caller permissions', () => {
       for (const name of ['get_scene_info', 'get_token_details', 'get_combat_state', 'search_compendium', 'get_capabilities', 'get_rules', 'get_system_diagnostics', 'create_actor', 'add_item_to_actor', 'refresh_world_data']) {
         await expect(call(name, { sceneId })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
       }
+      for (const args of [{ formula: '1d6', engine: 'foundry' }, { formula: null, engine: 'invalid' }]) {
+        await expect(call('roll_dice', args)).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+      }
       await expect(resource('foundry://world/settings')).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
     }
-  });
+  // Every delegated call refreshes authentication; this matrix makes 30 sequential live calls.
+  }, 60_000);
 
   it('fails closed on backend disconnect, then resumes fresh reads after reconnect', async () => {
     token = 'a';
