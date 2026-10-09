@@ -80,6 +80,50 @@ describe('FoundryClient', () => {
     });
   });
 
+  describe('testConnection', () => {
+    it.each([
+      { username: 'gm', password: 'secret' },
+      { username: 'gm', password: '' },
+      { userId: 'User000000000001', password: '' },
+      { apiKey: 'test-api-key' },
+    ])('loads the authenticated connection for %j', async (credentials) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      const connect = vi.spyOn(client, 'connect').mockResolvedValue();
+
+      await expect(client.testConnection()).resolves.toBe(true);
+
+      expect(connect).toHaveBeenCalledOnce();
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {},
+      { username: 'gm' },
+      { password: '' },
+    ])('only checks HTTP reachability when authentication is incomplete: %j', async (credentials) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      const connect = vi.spyOn(client, 'connect');
+      mockAxiosInstance.get.mockResolvedValue({ status: 200 });
+
+      await expect(client.testConnection()).resolves.toBe(true);
+
+      expect(connect).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/');
+    });
+
+    it('propagates authentication errors instead of falling back to HTTP reachability', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        username: 'gm',
+        password: '',
+      });
+      vi.spyOn(client, 'connect').mockRejectedValue(new Error('Authentication failed'));
+
+      await expect(client.testConnection()).rejects.toThrow('Authentication failed');
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+  });
+
   describe('REST API mode (with apiKey)', () => {
     beforeEach(() => {
       client = new FoundryClient({

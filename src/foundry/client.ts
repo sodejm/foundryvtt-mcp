@@ -1642,7 +1642,8 @@ export class FoundryClient {
 
   async testConnection(): Promise<boolean> {
     try {
-      if (this.config.username && this.config.password) {
+      const user = this.config.userId || this.config.username;
+      if (this.config.apiKey || (user && this.config.password !== undefined)) {
         await this.connect();
         return true;
       }
