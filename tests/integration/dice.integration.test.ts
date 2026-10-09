@@ -17,6 +17,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
   let controller: string;
   let fixture: { apiKey: string; clientId: string };
   let uncertainProxy: Server;
+  let uncertainFailure: 'disconnect' | 'timeout' = 'disconnect';
   let remoteAttempts = 0;
   let completedRemoteRolls = 0;
   const clients: Client[] = [];
@@ -50,8 +51,9 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
         });
         const value = await remote.json();
         if (remote.ok && value.success === true && value.data?.roll && value.data.chatMessageCreated === false) completedRemoteRolls++;
-        // The actual engine response was received; deliberately lose it before MCP can observe it.
-        request.socket.destroy();
+        // The actual engine response was received; deliberately prevent MCP from observing it.
+        if (uncertainFailure === 'disconnect') request.socket.destroy();
+        else setTimeout(() => response.end(JSON.stringify(value)), 10_000).unref();
       } catch { response.writeHead(502).end('{}'); }
     });
     await new Promise<void>((resolve, reject) => {
@@ -149,13 +151,16 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     const after = await oracleStatus();
     expect(after.chatMessageCount).toBe(before.chatMessageCount);
   });
-  it('returns an error after an actual remote evaluation loses its response without rolling again', async () => {
+  it.each(['disconnect', 'timeout'] as const)('returns an error after actual evaluation with a lost response (%s) without rolling again', async failure => {
+    uncertainFailure = failure;
+    const attemptsBefore = remoteAttempts;
+    const completedBefore = completedRemoteRolls;
     const before = await oracleStatus();
     const result = await call(3, { formula: '4d6kh3 + 2', engine: 'auto' });
     expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
-    expect(remoteAttempts).toBe(1); expect(completedRemoteRolls).toBe(1);
+    expect(remoteAttempts - attemptsBefore).toBe(1); expect(completedRemoteRolls - completedBefore).toBe(1);
     const after = await oracleStatus();
     expect(after.chatMessageCount).toBe(before.chatMessageCount);
-    expect(remoteAttempts).toBe(1);
+    expect(remoteAttempts - attemptsBefore).toBe(1);
   });
 });
