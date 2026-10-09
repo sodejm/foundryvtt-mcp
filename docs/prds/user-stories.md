@@ -34,7 +34,7 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 | GM-3 | As a GM, I want to see the active scene's lighting/dimensions so I can describe the environment. | `get_scene_info` | ⚠ integration covers `getScenes`/`getCurrentScene`; handler default-current branch (`scenes.ts:13`) untested |
 | GM-4 | As a GM, I want to find a creature by name and pull its full stat block. | `search_actors`, `get_actor_details` | ⚠ integration covers `searchActors`; `get_actor_details` handler (`actors.ts:62`) and "not found" McpError branch untested |
 | GM-5 | As a GM, I want to refresh world data after editing content in Foundry without restarting the MCP. | `refresh_world_data` | ❌ no test asserts cache replacement after re-emit (`world.ts:92`, `client.ts:247`) — see DEF-2 |
-| GM-6 | As a GM, I want to generate an NPC or loot pile on demand so I can improvise encounters. | `generate_npc`, `generate_loot` | ❌ untested (`generation.ts:14`, `:57`); level (1–20) and CR (0–30) bounds unverified |
+| GM-6 | As a GM, I want to generate an NPC or loot pile on demand so I can improvise encounters. | `generate_npc`, `generate_loot` | Creative previews only: strict schemas, input bounds, option effects, deterministic variation, currency arithmetic, unknown item valuation and no mutation are covered by unit, workflow and live tests. Verified system generation remains unavailable; see [issue 11 validation](../validation/issue-11-truthful-generation.md). |
 | GM-7 | As a GM, I want to look up a rule mid-session without leaving chat. | `lookup_rule` | Unsupported: no verified rules provider. Strict unavailable output, input bounds, capability agreement and delegated denial are covered by unit, workflow and live tests; see [issue 9 validation](../validation/issue-9-truthful-rule-lookup.md). |
 | GM-8 | As a GM, I want to know who's currently connected and their role so I know who to address. | `get_users` | ⚠ `getUsers` called in integration; `ROLE_NAMES` mapping (0–4) and "Role {n}" fallback at `users.ts:16` not asserted |
 | GM-9 | As a GM, I want to scan recent chat for a player decision I missed. | `get_chat_messages` | ❌ no handler test; **schema-vs-handler drift** — schema caps `limit` at 100, handler at `chat.ts:8` does not enforce. See DEF-1 |
@@ -139,10 +139,11 @@ become a tracked issue, not just a test gap.
    asserted — and it isn't. Compounded by DEF-2.
 4. **All 9 MCP resource URIs** are wired up but completely uncovered. One
    integration test that walks every URI would close most of this.
-5. **Procedural generation** (`generate_npc`/`generate_loot`)
-   has no schema or range assertions on output — risky because output flows
-   straight to an LLM. `lookup_rule` now has a strict, tested unavailable output
-   and returns no generated rules.
+5. **Verified system generation remains unavailable.** The local
+   `generate_npc`/`generate_loot` creative previews have strict, tested schemas,
+   bounded inputs and output, explicit limitations and valuation, and no world
+   mutation. `lookup_rule` has a strict, tested unavailable output and returns
+   no generated rules.
 6. **A verified Foundry diagnostic source remains unavailable.** The diagnosis
    contract and legacy log/health preservation now have unit and built-workflow
    tests (DEF-4); these do not establish provider evidence or a clean error window.

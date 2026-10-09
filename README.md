@@ -462,10 +462,14 @@ disabled in delegated mode.
 
 ### Content Generation
 
-- `generate_npc` — template text; no verified Foundry-backed generation
-- `generate_loot` — template text; no verified Foundry-backed generation
+- `generate_npc` — structured creative NPC preview with validated level, race and class
+- `generate_loot` — structured fictional loot preview with explicit currency arithmetic and unknown item values
 
-`get_capabilities` reports generation and rules lookup as unavailable.
+Both tools return `persisted: false`, `rulesVerified: false`, limitations and no
+document IDs. They do not modify the world. Verified system generation remains
+unavailable in `get_capabilities`; local creative previews remain available. See
+[content generation](docs/guides/content-generation.md) for inputs, output and
+compatibility changes.
 
 ### Diagnostics
 
