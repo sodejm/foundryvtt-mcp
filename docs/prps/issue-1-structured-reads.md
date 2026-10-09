@@ -1,6 +1,8 @@
 # Issue #1: stable identifiers and structured reads
 
-Status: planned; validation results must be recorded before completion.
+Status: implementation and local validation complete; live Foundry validation
+is unavailable. Issue #1 remains open and its PR must remain draft until the
+required live checks pass. Do not select #2 before resolving this gate.
 
 ## Contract and scope
 
@@ -57,3 +59,49 @@ not to all possible behaviors of Foundry or the repository.
   Live test details have been requested; completion remains gated on their use.
 - Shell networking requires the execution tool's network permission; an npm
   registry probe succeeds when that permission is included.
+
+## Implemented behavior
+
+- Searches return `{schemaVersion: 1, documentType, records, total, page, limit}`;
+  details return `{schemaVersion: 1, documentType, record}`.
+- All four tools advertise output schemas and return `structuredContent` with
+  an explicit field allowlist alongside text. IDs appear in both outputs.
+- Added `get_item_details` / `FoundryClient.getItem` scoped to world items;
+  both routers expose the same validated handlers.
+- Detail IDs retain the existing 16-character alphanumeric contract. Invalid
+  inputs return `InvalidParams` before I/O; unavailable, removed, malformed or
+  mismatched records return `InternalError`.
+- Cached world collections establish UUID scope. REST UUIDs are omitted.
+  Missing values stay absent, and zero/false/empty values survive mapping.
+- Existing freshness, pagination and game-system filter limits remain subjects
+  of their subsequent issues. Retained snapshots may remain readable offline.
+
+## Recorded local validation
+
+Dependency installation used the canonical frozen `bun.lock` (Bun 1.4.2,
+Node 24.19.0, Vitest and its coverage provider 4.1.9).
+
+| Check | Result |
+| --- | --- |
+| `npm run build` | Passed |
+| Full unit suite via `npm run test:reads:coverage` | 646/646 passed in 31 suites; 126 added cases |
+| Scoped coverage: `read-contract.ts`, `actors.ts`, `items.ts` | 100% statements (75/75), branches (87/87), functions (14/14), lines (75/75); thresholds enforced |
+| `npm run test:workflow` | 22/22 passed; built CLI, SDK stdio, local HTTP fixture, no production-function mocks |
+| Strict TypeScript check of new workflow/live test files | Passed |
+| `npm run lint` | Passed; same 11 baseline warnings |
+| `npm run docs:check` | Passed; same 3 baseline warnings |
+| Startup, dotenv and pack/install smoke | Passed |
+| Required redacted Gitleaks scans and commit hooks | Passed |
+| Live Foundry integration | Unavailable; no license, credentials, bootstrapped world, or recorded live versions |
+
+The case matrix above is implemented by handler/client contract tests, primary
+and registry-router tests, and the 22-case built CLI workflow. Positive and
+negative local cases pass. The live row remains unexecuted; no claim of 100%
+overall acceptance coverage or completion is made. Code coverage above applies
+only to the named contract/handler files, not the whole repository.
+
+The prepared live test requires duplicate actor/item fixtures and reports core,
+system and module versions. Additional live removed-document and REST module
+checks remain required by the issue. Skipped or unavailable tests cannot close
+this gap. Preserve this report and branch for continuation once a fixture is
+available.

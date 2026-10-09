@@ -22,8 +22,8 @@ jobs:
     - name: Build
       run: bun run build
 
-    - name: Run tests
-      run: bun run test
+    - name: Unit tests and structured-read coverage
+      run: bun run test:reads:coverage
       env:
         NODE_ENV: test
         FOUNDRY_URL: http://localhost:30000

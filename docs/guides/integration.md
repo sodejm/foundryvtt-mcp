@@ -140,11 +140,24 @@ Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
 world/search returns `records: []`; an unavailable world snapshot returns an
 error. A retained snapshot may remain readable after transport loss; this
-contract does not guarantee freshness. REST modules must implement `/api/items/:id` for item details; unsupported
-routes produce their backend error. This adds no fallback to owned items or
+contract does not guarantee freshness. REST modules must implement
+`/api/items/:id` for item details; unsupported routes produce their backend
+error. This adds no fallback to owned items or
 compendiums and changes no access permissions.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
 version 1 retains existing mapped system fields without promising a complete
 actor sheet, inventory or cross-system normalization.
+
+Run `npm run test:reads:coverage` for the full unit suite with 100% statement,
+branch, function and line coverage enforced for the shared read contract and
+actor/item handlers. Run `npm run test:workflow` for the built CLI over real MCP
+stdio against a local REST fixture. That fixture proves the process/protocol
+workflow; supported Foundry compatibility still requires live integration.
+
+`tests/integration/structured-reads.integration.test.ts` requires a licensed,
+bootstrapped world containing exactly two actors with a shared name and exactly
+two world items with a shared name. The live test records core/system/module
+version evidence. Missing connection or fixture prerequisites fail; they do not
+skip. Use the existing integration setup and keep credentials outside source.

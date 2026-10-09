@@ -279,6 +279,26 @@ for (const surface of surfaces) {
 }
 
 describe('zero, false and empty display values', () => {
+  it('preserves absent ability modifiers and displays negative modifiers accurately', async () => {
+    const result = await handleGetActorDetails(
+      { actorId: A },
+      clientStub({
+        getActor: vi.fn().mockResolvedValue({
+          ...actor,
+          abilities: { str: { value: 0 }, dex: { value: 8, mod: -1 }, con: { mod: 0 } },
+        }),
+      }),
+    );
+    expect(result.structuredContent.record.abilities).toEqual({
+      str: { value: 0 },
+      dex: { value: 8, mod: -1 },
+      con: { mod: 0 },
+    });
+    expect(result.content[0]?.text).toContain('**STR:** 0 (Unknown)');
+    expect(result.content[0]?.text).toContain('**DEX:** 8 (-1)');
+    expect(result.content[0]?.text).toContain('**CON:** Unknown (+0)');
+  });
+
   it('shows zero actor HP, AC, level and ability scores without Unknown', async () => {
     const result = await handleGetActorDetails(
       { actorId: A },

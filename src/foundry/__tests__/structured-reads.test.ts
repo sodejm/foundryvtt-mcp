@@ -207,16 +207,16 @@ for (const surface of [
       await expect(surface.search(client)).rejects.toThrow();
       client.disconnect();
     });
-    it.each(['HTTP 404 not found', 'network unavailable'])(
-      'propagates REST failure %s',
-      async (message) => {
-        const client = createClient(true);
-        get.mockRejectedValue(new Error(message));
-        await expect(surface.detail(client, surface.id)).rejects.toThrow(message);
-        await expect(surface.search(client)).rejects.toThrow(message);
-        client.disconnect();
-      },
-    );
+    it.each([
+      'HTTP 404 not found',
+      'network unavailable',
+    ])('propagates REST failure %s', async (message) => {
+      const client = createClient(true);
+      get.mockRejectedValue(new Error(message));
+      await expect(surface.detail(client, surface.id)).rejects.toThrow(message);
+      await expect(surface.search(client)).rejects.toThrow(message);
+      client.disconnect();
+    });
   });
 }
 describe('Socket.IO value fidelity', () => {

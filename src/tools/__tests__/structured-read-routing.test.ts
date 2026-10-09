@@ -32,19 +32,21 @@ for (const route of [routeToolRequest, routeNewToolRequest]) {
       ['get_actor_details', 'actorId'],
       ['get_item_details', 'itemId'],
     ] as const) {
-      it.each([{}, { [field]: 42 }, { [field]: '' }, { [field]: '../escape' }])(
-        `rejects invalid ${tool} input before backend access: %j`,
-        async (args) => {
-          const getActor = vi.fn();
-          const getItem = vi.fn();
-          const client = { getActor, getItem } as unknown as FoundryClient;
-          await expect(route(tool, args, client, diagnostics, system)).rejects.toMatchObject({
-            code: ErrorCode.InvalidParams,
-          });
-          expect(getActor).not.toHaveBeenCalled();
-          expect(getItem).not.toHaveBeenCalled();
-        },
-      );
+      it.each([
+        {},
+        { [field]: 42 },
+        { [field]: '' },
+        { [field]: '../escape' },
+      ])(`rejects invalid ${tool} input before backend access: %j`, async (args) => {
+        const getActor = vi.fn();
+        const getItem = vi.fn();
+        const client = { getActor, getItem } as unknown as FoundryClient;
+        await expect(route(tool, args, client, diagnostics, system)).rejects.toMatchObject({
+          code: ErrorCode.InvalidParams,
+        });
+        expect(getActor).not.toHaveBeenCalled();
+        expect(getItem).not.toHaveBeenCalled();
+      });
     }
   });
 }
