@@ -165,14 +165,21 @@ Ask your AI assistant things like:
 
 `search_actors`, `get_actor_details`, `search_items` and `get_item_details`
 retain readable `content` text and add typed MCP `structuredContent`, validated
-against the `outputSchema` advertised by `tools/list`. Version 3 search results
+against the `outputSchema` advertised by `tools/list`. Actor search uses version 3
+and actor details version 2; item search uses version 4 and item details version 3.
+Search results
 contain `schemaVersion`, `documentType`, `records`, `total`, `page`, `limit`,
 `returnedCount`, `nextCursor`, `complete`, `snapshotId`, `expiresAt` and
-`consistency: "snapshot"`. Version 2 details contain `schemaVersion`,
+`consistency: "snapshot"`. Details contain `schemaVersion`,
 `documentType` and `record`. Both include `readMetadata`. Every actor/item record has
 `id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
 optional values are omitted; zero, false and empty strings remain real values.
-Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
+Item `economy` separates bounded source candidates from normalized currencies,
+purchase quantity and rarity values. Explicit statuses distinguish known, missing,
+invalid, not-applicable and unsupported data. Zero remains known; missing prices
+and rarities receive no invented currency or default. Legacy `price`/`rarity`
+aliases appear only for unambiguous known values. See the
+[item economy version matrix and fixture provenance](docs/item-economy-fixtures.md).
 
 Search first, select by ID even when names repeat, then pass that ID to the
 matching detail tool:
@@ -189,8 +196,9 @@ Only 16-character alphanumeric document IDs are accepted, not names or UUIDs.
 World-cache records have verified `Actor.<id>` / `Item.<id>` UUIDs; REST records
 omit UUIDs because the REST payload does not establish their source scope.
 Item details read only the same world-item collection as `search_items`,
-excluding actor-owned and compendium items. Item search applies both type and
-rarity filters to the current world-item view.
+excluding actor-owned and compendium items. Item search applies query, type and canonical rarity filters before pagination
+on both transports. Unsupported system/version or invalid rarity selectors
+return `InvalidParams`; localized labels are not guessed.
 This contract preserves currently mapped fields, not a complete game-system
 sheet or an inventory.
 
@@ -201,6 +209,10 @@ A connected world with no matching documents returns a successful empty
 search; unavailable world data returns an error. REST detail reads use
 `/api/actors/:id` and `/api/items/:id`; a REST module without item-detail support
 returns its backend error rather than silently selecting a same-name item.
+REST item normalization also needs system ID/version from `/api/world`; a missing
+route yields explicit unsupported economy. The live `foundry-rest-api` 3.4.1
+module provides neither `/api/items` nor `/api/world`, so item REST coverage uses
+a synthetic endpoint fixture, not a claim of module compatibility.
 
 Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
@@ -209,7 +221,9 @@ contracts are exported from `foundry/types` and `foundry/read-contract`.
 
 ### Bounded actor sheet and inventory reads
 
-The four actor sheet tools use schema version 1 and preserve the existing
+`get_actor_sheet` and `get_actor_section` use schema version 1;
+`list_actor_items` and `get_actor_item` use version 2 and include the same typed
+item economy as world items. These tools preserve the existing
 `get_actor_details` summary. Start with `get_actor_sheet` to discover the actor's
 system ID/version, supported sections and visible inventory count. Read one
 section at a time with `get_actor_section`; fields identify their source,

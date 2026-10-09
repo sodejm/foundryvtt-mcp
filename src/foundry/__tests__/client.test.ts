@@ -166,9 +166,9 @@ describe('FoundryClient', () => {
 
       const result = await client.searchItems({ query: 'Sword', type: 'weapon', limit: 10 });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/items', {
-        params: { query: 'Sword', type: 'weapon', page: 1, limit: 100 },
+        params: { page: 1, limit: 100 },
       });
-      expect(result.items).toEqual(mockData.items);
+      expect(result.items).toMatchObject(mockData.items);
     });
 
     it('should get world info via REST API', async () => {

@@ -106,6 +106,9 @@ export interface FoundryActor {
  * ```
  */
 export interface FoundryItem {
+  /** Internal raw system input; public records expose only bounded economy source fields. */
+  system?: unknown;
+  economy?: import('./item-economy-contract.js').ItemEconomy;
   uuid?: string;
   _id: string;
   name: string;

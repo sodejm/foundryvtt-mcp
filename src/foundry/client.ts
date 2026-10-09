@@ -53,6 +53,14 @@ import {
   parseDiceFormula,
 } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
+import type { ItemEconomy } from './item-economy-contract.js';
+import { itemEconomyAliases, restItemSystemIdentity } from './item-economy-read.js';
+import {
+  assertItemRarityFilter,
+  type ItemEconomyIdentity,
+  itemMatchesRarity,
+  normalizeItemEconomy,
+} from './item-normalization.js';
 import {
   JOURNAL_DEFAULT_PAGE_LIMIT,
   JOURNAL_MAX_PAGE_LIMIT,
@@ -169,8 +177,10 @@ const restActorPageSchema = z.object({
   limit: z.number().int().min(1).max(100),
 });
 
+const restItemWireSchema = itemDocumentSchema.omit({ economy: true, price: true, rarity: true });
+type NormalizedFoundryItem = FoundryItem & { economy: ItemEconomy };
 const restItemPageSchema = z.object({
-  items: z.array(itemDocumentSchema),
+  items: z.array(restItemWireSchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
@@ -185,12 +195,23 @@ function restActor(value: unknown, expectedId?: string): FoundryActor {
   }
   return actor as FoundryActor;
 }
-function restItem(value: unknown, expectedId?: string): FoundryItem {
-  const { uuid: _uuid, ...item } = itemDocumentSchema.parse(value);
+function restItem(
+  value: unknown,
+  identity: ItemEconomyIdentity = { id: 'unknown' },
+  expectedId?: string,
+): NormalizedFoundryItem {
+  const {
+    uuid: _uuid,
+    economy: _economy,
+    price: _price,
+    rarity: _rarity,
+    ...item
+  } = restItemWireSchema.parse(value);
   if (expectedId !== undefined && item._id !== expectedId) {
     throw new Error('Item response ID mismatch');
   }
-  return item as FoundryItem;
+  const economy = normalizeItemEconomy(item, identity);
+  return { ...item, economy, ...itemEconomyAliases(economy) } as NormalizedFoundryItem;
 }
 
 /**
@@ -1517,20 +1538,25 @@ export class FoundryClient {
     throw new Error('REST actor pagination exceeded the maximum supported page count');
   }
 
-  private async fetchAllRestItems(filters: {
-    query?: string | undefined;
-    type?: string | undefined;
-    rarity?: string | undefined;
-  }): Promise<FoundryItem[]> {
-    const requestFilters = Object.fromEntries(
-      Object.entries(filters).filter((entry) => entry[1] !== undefined),
-    );
+  private async restItemIdentity(): Promise<ItemEconomyIdentity> {
+    try {
+      const response = await this.executeWithRetry(() => this.http.get('/api/world'));
+      return restItemSystemIdentity(response.data);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return { id: 'unknown' };
+      }
+      throw error;
+    }
+  }
+
+  private async fetchAllRestItems(): Promise<FoundryItem[]> {
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/items', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/items', { params: { page, limit: 100 } }),
       );
       const result = restItemPageSchema.parse(response.data);
       if (result.page !== page) {
@@ -1687,7 +1713,7 @@ export class FoundryClient {
     const delegated = this.isDelegatedMode();
     const items = Array.isArray(actor.items) ? actor.items : [];
     const visibleProjection = items.map((item) => ({
-      summary: publicActorItemSummary(actor._id, item),
+      summary: publicActorItemSummary(actor._id, item, system),
       fields: actorItemFields(item, system.profile, delegated),
       sort: typeof item.sort === 'number' ? item.sort : null,
     }));
@@ -1734,7 +1760,7 @@ export class FoundryClient {
     }
     const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'ActorItemCollection',
       actor: publicActorIdentity(actor),
       ...page,
@@ -1756,11 +1782,11 @@ export class FoundryClient {
     const system = actorSystemIdentity(world);
     const delegated = this.isDelegatedMode();
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'ActorItem',
       actor: publicActorIdentity(actor),
       item: {
-        ...publicActorItemSummary(actor._id, item),
+        ...publicActorItemSummary(actor._id, item, system),
         parentActorId: actor._id,
         fields: actorItemFields(item, system.profile, delegated),
         systemFieldsSupported: system.profile !== 'generic' || !delegated,
@@ -1848,23 +1874,35 @@ export class FoundryClient {
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('item-search', filters);
-    let records: FoundryItem[] | undefined;
+    let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
+      let identity: ItemEconomyIdentity;
       if (this.config.apiKey) {
-        records = await this.fetchAllRestItems(filters);
+        const rawItems = await this.fetchAllRestItems();
+        identity =
+          rawItems.some((item) => item.system !== undefined) || params.rarity
+            ? await this.restItemIdentity()
+            : { id: 'unknown' };
+        records = rawItems
+          .filter(
+            (item) =>
+              (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
+              (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
+          )
+          .map((item) => restItem(item, identity));
       } else {
         const worldData = this.readWorld('items');
+        identity = actorSystemIdentity(worldData);
         records = worldData.items
           .filter(
             (item) =>
               (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
               (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
           )
-          .map(worldItemToFoundry)
-          .filter(
-            (item) => !params.rarity || item.rarity?.toLowerCase() === params.rarity.toLowerCase(),
-          );
+          .map((item) => worldItemToFoundry(item, identity));
       }
+      assertItemRarityFilter(identity, params.rarity);
+      records = records.filter((item) => itemMatchesRarity(item.economy, params.rarity));
       records.sort(compareFoundryRecords);
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
@@ -1878,13 +1916,16 @@ export class FoundryClient {
     assertReadId(itemId, 'itemId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
-      return restItem(response.data, itemId);
+      const raw = restItemWireSchema.parse(response.data);
+      const identity = raw.system !== undefined ? await this.restItemIdentity() : { id: 'unknown' };
+      return restItem(raw, identity, itemId);
     }
-    const item = this.readWorld('items').items.find((entry) => entry._id === itemId);
+    const world = this.readWorld('items');
+    const item = world.items.find((entry) => entry._id === itemId);
     if (!item) {
       throw new Error(`Item not found: ${itemId}`);
     }
-    return worldItemToFoundry(item);
+    return worldItemToFoundry(item, actorSystemIdentity(world));
   }
 
   // ==========================================================================
@@ -2971,7 +3012,7 @@ export class FoundryClient {
             type: record.type,
           }));
         } else {
-          const items = await this.fetchAllRestItems({});
+          const items = await this.fetchAllRestItems();
           records = items.map((record) => ({
             id: record._id,
             name: record.name,
@@ -3322,9 +3363,17 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
   return actor;
 }
 
-function worldItemToFoundry(i: WorldItem): FoundryItem {
+function worldItemToFoundry(i: WorldItem, identity: ItemEconomyIdentity): NormalizedFoundryItem {
   worldReadDocumentSchema.parse(i);
-  const item: FoundryItem = { _id: i._id, uuid: `Item.${i._id}`, name: i.name, type: i.type };
+  const economy = normalizeItemEconomy(i, identity);
+  const item: NormalizedFoundryItem = {
+    _id: i._id,
+    uuid: `Item.${i._id}`,
+    name: i.name,
+    type: i.type,
+    economy,
+    ...itemEconomyAliases(economy),
+  };
   if (i.img !== undefined) {
     item.img = i.img;
   }
@@ -3332,12 +3381,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
   if (desc !== null) {
     item.description = desc;
   }
-  const rarity = extractString(i.system, 'rarity');
-  if (rarity !== null) {
-    item.rarity = rarity;
-  }
-  // Preserve existing common world-item values without normalizing game systems
-  // or changing the transport-specific rarity-filter behavior (#13).
   for (const key of ['weight', 'quantity'] as const) {
     const value =
       key === 'weight'
@@ -3352,14 +3395,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
     if (typeof value === 'boolean') {
       item[key] = value;
     }
-  }
-  const price = i.system.price;
-  if (
-    isRecord(price) &&
-    typeof price.value === 'number' &&
-    typeof price.denomination === 'string'
-  ) {
-    item.price = { value: price.value, denomination: price.denomination };
   }
   itemDocumentSchema.parse(item);
   return item;

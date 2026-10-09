@@ -919,7 +919,8 @@ describe('live delegated caller permissions', () => {
       }
       await expect(resource('foundry://world/settings')).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
     }
-  });
+  // Every delegated call refreshes authentication; this matrix makes 30 sequential live calls.
+  }, 60_000);
 
   it('fails closed on backend disconnect, then resumes fresh reads after reconnect', async () => {
     token = 'a';

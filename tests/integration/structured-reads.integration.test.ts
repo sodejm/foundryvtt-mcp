@@ -22,12 +22,12 @@ const fixtureRecord = z.object({
   uuid: z.string().optional(),
 }).passthrough();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.union([z.literal(3), z.literal(4)]),
   records: z.array(fixtureRecord),
   readMetadata: worldReadMetadataSchema,
 }).passthrough();
 const detailEnvelope = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.union([z.literal(2), z.literal(3)]),
   record: fixtureRecord,
   readMetadata: worldReadMetadataSchema,
 }).passthrough();

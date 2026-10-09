@@ -143,14 +143,14 @@ export const actorTools = [
     name: 'list_actor_items',
     outputSchema: actorItemListOutputJsonSchema,
     description:
-      'List permission-projected items embedded in one actor with bounded snapshot pagination. Sorts by name then item ID, preserves duplicate names, and returns parent-bound Actor.<actorId>.Item.<itemId> UUIDs. Follow nextCursor with the same actorId, query, type and limit. Any visible inventory or permission change invalidates the cursor.',
+      'List version 2 permission-projected items embedded in one actor with bounded snapshot pagination and typed item economy. Sorts by name then item ID, preserves duplicate names, and returns parent-bound Actor.<actorId>.Item.<itemId> UUIDs. Economy reports exact system adapter, bounded source candidates, price currencies/quantity and rarity statuses without guessed defaults. Follow nextCursor with the same actorId, query, type and limit. Any visible inventory or permission change invalidates the cursor.',
     inputSchema: actorItemListInputJsonSchema,
   },
   {
     name: 'get_actor_item',
     outputSchema: actorItemOutputJsonSchema,
     description:
-      'Read one permission-projected item embedded in the specified actor. Both IDs must be 16 alphanumeric characters. The item is resolved only within its parent actor and returns bounded normalized or system-path primitive fields; missing, denied, deleted and wrong-parent targets share an unavailable error.',
+      'Read one version 2 permission-projected item embedded in the specified actor. Both IDs must be 16 alphanumeric characters. The item is resolved only within its parent actor and returns typed item economy plus bounded normalized or system-path primitive fields; missing, denied, deleted and wrong-parent targets share an unavailable error. Economy preserves zero and distinguishes missing, invalid, not-applicable and unsupported values.',
     inputSchema: actorItemInputJsonSchema,
   },
 ];
@@ -197,14 +197,14 @@ export const itemTools = [
     name: 'search_items',
     outputSchema: itemSearchOutputSchema,
     description:
-      'Search world items by name, type and rarity. Returns version 3 structuredContent with stable IDs, mapped fields, bounded snapshot pagination and readMetadata freshness/source timestamps. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
+      'Search world items by name, type and canonical rarity, applying all filters before pagination on both transports. Returns version 4 structuredContent with stable IDs, typed item economy, bounded snapshot pagination and readMetadata freshness/source timestamps. Economy includes exact system adapter, bounded source candidates and explicit price/rarity statuses. Unsupported system/version or invalid rarity filters fail with InvalidParams. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
     inputSchema: itemSearchInputJsonSchema,
   },
   {
     name: 'get_item_details',
     outputSchema: itemDetailsOutputSchema,
     description:
-      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 2 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
+      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 3 structuredContent and text with identity, typed item economy and available description, weight, quantity, equipped and identified values. Economy preserves zero, separates bounded source candidates from normalized currencies and rarities, and distinguishes missing, invalid, not-applicable and unsupported values. Legacy price/rarity aliases appear only for an unambiguous known value. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -35,14 +35,14 @@ function socketClient(role = 4) {
     system: {},
   }));
   const items = [
-    { _id: id('I', 1), name: 'Twin', type: 'weapon', system: { rarity: 'rare' } },
-    { _id: id('I', 2), name: 'Twin', type: 'loot', system: { rarity: 'common' } },
+    { _id: id('I', 1), name: 'Twin', type: 'weapon', system: { rarities: ['rare'] } },
+    { _id: id('I', 2), name: 'Twin', type: 'loot', system: { rarities: ['common'] } },
   ];
   const world: WorldData = {
     userId: id('U', 1),
     release: {},
     world: { id: 'world-1', title: 'World' },
-    system: {},
+    system: { id: 'dnd5e', version: '6.0.6' },
     modules: [],
     demoMode: false,
     actors,

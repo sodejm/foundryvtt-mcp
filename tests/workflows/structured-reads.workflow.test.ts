@@ -30,7 +30,7 @@ const restReadMetadata = z.object({
   respondedAt: z.string().datetime({ offset: true }),
 }).strict();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.union([z.literal(3), z.literal(4)]),
   readMetadata: restReadMetadata,
   records: z.array(recordIdentity),
   total: z.number(), page: z.number(), limit: z.number(), returnedCount: z.number(),
@@ -38,7 +38,7 @@ const searchEnvelope = z.object({
   snapshotId: z.string(), expiresAt: z.string(), consistency: z.literal('snapshot'),
 }).passthrough();
 const detailEnvelope = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.union([z.literal(2), z.literal(3)]),
   readMetadata: restReadMetadata,
   record: recordIdentity,
 }).passthrough();
@@ -56,10 +56,10 @@ const itemFixtures = itemIds.map((_id, index) => ({
   name: index === 2 ? 'Optional fields absent' : 'Same item name',
   type: 'weapon',
   ...(index === 0 ? {
-    price: { value: 0, denomination: '' }, rarity: '', description: '',
+    system: { price: { value: 0, denomination: 'gp' }, rarities: [] }, description: '',
     weight: 0, quantity: 0, equipped: false, identified: false,
   } : {}),
-  ...(index === 1 ? { price: { value: 5, denomination: 'gp' }, rarity: 'rare' } : {}),
+  ...(index === 1 ? { system: { price: { value: 5, denomination: 'gp' }, rarities: ['rare'] } } : {}),
 }));
 
 describe('built MCP CLI structured read workflow', () => {
@@ -72,6 +72,7 @@ describe('built MCP CLI structured read workflow', () => {
   let fault: 'none' | 'unavailable' | 'mismatched-id' | 'malformed-search'
     | 'ignored-page' | 'duplicate-page' | 'nonprogress' | 'inconsistent-total' = 'none';
   let requests: string[] = [];
+  let systemIdentity = { id: 'dnd5e', version: '6.0.6' };
   const schemas = new Map<string, object>();
   const ajv = new Ajv({ allErrors: true, strict: false });
 
@@ -80,6 +81,7 @@ describe('built MCP CLI structured read workflow', () => {
     items = new Map(itemFixtures.map(record => [record._id, structuredClone(record)]));
     fault = 'none';
     requests = [];
+    systemIdentity = { id: 'dnd5e', version: '6.0.6' };
   });
 
   beforeAll(async () => {
@@ -96,6 +98,7 @@ describe('built MCP CLI structured read workflow', () => {
         response.end(JSON.stringify({ error: 'Fixture unavailable' }));
         return;
       }
+      if (url.pathname === '/api/world') { response.end(JSON.stringify({ system: systemIdentity })); return; }
       const match = /^\/api\/(actors|items)(?:\/([^/]+))?$/.exec(url.pathname);
       if (!match) {
         response.statusCode = 404;
@@ -119,9 +122,9 @@ describe('built MCP CLI structured read workflow', () => {
       const query = (url.searchParams.get('query') ?? '').toLowerCase();
       const type = url.searchParams.get('type');
       const rarity = url.searchParams.get('rarity');
-      const records = [...collection.values()].filter(record =>
+      const records = [...collection.values()].filter(record => collectionName === 'items' || (
         typeof record.name === 'string' && record.name.toLowerCase().includes(query)
-        && (!type || record.type === type) && (!rarity || record.rarity === rarity));
+        && (!type || record.type === type) && (!rarity || record.rarity === rarity)));
       const limit = Number(url.searchParams.get('limit') ?? 10);
       const page = Number(url.searchParams.get('page') ?? 1);
       const offset = fault === 'duplicate-page' ? 0 : (page - 1) * limit;
@@ -187,7 +190,7 @@ describe('built MCP CLI structured read workflow', () => {
     for (let index = count - 1; index >= 0; index -= 1) {
       const id = String(index).padStart(16, '0');
       collection.set(id, { _id: id, name: 'Paging duplicate',
-        type: index % 2 ? 'npc' : 'character', rarity: index % 3 ? 'common' : 'rare' });
+        type: collection === items ? (index % 2 ? 'weapon' : 'loot') : (index % 2 ? 'npc' : 'character'), system: { rarities: [index % 3 ? 'common' : 'rare'] } });
     }
     return [...collection.keys()].sort();
   }
@@ -261,10 +264,10 @@ describe('built MCP CLI structured read workflow', () => {
 
   it('applies restrictive filters before counts and pagination', async () => {
     seed(items, 251);
-    const response = await call('search_items', { query: 'duplicate', type: 'npc', rarity: 'rare', limit: 100 });
+    const response = await call('search_items', { query: 'duplicate', type: 'WEAPON', rarity: 'RARE', limit: 100 });
     const result = searchEnvelope.parse(response.structured);
     expect(result).toMatchObject({ total: 42, returnedCount: 42, complete: true });
-    expect(result.records.every(record => record.type === 'npc' && record.rarity === 'rare')).toBe(true);
+    expect(result.records.every(record => record.type === 'weapon' && record.rarity === 'rare')).toBe(true);
   });
 
   it.each(['actors', 'items'])(
@@ -391,11 +394,81 @@ describe('built MCP CLI structured read workflow', () => {
     expect(actor.text).toContain('0/0');
     const item = await call('get_item_details', { itemId: itemIds[0] });
     expect(detailEnvelope.parse(item.structured).record).toMatchObject({
-      price: { value: 0, denomination: '' }, rarity: '', description: '',
+      price: { value: 0, denomination: 'gp' },
+      economy: { price: { status: 'known', currencies: [{ value: 0, denomination: 'gp' }] }, rarity: { status: 'known', values: [] } }, description: '',
       quantity: 0, weight: 0, identified: false, equipped: false,
     });
     expect(item.text).toContain('false');
     expect(item.text).not.toContain('Unknown price');
+  });
+
+  it('preserves PF2e coin bundles and purchase quantity through the built CLI', async () => {
+    systemIdentity = { id: 'pf2e', version: '7.8.0' };
+    items.clear();
+    items.set(itemIds[0]!, { _id: itemIds[0], name: 'PF fixture', type: 'equipment',
+      system: { price: { value: { cp: 0, sp: 2, gp: 3, pp: 0 }, per: 2 },
+        traits: { rarity: 'unique', value: ['private-trait'] }, flags: { private: true } } });
+    const search = await call('search_items', { query: 'PF', type: 'EQUIPMENT', rarity: 'UNIQUE' });
+    const record = searchEnvelope.parse(search.structured).records[0]!;
+    expect(record).toMatchObject({ economy: {
+      adapter: { adapterId: 'pf2e@7.8.0', status: 'supported' },
+      price: { status: 'known', per: 2, currencies: [
+        { denomination: 'cp', value: 0 }, { denomination: 'sp', value: 2 },
+        { denomination: 'gp', value: 3 }, { denomination: 'pp', value: 0 },
+      ] }, rarity: { status: 'known', values: ['unique'] },
+    } });
+    expect(record).not.toHaveProperty('price');
+    expect(record).not.toHaveProperty('system');
+    expect(search.text).toContain('0 cp + 2 sp + 3 gp + 0 pp per 2');
+    expect(JSON.stringify(search)).not.toContain('private-trait');
+    expect(detailEnvelope.parse((await call('get_item_details', { itemId: itemIds[0] })).structured).record).toEqual(record);
+  });
+
+  it.each([
+    ['homebrew', '1.0', 'unsupported-system'],
+    ['dnd5e', '99.0.0', 'unsupported-version'],
+  ])('reports %s %s explicitly and rejects its rarity filter', async (id, version, status) => {
+    systemIdentity = { id, version };
+    items.clear();
+    items.set(itemIds[0]!, { _id: itemIds[0], name: 'Unknown fixture', type: 'loot',
+      price: { value: 17, denomination: 'gp' }, rarity: 'common',
+      system: { price: 17, rarity: 'Commun', flags: { private: true }, description: 'private' } });
+    const search = await call('search_items', {});
+    const record = searchEnvelope.parse(search.structured).records[0]!;
+    expect(record).toMatchObject({ economy: {
+      adapter: { adapterId: null, status }, source: { price: 17, rarity: 'Commun' },
+      price: { status: 'unsupported', currencies: [], per: null },
+      rarity: { status: 'unsupported', values: [] },
+    } });
+    expect(record).not.toHaveProperty('price');
+    expect(record).not.toHaveProperty('rarity');
+    expect(JSON.stringify(record)).not.toContain('private');
+    expect(search.text).toContain('Unknown price (unsupported)');
+    expect(search.text).toContain('Unknown rarity (unsupported)');
+    await expect(client.callTool({ name: 'search_items', arguments: { rarity: 'common' } }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+  });
+
+  it('distinguishes invalid localized, missing and inapplicable economy values', async () => {
+    items.clear();
+    items.set(itemIds[0]!, { _id: itemIds[0], name: 'Localized', type: 'loot',
+      system: { price: '10 pièces', rarities: ['Commun'] } });
+    items.set(itemIds[1]!, { _id: itemIds[1], name: 'Missing', type: 'loot', system: {} });
+    items.set(itemIds[2]!, { _id: itemIds[2], name: 'Spell', type: 'spell', system: {} });
+    for (const [id, status] of [[itemIds[0], 'invalid'], [itemIds[1], 'missing'], [itemIds[2], 'not-applicable']]) {
+      const result = await call('get_item_details', { itemId: id });
+      const record = detailEnvelope.parse(result.structured).record;
+      expect(record).toMatchObject({ economy: { price: { status }, rarity: { status } } });
+      expect(record).not.toHaveProperty('price');
+      expect(record).not.toHaveProperty('rarity');
+      expect(result.text).toContain(`Unknown price (${status})`);
+    }
+    await expect(client.callTool({ name: 'search_items', arguments: { rarity: 'common' } }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    items.delete(itemIds[0]!);
+    expect(searchEnvelope.parse((await call('search_items', { rarity: 'common' })).structured).total).toBe(0);
+    await expect(client.callTool({ name: 'search_items', arguments: { rarity: 'Commun' } }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
   });
 
   it.each([

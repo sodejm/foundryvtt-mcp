@@ -17,7 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest run --coverage",
-    "test:reads:coverage": "npm run test:coverage -- --coverage.include=src/foundry/read-contract.ts --coverage.include=src/tools/handlers/actors.ts --coverage.include=src/tools/handlers/items.ts --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100 --coverage.thresholds.lines=100",
+    "test:reads:coverage": "npm run test:coverage -- --coverage.include=src/foundry/read-contract.ts --coverage.include=src/foundry/item-economy-contract.ts --coverage.include=src/foundry/item-normalization.ts --coverage.include=src/foundry/item-economy-read.ts --coverage.include=src/tools/handlers/actors.ts --coverage.include=src/tools/handlers/items.ts --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100 --coverage.thresholds.lines=100",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

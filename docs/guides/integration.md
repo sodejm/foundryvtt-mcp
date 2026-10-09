@@ -153,13 +153,18 @@ Choose the record by `id` and call `get_actor_details` with
 `{"schemaVersion":2,"documentType":"Actor","record":{...},"readMetadata":{...}}` and verifies that
 `record.id` equals the requested ID. The item workflow uses `search_items`,
 `documentType: "Item"`, and `get_item_details` with `{"itemId":"..."}`. It
+uses search schema version 4 and detail version 3 with typed `economy`, and
 reads world items only, excluding actor-owned and compendium items. Example IDs
 are placeholders; always use IDs returned by your current search.
 
 Optional fields are omitted when absent. Zero HP or price, false item flags
 and empty descriptions are preserved. Do not substitute truthiness defaults.
 Only the world-cache source establishes UUID scope; ambiguous REST UUIDs are
-omitted. No raw `system` or `data` objects are serialized in this contract.
+omitted. No raw `system` or `data` objects are serialized in this contract. Item economy
+contains only bounded allowlisted candidates in `source`, plus normalized
+price currencies, purchase quantity and rarity values with explicit statuses.
+Legacy aliases are conditional; consumers should read `economy` directly.
+See the [exact version matrix and provenance](../item-economy-fixtures.md).
 
 Detail IDs must be exactly 16 alphanumeric characters. Invalid, empty,
 nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
@@ -169,20 +174,28 @@ world/search returns `records: []`; an unavailable world snapshot returns an
 error. Service-identity reads may retain cached data after transport loss with `freshness: "stale"`; pagination
 cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
-error. This adds no fallback to owned items or compendiums. Socket pagination
+error. `/api/world` must identify the system/version for normalization; a 404
+yields unsupported economy and rejects rarity filtering. The live REST module
+3.4.1 lacks both item and world endpoints, so these endpoint contracts are
+validated with synthetic REST fixtures. This adds no fallback to owned items
+or compendiums. Socket pagination
 requires a GM session in service-identity mode. Delegated socket reads instead
 require trusted caller context and a fresh permission-filtered view. REST
 pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
-detail version 2 retains existing mapped system fields without promising a complete
-actor sheet, inventory or cross-system normalization.
+actor detail version 2 retains existing mapped system fields without promising
+a complete actor sheet. Item detail version 3 uses the documented exact-version
+economy adapters; unknown versions remain explicit.
 
 ### Traversing bounded searches and resources
 
 All four world searches (`search_actors`, `search_items`, `search_journals`,
-`search_world`) return a version 3 page. Start with a query and optional limit,
+`search_world`) return bounded pages: item search version 4, the other searches
+version 3. Item query, type and canonical rarity filters run locally before
+pagination on both transports; unsupported or invalid rarity filters return
+`InvalidParams`. Start with a query and optional limit,
 then pass `nextCursor` back to the same tool with the same query, filters and
 limit. Stop at `nextCursor: null` / `complete: true`. Search limits default to
 10 and cannot exceed 100. Numeric page input and unknown parameters are rejected
@@ -222,8 +235,9 @@ remain unsupported and fail explicitly.
 
 ### Bounded actor sheets and owned items
 
-`get_actor_sheet`, `get_actor_section`, `list_actor_items` and `get_actor_item`
-return schema version 1, with advertised output schemas and matching JSON in
+`get_actor_sheet` and `get_actor_section` return schema version 1;
+`list_actor_items` and `get_actor_item` return version 2 with typed item economy
+shared with world items. All advertise output schemas and matching JSON in
 `content[0].text` and `structuredContent`. Import the corresponding
 `actorSheetOutputSchema`, `actorSectionOutputSchema`, `actorItemListOutputSchema`
 and `actorItemOutputSchema` from `foundry/actor-sheet-contract`.

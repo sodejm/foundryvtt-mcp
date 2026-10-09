@@ -1,0 +1,12 @@
+{
+  "type": "weapon",
+  "system": {
+    "price": {
+      "value": 0,
+      "denomination": "gp",
+      "ignored": "not projected"
+    },
+    "rarities": ["common", "veryRare"],
+    "secret": "not projected"
+  }
+}
