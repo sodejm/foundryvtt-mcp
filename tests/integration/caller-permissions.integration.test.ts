@@ -914,9 +914,13 @@ describe('live delegated caller permissions', () => {
       for (const name of ['get_scene_info', 'get_token_details', 'get_combat_state', 'search_compendium', 'get_capabilities', 'get_rules', 'get_system_diagnostics', 'create_actor', 'add_item_to_actor', 'refresh_world_data']) {
         await expect(call(name, { sceneId })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
       }
+      for (const args of [{ formula: '1d6', engine: 'foundry' }, { formula: null, engine: 'invalid' }]) {
+        await expect(call('roll_dice', args)).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+      }
       await expect(resource('foundry://world/settings')).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
     }
-  });
+  // Every delegated call refreshes authentication; this matrix makes 30 sequential live calls.
+  }, 60_000);
 
   it('fails closed on backend disconnect, then resumes fresh reads after reconnect', async () => {
     token = 'a';

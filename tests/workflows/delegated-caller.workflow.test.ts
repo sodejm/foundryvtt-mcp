@@ -192,6 +192,19 @@ describe('built delegated MCP transport boundary', () => {
     }
   });
 
+  it('denies dice rolls before validating input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('roll_dice');
+    for (const args of [
+      { formula: '1d6', engine: 'foundry' },
+      { formula: '1d6', engine: 'local' },
+      { formula: null, engine: 'invalid' },
+    ]) {
+      await expect(client.callTool({ name: 'roll_dice', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
   it.each(['generate_npc', 'generate_loot'])('denies %s before validating input even with a trusted caller', async name => {
     const { client } = await connect();
     expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain(name);

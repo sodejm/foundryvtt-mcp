@@ -77,9 +77,13 @@ const result = await client.request({
 ```json
 {
   "formula": "1d20+5",
-  "reason": "Attack roll against goblin"
+  "reason": "Attack roll against goblin",
+  "engine": "auto"
 }
 ```
+
+See the [dice contract](dice.md) for the supported grammar, bounds and actual
+engine provenance returned by `roll_dice`.
 
 ### search_world
 
@@ -149,13 +153,18 @@ Choose the record by `id` and call `get_actor_details` with
 `{"schemaVersion":2,"documentType":"Actor","record":{...},"readMetadata":{...}}` and verifies that
 `record.id` equals the requested ID. The item workflow uses `search_items`,
 `documentType: "Item"`, and `get_item_details` with `{"itemId":"..."}`. It
+uses search schema version 4 and detail version 3 with typed `economy`, and
 reads world items only, excluding actor-owned and compendium items. Example IDs
 are placeholders; always use IDs returned by your current search.
 
 Optional fields are omitted when absent. Zero HP or price, false item flags
 and empty descriptions are preserved. Do not substitute truthiness defaults.
 Only the world-cache source establishes UUID scope; ambiguous REST UUIDs are
-omitted. No raw `system` or `data` objects are serialized in this contract.
+omitted. No raw `system` or `data` objects are serialized in this contract. Item economy
+contains only bounded allowlisted candidates in `source`, plus normalized
+price currencies, purchase quantity and rarity values with explicit statuses.
+Legacy aliases are conditional; consumers should read `economy` directly.
+See the [exact version matrix and provenance](../item-economy-fixtures.md).
 
 Detail IDs must be exactly 16 alphanumeric characters. Invalid, empty,
 nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
@@ -165,20 +174,28 @@ world/search returns `records: []`; an unavailable world snapshot returns an
 error. Service-identity reads may retain cached data after transport loss with `freshness: "stale"`; pagination
 cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
-error. This adds no fallback to owned items or compendiums. Socket pagination
+error. `/api/world` must identify the system/version for normalization; a 404
+yields unsupported economy and rejects rarity filtering. The live REST module
+3.4.1 lacks both item and world endpoints, so these endpoint contracts are
+validated with synthetic REST fixtures. This adds no fallback to owned items
+or compendiums. Socket pagination
 requires a GM session in service-identity mode. Delegated socket reads instead
 require trusted caller context and a fresh permission-filtered view. REST
 pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
-detail version 2 retains existing mapped system fields without promising a complete
-actor sheet, inventory or cross-system normalization.
+actor detail version 2 retains existing mapped system fields without promising
+a complete actor sheet. Item detail version 3 uses the documented exact-version
+economy adapters; unknown versions remain explicit.
 
 ### Traversing bounded searches and resources
 
 All four world searches (`search_actors`, `search_items`, `search_journals`,
-`search_world`) return a version 3 page. Start with a query and optional limit,
+`search_world`) return bounded pages: item search version 4, the other searches
+version 3. Item query, type and canonical rarity filters run locally before
+pagination on both transports; unsupported or invalid rarity filters return
+`InvalidParams`. Start with a query and optional limit,
 then pass `nextCursor` back to the same tool with the same query, filters and
 limit. Stop at `nextCursor: null` / `complete: true`. Search limits default to
 10 and cannot exceed 100. Numeric page input and unknown parameters are rejected
@@ -218,8 +235,9 @@ remain unsupported and fail explicitly.
 
 ### Bounded actor sheets and owned items
 
-`get_actor_sheet`, `get_actor_section`, `list_actor_items` and `get_actor_item`
-return schema version 1, with advertised output schemas and matching JSON in
+`get_actor_sheet` and `get_actor_section` return schema version 1;
+`list_actor_items` and `get_actor_item` return version 2 with typed item economy
+shared with world items. All advertise output schemas and matching JSON in
 `content[0].text` and `structuredContent`. Import the corresponding
 `actorSheetOutputSchema`, `actorSectionOutputSchema`, `actorItemListOutputSchema`
 and `actorItemOutputSchema` from `foundry/actor-sheet-contract`.
@@ -541,10 +559,18 @@ stdio against a local REST fixture. That fixture proves the process/protocol
 workflow; supported Foundry compatibility still requires live integration.
 
 `tests/integration/structured-reads.integration.test.ts` requires a licensed,
-bootstrapped world containing exactly two actors with a shared name and exactly
-two world items with a shared name. The live test records core/system/module
-version evidence. Missing connection or fixture prerequisites fail; they do not
-skip. Use the existing integration setup and keep credentials outside source.
+launched disposable dnd5e world (`test1world` by default; set
+`FOUNDRY_TEST_WORLD_ID` to select another disposable world). It creates its own
+same-name actor/item pairs with zero, false and empty-string values and its own
+deleted-document fixtures. It removes only documents it created and reports
+cleanup failures. Existing world documents are never needed as fixtures. The
+live test records core/system/module version evidence; missing connection or
+world prerequisites fail instead of skipping. Keep credentials outside source.
+
+A healthy Docker container alone does not provide these prerequisites: install
+dnd5e, create the disposable world and launch it before running the live suite.
+The Docker helper does not bootstrap a licensed world. The local Foundry server
+is the validated live target for this PR stack.
 
 `tests/integration/pagination.integration.test.ts` additionally requires the
 disposable world ID `test1world`. It creates uniquely named fixtures (251 actors,
@@ -570,3 +596,14 @@ and insufficient-scope keys, socket-only and plain Foundry configurations, actua
 empty searches, filters, 1/100/101/251-entry traversals, authorization revocation,
 module removal and recovery. Missing prerequisites fail instead of skipping. See
 [optional capability configuration and test prerequisites](optional-capabilities.md).
+
+### GitHub Actions live endpoint
+
+The integration workflow requires a prepared disposable `test1world` with dnd5e, the REST module, a paired REST relay and all fixture controllers reachable from the runner. Configure these repository secrets:
+
+- `FOUNDRY_TEST_URL`, `FOUNDRY_TEST_USERNAME`, and optionally `FOUNDRY_TEST_PASSWORD` for the world login.
+- `FOUNDRY_REST_URL` for the paired REST relay.
+- `FOUNDRY_REST_TEST_CONTROL_URL`, `FOUNDRY_JOURNAL_TEST_CONTROL_URL`, `FOUNDRY_ACTOR_TEST_CONTROL_URL`, `FOUNDRY_SCENE_TEST_CONTROL_URL`, `FOUNDRY_DICE_TEST_CONTROL_URL`, and `FOUNDRY_ITEM_TEST_CONTROL_URL` for the fixture controllers.
+- `FOUNDRY_REST_TEST_FIXTURES_JSON` for the scoped-key fixture JSON described in the optional-capability test prerequisites. CI writes it to a private temporary file and removes it afterward. The workflow expects REST module version `3.4.1`.
+
+World login credentials are separate from the account used to download Foundry. The local relay and controller scripts bind to loopback; a hosted runner cannot reach them without a separately prepared secure connection. Pull requests skip this optional live tier when configuration is incomplete; manually dispatched runs fail. The required unit, workflow, package, documentation, and security gates run independently. This workflow does not download, license or launch Foundry, or provision the controllers.

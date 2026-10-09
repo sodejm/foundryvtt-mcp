@@ -2,6 +2,8 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { type WorldReadMetadata, worldReadMetadataSchema } from './freshness.js';
+import { itemEconomySchema } from './item-economy-contract.js';
+import { publicItemEconomy } from './item-economy-read.js';
 
 // Successful reads require an established source; health can also report unavailable.
 export const availableWorldReadMetadataSchema = worldReadMetadataSchema.extend({
@@ -94,6 +96,7 @@ export const actorRecordSchema = z.strictObject({
 export const itemRecordSchema = z.strictObject({
   ...identity,
   documentType: z.literal('Item'),
+  economy: itemEconomySchema,
   uuid: z
     .string()
     .regex(/^Item\.[a-zA-Z0-9]{16}$/)
@@ -115,6 +118,7 @@ export const actorDocumentSchema = z
   .passthrough();
 export const itemDocumentSchema = z
   .object({
+    economy: itemEconomySchema.optional(),
     _id: documentIdSchema,
     name: z.string(),
     type: z.string(),
@@ -199,7 +203,7 @@ export const actorSearchSchema = z.strictObject({
   ...paginationShape,
 });
 export const itemSearchSchema = z.strictObject({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   documentType: z.literal('Item'),
   records: z.array(itemRecordSchema),
   ...paginationShape,
@@ -229,7 +233,7 @@ export const actorDetailsSchema = z.strictObject({
   readMetadata: availableWorldReadMetadataSchema,
 });
 export const itemDetailsSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   documentType: z.literal('Item'),
   record: itemRecordSchema,
   readMetadata: availableWorldReadMetadataSchema,
@@ -270,7 +274,7 @@ export function actorReadRecord(value: unknown): ActorReadRecord {
   return publicRecord(actorRecordSchema, value, 'Actor');
 }
 export function itemReadRecord(value: unknown): ItemReadRecord {
-  return publicRecord(itemRecordSchema, value, 'Item');
+  return publicRecord(itemRecordSchema, publicItemEconomy(value), 'Item');
 }
 
 /** Source observation times are distinct from the time this response was emitted. */

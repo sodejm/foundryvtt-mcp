@@ -118,10 +118,7 @@ export async function routeToolRequest(
   switch (name) {
     // Dice tools
     case 'roll_dice':
-      if (!('formula' in args) || typeof args.formula !== 'string') {
-        throw new Error('Missing required parameter: formula');
-      }
-      return handleRollDice(args as { formula: string; reason?: string }, foundryClient);
+      return handleRollDice(args, foundryClient);
 
     // Actor tools
     case 'search_actors':
