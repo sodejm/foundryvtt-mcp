@@ -19,6 +19,9 @@ export const delegatedTools: Readonly<Record<string, ReadSurface>> = Object.free
   get_users: 'users',
   search_world: 'search',
   get_world_summary: 'world-summary',
+  get_scene_spatial: 'scene-spatial',
+  list_scene_tokens: 'scene-spatial',
+  get_scene_token: 'scene-spatial',
 });
 
 const delegatedResources = new Set(['actors', 'items', 'journals', 'users']);

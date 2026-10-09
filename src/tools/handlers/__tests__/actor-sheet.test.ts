@@ -7,6 +7,7 @@ import type {
   ActorSheetOutput,
 } from '../../../foundry/actor-sheet-contract.js';
 import type { FoundryClient } from '../../../foundry/client.js';
+import { normalizeItemEconomy } from '../../../foundry/item-normalization.js';
 import { PaginationCursorError } from '../../../foundry/pagination.js';
 import {
   handleGetActorItem,
@@ -74,7 +75,7 @@ function section(): ActorSectionOutput {
 
 function items(): ActorItemListOutput {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentType: 'ActorItemCollection',
     actor,
     records: [
@@ -83,6 +84,7 @@ function items(): ActorItemListOutput {
         uuid: `Actor.${ACTOR_ID}.Item.${ITEM_ID}`,
         name: 'Coin',
         type: 'loot',
+        economy: normalizeItemEconomy({ type: 'loot' }, { id: 'dnd5e', version: '6.0.6' }),
         quantity: 0,
       },
     ],
@@ -92,7 +94,7 @@ function items(): ActorItemListOutput {
 
 function item(): ActorItemOutput {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentType: 'ActorItem',
     actor,
     item: {
@@ -101,6 +103,7 @@ function item(): ActorItemOutput {
       parentActorId: ACTOR_ID,
       name: 'Coin',
       type: 'loot',
+      economy: normalizeItemEconomy({ type: 'loot' }, { id: 'dnd5e', version: '6.0.6' }),
       quantity: 0,
       fields: [],
       systemFieldsSupported: true,
@@ -180,6 +183,38 @@ describe('actor sheet structured read handlers', () => {
         client({ getActorSection: vi.fn().mockReturnValue(oversized) }),
       ),
     ).rejects.toThrow(McpError);
+  });
+
+  it('fits a full 100-item inventory page with economy metadata within the response budget', async () => {
+    const page: ActorItemListOutput = {
+      ...items(),
+      records: Array.from({ length: 100 }, (_, index) => {
+        const id = `Item${String(index).padStart(12, '0')}`;
+        return {
+          id,
+          uuid: `Actor.${ACTOR_ID}.Item.${id}`,
+          name: index === 99 ? '😀'.repeat(256) : `Inventory equipment ${index}`,
+          type: 'loot',
+          img: 'icons/svg/item-bag.svg',
+          economy: normalizeItemEconomy(
+            {
+              type: 'loot',
+              system: { price: { value: index, denomination: 'gp' }, rarities: ['rare'] },
+            },
+            { id: 'dnd5e', version: '6.0.6' },
+          ),
+          quantity: 1,
+        };
+      }),
+      ...paginationMetadata(100, 100, 100),
+    };
+    const response = await handleListActorItems(
+      { actorId: ACTOR_ID, limit: 100 },
+      client({ listActorItems: vi.fn().mockReturnValue(page) }),
+    );
+    expect(response.structuredContent.records).toHaveLength(100);
+    expect(JSON.parse(response.content[0]?.text ?? '')).toEqual(response.structuredContent);
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(128 * 1024);
   });
 
   it('rejects unexpected private properties in client output', async () => {

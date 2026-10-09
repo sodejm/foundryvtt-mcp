@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import type { SceneSpatialProjection } from './scene-spatial-contract.js';
 import type { WorldData } from './types.js';
 
 export type AuthorizationMode = 'service-identity' | 'delegated';
@@ -19,6 +20,7 @@ export type ReadSurface =
   | 'users'
   | 'world-summary'
   | 'search'
+  | 'scene-spatial'
   | 'scenes'
   | 'tokens'
   | 'combat'
@@ -35,6 +37,7 @@ export const DELEGATED_READ_SURFACES = new Set<ReadSurface>([
   'users',
   'world-summary',
   'search',
+  'scene-spatial',
 ]);
 
 export const CALLER_AUTHORIZATION_MESSAGE = 'Caller is not authorized for this operation';
@@ -50,6 +53,7 @@ export class CallerAuthorizationError extends McpError {
 export interface AuthorizedCallerState {
   readonly context: Readonly<TrustedCallerContext>;
   readonly view: Readonly<WorldData>;
+  readonly spatialView: Readonly<SceneSpatialProjection>;
   readonly authorizationFingerprint: string;
   readonly capturedAt: string;
 }
