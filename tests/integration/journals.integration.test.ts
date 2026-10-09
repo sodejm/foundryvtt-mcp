@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { CallToolResultSchema, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -121,6 +121,19 @@ describe('live complete journal reads through built MCP stdio', () => {
     expect(page.complete).toBe(true); expect(page.nextCursor).toBeNull();
     expect(new Set(pages.map(entry => entry.id)).size).toBe(first.total);
     return pages;
+  }
+  async function seededSummary() {
+    let first!: Summary;
+    await expect.poll(async () => {
+      try {
+        first = await summary({ limit: 1 });
+        return first.total;
+      } catch (error) {
+        if (error instanceof McpError && error.code === ErrorCode.InvalidParams && error.message.endsWith('Journal unavailable')) return null;
+        throw error;
+      }
+    }, { timeout: 10_000 }).toBe(seed.pages.length);
+    return first;
   }
   async function content(pageId: string, format: 'text' | 'source', args: Record<string, unknown> = {}) {
     const { data, text } = await call('get_journal_page', { journalId: seed.id, pageId, format, ...args });
@@ -245,7 +258,7 @@ describe('live complete journal reads through built MCP stdio', () => {
   it.each(['edit', 'sort', 'delete'])('invalidates both cursor families after a real page %s', async kind => {
     seed = seedSchema.parse(await control('/seed'));
     const target = fixture(kind === 'edit' ? 'Long HTML' : 'Ordered 9');
-    const first = await summary({ limit: 1 });
+    const first = await seededSummary();
     const long = await content(fixture('Long HTML')._id, 'text', { limit: 1 });
     await control(`/mutate?kind=${kind}&journalId=${seed.id}&pageId=${target._id}`);
     await expect.poll(async () => {
