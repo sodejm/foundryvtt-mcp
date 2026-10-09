@@ -15,7 +15,7 @@ describe('built MCP bounded dice workflow', () => {
   let server: Server;
   let cwd: string;
   let mode = 'success';
-  let attempts: Array<{ path: string; body: Record<string, unknown>; key: string | undefined }> = [];
+  let attempts: Array<{ method: string | undefined; path: string; body: Record<string, unknown>; key: string | undefined }> = [];
   const clients: Client[] = [];
   const transports: StdioClientTransport[] = [];
   const schemas: object[] = [];
@@ -27,7 +27,7 @@ describe('built MCP bounded dice workflow', () => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       let raw = '';
       for await (const chunk of request) raw += chunk;
-      attempts.push({ path: request.url!, body: JSON.parse(raw || '{}'), key: request.headers['x-api-key'] as string | undefined });
+      attempts.push({ method: request.method, path: request.url!, body: JSON.parse(raw || '{}'), key: request.headers['x-api-key'] as string | undefined });
       if (url.pathname !== '/roll') { response.writeHead(404).end('{}'); return; }
       response.setHeader('content-type', 'application/json');
       if (['401', '403', '500'].includes(mode)) { response.writeHead(Number(mode)).end('{"error":"fixture-key"}'); return; }
@@ -139,7 +139,7 @@ describe('built MCP bounded dice workflow', () => {
     const value = assertDice(await call(4, { formula: '2d6kh1 + 3' }), 'foundry');
     expect(value.total).toBe(9); expect(value.fallback).toBeNull();
     expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({ key: 'fixture-key', body: { createChatMessage: false } });
+    expect(attempts[0]).toMatchObject({ method: 'POST', key: 'fixture-key', body: { createChatMessage: false } });
     expect(new URL(attempts[0]!.path, 'http://fixture').pathname).toBe('/roll');
   });
   it.each(['auto', 'foundry'])('returns verified server outcomes once for engine %s', async engine => {
@@ -148,7 +148,7 @@ describe('built MCP bounded dice workflow', () => {
     expect(value.total).toBe(9); expect(value.fallback).toBeNull();
     expect(ajv.validate(schemas[1]!, value), JSON.stringify(ajv.errors)).toBe(true);
     expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({ key: 'fixture-key', body: { formula: value.normalizedFormula,
+    expect(attempts[0]).toMatchObject({ method: 'POST', key: 'fixture-key', body: { formula: value.normalizedFormula,
       createChatMessage: false, flavor: 'workflow native roll' } });
     expect(new URL(attempts[0]!.path, 'http://fixture').searchParams.get('clientId')).toBe(pairedClientId);
     expect(JSON.stringify(result)).not.toContain('fixture-key');

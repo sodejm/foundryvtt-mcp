@@ -42,11 +42,14 @@ export function assertDice(result: {
   expect(result.content).toHaveLength(1);
   expect(result.content[0]!.type).toBe('text');
   expect(JSON.parse(result.content[0]!.text!)).toEqual(value);
-  for (const [index, die] of (value.dice as Array<{
+  const dice = value.dice as Array<{
     termIndex: number; formula: string; count: number; faces: number;
     modifier: { type: 'kh' | 'kl' | 'dh' | 'dl'; count: number } | null;
     results: Array<{ result: number; active: boolean }>;
-  }>).entries()) {
+  }>;
+  expect(dice.length).toBeLessThanOrEqual(50);
+  expect(dice.reduce((count, die) => count + die.count, 0)).toBeLessThanOrEqual(1000);
+  for (const [index, die] of dice.entries()) {
     expect(die.termIndex).toBe(index);
     expect(die.formula).toEqual(expect.any(String));
     expect(die.formula.length).toBeGreaterThan(0);
