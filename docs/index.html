@@ -87,7 +87,7 @@ FOUNDRY_PASSWORD=your_password
 <li>Emits <code>joinGame</code> with credentials to receive the complete world state</li>
 </ol>
 <h3 id="optional-diagnostics-tools" class="tsd-anchor-link">Optional: Diagnostics Tools<a href="#optional-diagnostics-tools" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
-<p>Installing the <strong>Foundry Local REST API</strong> module adds 5 server monitoring tools (<code>get_recent_logs</code>, <code>search_logs</code>, <code>get_system_health</code>, <code>diagnose_errors</code>, <code>get_health_status</code>):</p>
+<p>Foundry-backed diagnostics require a verified authenticated provider. Legacy log and health tools do not establish that support; <code>diagnose_errors</code> returns explicit unavailable status without inferring health.</p>
 <ol>
 <li>In FoundryVTT: <strong>Setup</strong> &gt; <strong>Add-on Modules</strong> &gt; <strong>Install Module</strong></li>
 <li>Paste: <code>https://github.com/laurigates/foundryvtt-mcp/releases/latest/download/module.json</code></li>
@@ -122,8 +122,8 @@ FOUNDRY_PASSWORD=your_password
 </ul>
 <p><strong>Content Generation:</strong></p>
 <ul>
-<li>&quot;Generate a random NPC merchant&quot;</li>
-<li>&quot;Create loot for a CR 5 encounter&quot;</li>
+<li>&quot;Preview a fictional NPC merchant&quot;</li>
+<li>&quot;Preview fictional loot with creative scale 5&quot;</li>
 <li>&quot;Look up the grappling rules&quot;</li>
 </ul>
 <p><strong>World Search:</strong></p>
@@ -158,15 +158,15 @@ FOUNDRY_PASSWORD=your_password
 </ul>
 <h3 id="content-generation" class="tsd-anchor-link">Content Generation<a href="#content-generation" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul>
-<li><code>generate_npc</code> - Create random NPCs</li>
-<li><code>generate_loot</code> - Create treasure appropriate for level</li>
+<li><code>generate_npc</code> - Preview a fictional NPC; no world mutation or verified rules</li>
+<li><code>generate_loot</code> - Preview fictional loot with explicit currency arithmetic and unknown item values</li>
 </ul>
 <h3 id="diagnostics-optional-requires-rest-api-module" class="tsd-anchor-link">Diagnostics (Optional — requires REST API module)<a href="#diagnostics-optional-requires-rest-api-module" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul>
 <li><code>get_recent_logs</code> - Retrieve filtered FoundryVTT logs</li>
 <li><code>search_logs</code> - Search logs with regex patterns</li>
 <li><code>get_system_health</code> - Server performance and health metrics</li>
-<li><code>diagnose_errors</code> - Analyze errors with troubleshooting suggestions</li>
+<li><code>diagnose_errors</code> - Versioned unavailable result until a verified diagnostic source exists</li>
 <li><code>get_health_status</code> - Comprehensive health diagnostics</li>
 </ul>
 <h2 id="available-resources" class="tsd-anchor-link">Available Resources<a href="#available-resources" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
@@ -388,7 +388,7 @@ FOUNDRY_RETRY_ATTEMPTS=3   # Retry failed requests
 <li>[x] Journal access and search</li>
 <li>[x] World-wide search across all entities</li>
 <li>[x] Chat message history</li>
-<li>[x] NPC and loot generation</li>
+<li>[x] NPC and loot creative previews; verified system generation unavailable</li>
 <li>[x] Rule lookups</li>
 </ul>
 <h3 id="planned" class="tsd-anchor-link">Planned<a href="#planned" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>

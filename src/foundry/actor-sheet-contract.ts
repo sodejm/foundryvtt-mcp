@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { itemEconomySchema } from './item-economy-contract.js';
 import {
   availableWorldReadMetadataSchema,
   documentIdSchema,
@@ -95,6 +96,7 @@ export const actorSectionOutputSchema = z.strictObject({
 });
 
 export const actorItemSummarySchema = z.strictObject({
+  economy: itemEconomySchema,
   id: documentIdSchema,
   uuid: z.string().regex(/^Actor\.[a-zA-Z0-9]{16}\.Item\.[a-zA-Z0-9]{16}$/),
   name: z.string().max(512),
@@ -105,7 +107,7 @@ export const actorItemSummarySchema = z.strictObject({
 });
 
 export const actorItemListOutputSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('ActorItemCollection'),
   actor: actorIdentitySchema,
   records: z.array(actorItemSummarySchema).max(100),
@@ -113,6 +115,7 @@ export const actorItemListOutputSchema = z.strictObject({
 });
 
 export const actorOwnedItemSchema = z.strictObject({
+  economy: itemEconomySchema,
   id: documentIdSchema,
   uuid: z.string().regex(/^Actor\.[a-zA-Z0-9]{16}\.Item\.[a-zA-Z0-9]{16}$/),
   parentActorId: documentIdSchema,
@@ -126,7 +129,7 @@ export const actorOwnedItemSchema = z.strictObject({
 });
 
 export const actorItemOutputSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('ActorItem'),
   actor: actorIdentitySchema,
   item: actorOwnedItemSchema,

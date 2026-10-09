@@ -183,6 +183,37 @@ describe('built delegated MCP transport boundary', () => {
     }
   });
 
+  it('denies error diagnosis before processing input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('diagnose_errors');
+    for (const args of [{ category: 'module' }, { category: '' }, { timeframe: 3600 }]) {
+      await expect(client.callTool({ name: 'diagnose_errors', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
+  it('denies dice rolls before validating input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('roll_dice');
+    for (const args of [
+      { formula: '1d6', engine: 'foundry' },
+      { formula: '1d6', engine: 'local' },
+      { formula: null, engine: 'invalid' },
+    ]) {
+      await expect(client.callTool({ name: 'roll_dice', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
+  it.each(['generate_npc', 'generate_loot'])('denies %s before validating input even with a trusted caller', async name => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain(name);
+    for (const args of [{}, { level: 0 }, { challengeRating: 31 }, { persist: true }]) {
+      await expect(client.callTool({ name, arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
   it('keeps service-identity operation available without a caller resolver', async () => {
     const { client, contexts } = await connect({ service: true, resolver: 'missing' });
     expect((await client.listTools()).tools.length).toBeGreaterThan(10);

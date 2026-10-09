@@ -33,9 +33,13 @@ Each record includes `feature`, `status`, a fixed redacted `reason`, optional
 A key or public Foundry status response is insufficient verification. An empty
 installation needs at least one compendium entry to prove entity reading.
 `rulesLookup`, `diagnostics` and `contentGeneration` remain unavailable because
-their Foundry-backed adapters are not implemented and verified. NPC/loot templates
-and legacy diagnostics utilities do not establish support. `get_health_status`
-separately reports connection and world snapshot health.
+their Foundry-backed adapters are not implemented and verified. The local NPC/loot
+[creative previews](content-generation.md) remain available, explicitly report
+`persisted: false` and `rulesVerified: false`, and do not establish verified system
+generation. Legacy diagnostics utilities do not establish support. `get_health_status`
+separately reports connection and world snapshot health. `diagnose_errors` returns
+a strict, versioned unavailable result without inferring health or retrieving
+logs. See [error diagnosis](error-diagnosis.md) for input validation and output.
 
 The legacy `FOUNDRY_API_KEY` core REST connection path is separate from this
 adapter. Its status-probe concern is tracked in

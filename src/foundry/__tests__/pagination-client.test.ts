@@ -1,6 +1,10 @@
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RULES_LOOKUP_UNAVAILABLE } from '../capabilities.js';
+import {
+  CONTENT_GENERATION_UNAVAILABLE,
+  DIAGNOSTICS_UNAVAILABLE,
+  RULES_LOOKUP_UNAVAILABLE,
+} from '../capabilities.js';
 import { FoundryClient } from '../client.js';
 import type { WorldData } from '../types.js';
 
@@ -31,14 +35,14 @@ function socketClient(role = 4) {
     system: {},
   }));
   const items = [
-    { _id: id('I', 1), name: 'Twin', type: 'weapon', system: { rarity: 'rare' } },
-    { _id: id('I', 2), name: 'Twin', type: 'loot', system: { rarity: 'common' } },
+    { _id: id('I', 1), name: 'Twin', type: 'weapon', system: { rarities: ['rare'] } },
+    { _id: id('I', 2), name: 'Twin', type: 'loot', system: { rarities: ['common'] } },
   ];
   const world: WorldData = {
     userId: id('U', 1),
     release: {},
     world: { id: 'world-1', title: 'World' },
-    system: {},
+    system: { id: 'dnd5e', version: '6.0.6' },
     modules: [],
     demoMode: false,
     actors,
@@ -228,6 +232,7 @@ describe('REST snapshot pagination', () => {
         data: {
           actors: actors.slice((page - 1) * 100, page * 100),
           total: actors.length,
+          snapshotId: 'stable-actors',
           page,
           limit: 100,
         },
@@ -246,6 +251,10 @@ describe('REST snapshot pagination', () => {
     expect(seen).toHaveLength(251);
     expect(new Set(seen).size).toBe(251);
     expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls[0][1].params).not.toHaveProperty('snapshotId');
+    expect(
+      get.mock.calls.slice(1).every(([, options]) => options.params.snapshotId === 'stable-actors'),
+    ).toBe(true);
     expect(get.mock.calls.every(([, options]) => options.params.limit === 100)).toBe(true);
   });
 
@@ -281,10 +290,79 @@ describe('REST snapshot pagination', () => {
     ],
   ])('rejects REST protocol failure: %s', async (_name, responses, error) => {
     for (const response of responses) {
-      get.mockResolvedValueOnce({ data: response });
+      get.mockResolvedValueOnce({ data: { snapshotId: 'stable', ...response } });
     }
     await expect(restClient().searchActors({})).rejects.toThrow(error as RegExp);
   });
+
+  for (const collection of ['actors', 'items'] as const) {
+    const search = (client: FoundryClient) =>
+      collection === 'actors' ? client.searchActors({}) : client.searchItems({});
+    const record = (index: number) => ({
+      _id: id('A', index),
+      name: `Record ${index}`,
+      type: 'loot',
+    });
+    it(`pins the backend snapshot for ${collection}`, async () => {
+      get.mockResolvedValueOnce({
+        data: {
+          [collection]: [record(1)],
+          total: 2,
+          page: 1,
+          limit: 100,
+          snapshotId: 'immutable',
+        },
+      });
+      get.mockResolvedValueOnce({
+        data: {
+          [collection]: [record(2)],
+          total: 2,
+          page: 2,
+          limit: 100,
+          snapshotId: 'immutable',
+        },
+      });
+      const result = await search(restClient());
+      expect(result.total).toBe(2);
+      expect(get.mock.calls[1][1].params.snapshotId).toBe('immutable');
+    });
+    it(`refuses a multipage ${collection} backend without snapshot support`, async () => {
+      get.mockResolvedValueOnce({
+        data: {
+          [collection]: [record(1)],
+          total: 2,
+          page: 1,
+          limit: 100,
+        },
+      });
+      await expect(search(restClient())).rejects.toThrow(/requires a backend snapshotId/);
+      expect(get).toHaveBeenCalledOnce();
+    });
+    it.each([
+      'changed-after-delete-and-append',
+      undefined,
+    ])(`refuses changed or omitted ${collection} snapshots even when totals and IDs look valid: %s`, async (snapshotId) => {
+      get.mockResolvedValueOnce({
+        data: {
+          [collection]: [record(1)],
+          total: 2,
+          page: 1,
+          limit: 100,
+          snapshotId: 'immutable',
+        },
+      });
+      get.mockResolvedValueOnce({
+        data: {
+          [collection]: [record(3)],
+          total: 2,
+          page: 2,
+          limit: 100,
+          snapshotId,
+        },
+      });
+      await expect(search(restClient())).rejects.toThrow(/snapshot changed or was omitted/);
+    });
+  }
 
   it('reports unsupported REST collections explicitly', async () => {
     const client = restClient();
@@ -353,6 +431,17 @@ describe('verified compendium client boundary', () => {
       transport: 'rest',
       verifiedAt: expect.any(String),
     });
+    expect(report.capabilities[2]).toMatchObject({
+      ...DIAGNOSTICS_UNAVAILABLE,
+      transport: 'rest',
+      verifiedAt: expect.any(String),
+    });
+    expect(report.capabilities[3]).toMatchObject({
+      ...CONTENT_GENERATION_UNAVAILABLE,
+      transport: 'rest',
+      verifiedAt: expect.any(String),
+    });
+    expect(Object.isFrozen(CONTENT_GENERATION_UNAVAILABLE)).toBe(true);
     expect(get).not.toHaveBeenCalled();
   });
   it('does not infer rules, diagnostics, or generation from a working compendium adapter', async () => {
@@ -361,6 +450,8 @@ describe('verified compendium client boundary', () => {
     expect(probe).toHaveBeenCalledOnce();
     expect(report.capabilities[0].status).toBe('available');
     expect(report.capabilities[1]).toMatchObject(RULES_LOOKUP_UNAVAILABLE);
+    expect(report.capabilities[2]).toMatchObject(DIAGNOSTICS_UNAVAILABLE);
+    expect(report.capabilities[3]).toMatchObject(CONTENT_GENERATION_UNAVAILABLE);
     expect(report.capabilities.slice(1).map((entry) => entry.status)).toEqual([
       'unavailable',
       'unavailable',

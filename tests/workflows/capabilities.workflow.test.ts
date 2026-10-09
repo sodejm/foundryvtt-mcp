@@ -35,6 +35,39 @@ describe('built MCP optional capability workflow', () => {
       requests.push(url.pathname);
       response.setHeader('Content-Type', 'application/json');
       if (url.pathname === '/api/status') { response.end('{"connected":true}'); return; }
+      // Compatibility fixtures prove the existing log/health handlers still read
+      // their own source; they are not a verified Foundry diagnosis provider.
+      if (url.pathname.startsWith('/api/diagnostics/')) {
+        if (request.headers['x-api-key'] !== 'legacy-core-key') {
+          response.writeHead(401).end('{}'); return;
+        }
+        const logs = [
+          { timestamp: '2026-10-09T10:00:00.000Z', level: 'error', message: 'Old fixture error', source: 'module' },
+          { timestamp: '2026-10-09T11:00:00.000Z', level: 'info', message: 'Fixture startup', source: 'foundry' },
+          { timestamp: '2026-10-09T12:00:00.000Z', level: 'error', message: 'Fixture TypeError first', source: 'module' },
+          { timestamp: '2026-10-09T12:01:00.000Z', level: 'error', message: 'Fixture TypeError second', source: 'module' },
+        ];
+        if (url.pathname === '/api/diagnostics/logs') {
+          expect(url.search).toBe('');
+          response.end(JSON.stringify({ logs, total: logs.length })); return;
+        }
+        if (url.pathname === '/api/diagnostics/search') {
+          expect(url.searchParams.get('pattern')).toBe('TypeError');
+          expect(url.searchParams.get('level')).toBe('error');
+          response.end(JSON.stringify({ logs: logs.slice(2), matches: 2,
+            pattern: 'TypeError', searchTimeframe: 'fixture window' })); return;
+        }
+        if (url.pathname === '/api/diagnostics/health') {
+          response.end(JSON.stringify({ timestamp: '2026-10-09T12:02:00.000Z', status: 'warning',
+            server: { foundryVersion: 'fixture-version', systemVersion: 'fixture-system', worldId: 'fixture-world', uptime: 3661 },
+            users: { total: 5, active: 3, gm: 1 }, modules: { total: 7, active: 4 },
+            performance: { connectedClients: 3, memory: { rss: 10485760, heapTotal: 8388608,
+              heapUsed: 4194304, external: 0, arrayBuffers: 0 } },
+            logs: { bufferSize: 4, recentErrors: 3, recentWarnings: 1, errorRate: 75 },
+          })); return;
+        }
+        response.writeHead(404).end('{}'); return;
+      }
       if (!['/search', '/get'].includes(url.pathname)) { response.writeHead(404).end('{}'); return; }
       if (request.headers['x-api-key'] !== key || url.searchParams.get('clientId') !== clientId) {
         response.writeHead(401).end('{"error":"invalid fixture authorization"}'); return;
@@ -122,6 +155,90 @@ describe('built MCP optional capability workflow', () => {
     expect(text).not.toContain('Core Rulebook');
     return capability;
   }
+  async function diagnosis(args: Record<string, unknown>, mcp = client) {
+    const { result, text } = await call('diagnose_errors', args, mcp);
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(text)).toEqual(result.structuredContent);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(128 * 1024);
+    expect(Object.keys(result.structuredContent!).sort()).toEqual(['capability', 'schemaVersion']);
+    expect(result.structuredContent).toMatchObject({ schemaVersion: 1, capability: {
+      feature: 'diagnostics', status: 'unavailable', reason: expect.any(String), remediation: expect.any(String),
+    } });
+    const capability = result.structuredContent!.capability as Record<string, unknown>;
+    expect(Object.keys(capability).sort()).toEqual(['feature', 'reason', 'remediation', 'status']);
+    expect(String(capability.reason).length).toBeGreaterThan(0);
+    expect(String(capability.remediation).length).toBeGreaterThan(0);
+    for (const fabricated of ['Operational', 'healthy', 'totalErrors', 'healthScore', 'suggestions', 'evidence']) {
+      expect(text).not.toContain(fabricated);
+    }
+    if (args.category) expect(text).not.toContain(args.category);
+    return capability;
+  }
+  it.each([
+    {}, { category: 'all' }, { category: 'connectivity' }, { category: 'authentication' },
+    { category: 'unknown-category' }, { category: '模块 😀' },
+    { category: '<script>SECRET_DIAGNOSIS_CATEGORY</script>' }, { category: 'x'.repeat(128) },
+  ])('reports unavailable diagnosis without source access or category echo: %j', async args => {
+    await diagnosis(args);
+    expect(requests).toEqual([]);
+  });
+  it.each([false, true])('agrees with diagnosis capability discovery with REST configured=%s', async rest => {
+    const mcp = rest ? client : socketOnly;
+    const capability = await diagnosis({}, mcp);
+    expect(requests).toEqual([]);
+    const { result } = await call('get_capabilities', {}, mcp);
+    const report = capabilitiesReportSchema.parse(result.structuredContent);
+    expect(report.capabilities.find(cap => cap.feature === 'diagnostics')).toMatchObject(capability);
+    if (rest) expect(report.capabilities[0]?.status).toBe('available');
+    expect(requests).toEqual(rest ? ['/search', '/get'] : []);
+  });
+  it.each(['401', '403', '404', '503', 'timeout', 'malformed-search', 'malformed-get', 'read-denied'] as const)
+    ('keeps diagnosis unavailable without probing a %s source', async mode => {
+      fault = mode;
+      await diagnosis({ category: 'connectivity' });
+      expect(requests).toEqual([]);
+    });
+  it.each([
+    { category: '' }, { category: ' \n\t' }, { category: false }, { category: 1 },
+    { category: null }, { category: [] }, { category: {} }, { category: 'x'.repeat(129) },
+    { category: 'all', extra: true }, { timeframe: 3600 }, { since: '2026-10-09T00:00:00Z' }, { limit: 1 },
+  ])('rejects invalid or unsupported diagnosis input before source access: %j', async args => {
+    await expect(client.callTool({ name: 'diagnose_errors', arguments: args }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(requests).toEqual([]);
+  });
+  it('preserves source-backed recent-log filters without feeding them into diagnosis', async () => {
+    const result = CallToolResultSchema.parse(await client.callTool({ name: 'get_recent_logs', arguments: {
+      level: 'ERROR', since: '2026-10-09T11:59:00Z', limit: 1,
+    } }));
+    const text = JSON.stringify(result);
+    expect(text).toContain('Fixture TypeError first');
+    for (const excluded of ['Old fixture error', 'Fixture startup', 'Fixture TypeError second']) expect(text).not.toContain(excluded);
+    expect(requests).toEqual(['/api/diagnostics/logs']);
+    await diagnosis({ category: 'module' });
+    expect(requests).toEqual(['/api/diagnostics/logs']);
+  });
+  it('preserves log search arguments, upstream count and rendered limit', async () => {
+    const result = CallToolResultSchema.parse(await client.callTool({ name: 'search_logs', arguments: {
+      query: 'TypeError', level: 'ERROR', limit: 1,
+    } }));
+    const text = JSON.stringify(result);
+    expect(text).toContain('Fixture TypeError first');
+    expect(text).not.toContain('Fixture TypeError second');
+    expect(text).toContain('**Matches:** 2');
+    expect(text).toContain('**Showing:** 1');
+    expect(requests).toEqual(['/api/diagnostics/search']);
+  });
+  it('preserves warning health and supplied metrics without inventing a diagnosis', async () => {
+    const result = CallToolResultSchema.parse(await client.callTool({ name: 'get_system_health', arguments: {} }));
+    const text = JSON.stringify(result);
+    for (const expected of ['**Overall Status:** warning', 'fixture-version', 'fixture-world', '1h 1m',
+      '3 active / 5 total (1 GM)', '4 active / 7 installed', '4 MB used / 8 MB total', '10 MB',
+      '**Recent Errors:** 3', '**Recent Warnings:** 1', '**Error Rate:** 75%']) expect(text).toContain(expected);
+    expect(requests).toEqual(['/api/diagnostics/health']);
+    await diagnosis({ category: 'performance' });
+    expect(requests).toEqual(['/api/diagnostics/health']);
+  });
   it.each([
     { query: 'Opportunity attack' },
     { query: 'Duplicate Spell', system: 'dnd5e' },
