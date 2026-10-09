@@ -51,15 +51,16 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 
 ## Admin / Diagnostics stories
 
-All gated on `FOUNDRY_API_KEY`.
+Legacy log and system-health utilities require `FOUNDRY_API_KEY`. The unavailable
+`diagnose_errors` result requires no diagnostic key; delegated mode denies it.
 
 | ID | Story | Tools | Coverage |
 |---|---|---|---|
-| AD-1 | As an admin, I want a one-shot health summary of my Foundry server. | `get_health_status`, `get_system_health` | ⚠ `DiagnosticsClient` methods mocked; handlers (`diagnostics.ts:104`, `:193`) and Promise.all error-swallowing fallback at `:199-202` untested |
-| AD-2 | As an admin, I want recent logs filtered by level. | `get_recent_logs` | ⚠ client method tested; handler at `diagnostics.ts:16` ignores `limit`/`level`/`since` params (returns all) — coverage hides this drift |
-| AD-3 | As an admin, I want to grep logs with regex. | `search_logs` | ❌ pattern matching at `diagnostics.ts:57` untested; regex injection safety not checked |
-| AD-4 | As an admin, I want guided troubleshooting for current errors. | `diagnose_errors` | ❌ handler at `diagnostics.ts:137` is a stub (`:147-151` always returns nominal); `category` filter ignored at `:143` |
-| AD-5 | As an admin without the REST API, I expect a clear "this needs the REST API module" error rather than silence. | all 5 diagnostics | ❌ "missing API key" path untested. Resource version (`foundry://system/diagnostics`) does degrade gracefully at `resources.ts:228-246`; tool versions do not |
+| AD-1 | As an admin, I want a one-shot health summary of my Foundry server. | `get_health_status`, `get_system_health` | ⚠ connection/snapshot health is independent; built compatibility workflow preserves supplied warning status, uptime, user/module counts, memory and error metrics. No verified Foundry metrics adapter exists. |
+| AD-2 | As an admin, I want recent logs filtered by level. | `get_recent_logs` | ✅ built compatibility workflow verifies level, since and limit filtering against source records; Foundry log-provider verification remains unavailable. |
+| AD-3 | As an admin, I want to grep logs with regex. | `search_logs` | ⚠ built compatibility workflow verifies pattern/level forwarding, upstream matches and rendered limit; provider regex execution is not verified. |
+| AD-4 | As an admin, I want guided troubleshooting for current errors. | `diagnose_errors` | ✅ strict, bounded unavailable contract, schemas, no fabricated health/counts, category validation, zero source access and authorization are tested; live relay failure/recovery preserves unavailable. Evidence-based analysis awaits a verified source. |
+| AD-5 | As an admin without the REST API, I expect a clear unavailable result. | `diagnose_errors` | ✅ built socket-only and REST-configured workflows return the same explicit unavailable capability; legacy utilities retain their separate API-key requirements. |
 
 ## Operator / setup / connection stories
 
@@ -118,11 +119,12 @@ become a tracked issue, not just a test gap.
   `src/tools/handlers/resources.ts`. The server uses the tools-side
   registration, so this file is unreferenced. Either delete it or implement
   and register the URIs.
-- **DEF-4 — `diagnose_errors` and `get_recent_logs` filter params are
-  silently ignored.** `diagnostics.ts:137` returns a static nominal stub
-  (`:147-151`) regardless of `category`; `diagnostics.ts:16` ignores `limit`,
-  `level`, and `since` and returns the full set. Both are advertised in the
-  tool schema as filterable. Stories: AD-2, AD-4.
+- **DEF-4 — Resolved misleading diagnosis and filter behavior.**
+  `diagnose_errors` returns explicit unavailable status with no fabricated
+  nominal health. Category is bounded and validated, and unsupported time/limit
+  fields are rejected. Recent-log filters are preserved and verified through
+  the built MCP workflow. See [error diagnosis](../guides/error-diagnosis.md).
+  A verified Foundry diagnostic source remains unimplemented. Stories: AD-2, AD-4.
 
 ## Blind spots, ranked
 
@@ -141,8 +143,9 @@ become a tracked issue, not just a test gap.
    has no schema or range assertions on output — risky because output flows
    straight to an LLM. `lookup_rule` now has a strict, tested unavailable output
    and returns no generated rules.
-6. **Diagnostics handlers are stubs or pass-throughs that drop schema-declared
-   filters** (DEF-4). Tests would have caught the drift.
+6. **A verified Foundry diagnostic source remains unavailable.** The diagnosis
+   contract and legacy log/health preservation now have unit and built-workflow
+   tests (DEF-4); these do not establish provider evidence or a clean error window.
 7. **No Playwright E2E tests exist** despite the config and rules referencing
    them.
 8. **Auth resilience unit tests are thin**: HTTP warning (CN-3),

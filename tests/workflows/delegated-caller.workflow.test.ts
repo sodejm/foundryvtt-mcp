@@ -183,6 +183,15 @@ describe('built delegated MCP transport boundary', () => {
     }
   });
 
+  it('denies error diagnosis before processing input even with a trusted caller', async () => {
+    const { client } = await connect();
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('diagnose_errors');
+    for (const args of [{ category: 'module' }, { category: '' }, { timeframe: 3600 }]) {
+      await expect(client.callTool({ name: 'diagnose_errors', arguments: args }))
+        .rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
+    }
+  });
+
   it('keeps service-identity operation available without a caller resolver', async () => {
     const { client, contexts } = await connect({ service: true, resolver: 'missing' });
     expect((await client.listTools()).tools.length).toBeGreaterThan(10);

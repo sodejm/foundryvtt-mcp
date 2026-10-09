@@ -470,11 +470,16 @@ disabled in delegated mode.
 ### Diagnostics
 
 - `get_health_status` — connection and world snapshot health, including stale cache state
-- `get_recent_logs`, `search_logs`, `get_system_health`, `diagnose_errors` — legacy
+- `get_recent_logs`, `search_logs`, `get_system_health` — legacy
   utilities without a verified Foundry diagnostics adapter; registration or a
   configured key does not prove access to Foundry server logs or metrics
 
-`get_capabilities` reports optional Foundry diagnostics as unavailable.
+- `diagnose_errors` — explicit, versioned unavailable result because no verified
+  diagnostic source exists; no inferred health, error counts or troubleshooting
+  suggestions. Optional `category` is validated; unsupported fields are rejected.
+
+`get_capabilities` reports optional Foundry diagnostics as unavailable. See the
+[error diagnosis guide](docs/guides/error-diagnosis.md) for the contract and limits.
 
 ## Available Resources
 
