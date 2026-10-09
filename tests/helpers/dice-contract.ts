@@ -5,6 +5,9 @@ export const validDiceCases = [
   '2d6kh', '2d6kl', '2d6dh', '2d6dl', '0d6', '0d6kh', '2d1kh1',
   '(2d6 + 3) - (1d4 - 2)', '-(2d6kh1 + 3) + (1d4 - 2)',
   '+1d6', '1d6 - -2', '((7 - 3) + 2)', '1000d1', '1d1000000',
+  '1000000000', `${'('.repeat(10)}1${')'.repeat(10)}`,
+  Array(50).fill('1').join('+'), `1d6${' '.repeat(97)}`,
+  `${'-'.repeat(97)}1d6`,
 ];
 
 export const invalidDiceCases: Record<string, unknown>[] = [
@@ -15,7 +18,7 @@ export const invalidDiceCases: Record<string, unknown>[] = [
     '1d6junk', '1d6 +', '()', '(1d6', '1d6)', '1d0', '1001d6', '600d6+600d6',
     '1d1000001', '1000000001', '1.5', 'Infinity', 'NaN', '1e3', '1d6;process.exit()',
     '2d6kh0', '2d6dh0', '2d6dh3', '2d6kl3',
-    `${'('.repeat(11)}1${')'.repeat(11)}`, '1'.repeat(101),
+    `${'('.repeat(11)}1${')'.repeat(11)}`, '1'.repeat(101), `1d6${' '.repeat(98)}`,
   ].map(formula => ({ formula })),
 ];
 

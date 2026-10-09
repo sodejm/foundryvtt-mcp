@@ -100,7 +100,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     return result;
   }
   it.each(validDiceCases)('matches official outcomes with identical controlled RNG: %s', async formula => {
-    const uniforms = Array.from({ length: 1000 }, (_, index) => [0, 0.2, 0.4, 0.9][index % 4]!);
+    const uniforms = Array.from({ length: 1000 }, (_, index) => [0.9, 0, 0.4, 0.2][index % 4]!);
     let consumed = 0;
     const local = evaluateDiceFormula(formula, () => uniforms[consumed++]!);
     const response = await fetch(`${controller}/roll`, { method: 'POST', headers: { 'content-type': 'application/json' },
