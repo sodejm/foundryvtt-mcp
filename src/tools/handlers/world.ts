@@ -10,7 +10,7 @@ import {
   parseReadInput,
   worldSearchInputSchema,
 } from '../../foundry/read-contract.js';
-import { withToolError } from './utils.js';
+import { withToolError, withWorldRead } from './utils.js';
 
 export async function handleSearchWorld(
   args: { query?: string; limit?: number; cursor?: string },
@@ -20,7 +20,7 @@ export async function handleSearchWorld(
   return withToolError('search world', async () => {
     const page = await foundryClient.searchWorldPage(params);
     const structuredContent = collectionSearchSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       scope: 'world',
       ...page,
     });
@@ -43,7 +43,7 @@ export async function handleGetWorldSummary(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('get world summary', async () => {
+  return withWorldRead('get world summary', foundryClient, async () => {
     const worldInfo = await foundryClient.getWorldInfo();
     const counts = foundryClient.getWorldSummary();
 
@@ -71,7 +71,7 @@ export async function handleRefreshWorldData(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('refresh world data', async () => {
+  return withWorldRead('refresh world data', foundryClient, async () => {
     await foundryClient.refreshWorldData();
     const counts = foundryClient.getWorldSummary();
 

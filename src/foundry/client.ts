@@ -49,14 +49,13 @@ import { VISIBILITY_LEVELS } from './types.js';
 import {
   applyDocumentBroadcast,
   applyUserActivity,
+  type DocumentBroadcast,
   parseDocumentBroadcast,
   parseUserActivity,
-  type DocumentBroadcast,
   type UserActivity,
 } from './world-cache.js';
 
-const WORLD_DATA_UNAVAILABLE_MESSAGE =
-  'World data unavailable — no valid snapshot has been loaded';
+const WORLD_DATA_UNAVAILABLE_MESSAGE = 'World data unavailable — no valid snapshot has been loaded';
 
 /** Validate identity before any detail lookup, including callers outside MCP. */
 function assertReadId(id: unknown, field: string): asserts id is string {
@@ -163,7 +162,9 @@ function hasHttpResponse(error: unknown): boolean {
 
 /** Normalizes Foundry timestamps without inventing a new observation time on reads. */
 function normalizeTimestamp(value: unknown): string | null {
-  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
   const timestamp = new Date(value);
   return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
 }
@@ -461,11 +462,15 @@ export class FoundryClient {
       };
 
       const fail = (error: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         clearTimeout(timeout);
         cleanup();
-        if (this.socket === socket) this.detachSocket();
+        if (this.socket === socket) {
+          this.detachSocket();
+        }
         reject(error);
       };
 
@@ -474,7 +479,9 @@ export class FoundryClient {
       }, this.config.timeout);
 
       const onSession = async (data: { userId?: string } | null) => {
-        if (settled || !this.isCurrentSocket(socket, generation, epoch)) return;
+        if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
+          return;
+        }
         if (!data?.userId) {
           fail(new Error('Authentication failed — session event returned no userId'));
           return;
@@ -487,7 +494,9 @@ export class FoundryClient {
         this.attachSocketListeners(socket);
         try {
           await this.refreshWorldData();
-          if (settled || !this.isCurrentSocket(socket, generation, epoch)) return;
+          if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
+            return;
+          }
           settled = true;
           resolve(this.requireWorldData());
         } catch (error) {
@@ -513,11 +522,15 @@ export class FoundryClient {
   }
 
   private isCurrentSocket(socket: Socket, generation: number, epoch: number): boolean {
-    return this.socket === socket && this.socketGeneration === generation && this.socketEpoch === epoch;
+    return (
+      this.socket === socket && this.socketGeneration === generation && this.socketEpoch === epoch
+    );
   }
 
   private cancelWorldRequests(error: Error): void {
-    for (const cancel of this.pendingWorldRequests) cancel(error);
+    for (const cancel of this.pendingWorldRequests) {
+      cancel(error);
+    }
     this.pendingWorldRequests.clear();
   }
 
@@ -532,7 +545,9 @@ export class FoundryClient {
   }
 
   private requireWorldData(): WorldData {
-    if (!this.worldData) throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    if (!this.worldData) {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
     return this.worldData;
   }
 
@@ -553,7 +568,9 @@ export class FoundryClient {
   }
 
   private noteSnapshotMutation(): void {
-    if (!this.worldData || !this.snapshotId) return;
+    if (!this.worldData || !this.snapshotId) {
+      return;
+    }
     this.snapshotId = randomUUID();
     this.snapshotRevision += 1;
     this.snapshotObservedAt = new Date().toISOString();
@@ -564,17 +581,23 @@ export class FoundryClient {
    *
    * Bound field rather than a method so the same reference can be passed to
    * `socket.off()` on teardown. Never throws: a malformed or unmodelled payload
-   * leaves the cache untouched (and stale) rather than taking the connection down.
+   * leaves the cache untouched rather than taking the connection down.
    */
   private onDocumentBroadcast = (payload: unknown): void => {
     const broadcast = parseDocumentBroadcast(payload);
-    if (!broadcast) return;
+    if (!broadcast) {
+      return;
+    }
     this.bufferRefreshEvent({ kind: 'document', value: broadcast });
-    if (!this.worldData) return;
+    if (!this.worldData) {
+      return;
+    }
 
     try {
       const applied = applyDocumentBroadcast(this.worldData, broadcast);
-      if (applied) this.noteSnapshotMutation();
+      if (applied) {
+        this.noteSnapshotMutation();
+      }
       logger.debug(
         applied
           ? `Applied ${broadcast.action} ${broadcast.type} broadcast to cached worldData`
@@ -608,7 +631,9 @@ export class FoundryClient {
       return;
     }
     this.bufferRefreshEvent({ kind: 'activity', value: activity });
-    if (!this.worldData) return;
+    if (!this.worldData) {
+      return;
+    }
 
     if (applyUserActivity(this.worldData, activity)) {
       this.noteSnapshotMutation();
@@ -618,21 +643,6 @@ export class FoundryClient {
     }
   };
 
-  /**
-   * Reacts to the socket dropping on its own — server restart, network loss,
-   * an idle timeout (#217).
-   *
-   * Clears the connected flag so `isConnected()` and `get_health_status` stop
-   * claiming a live link, and marks the cached snapshot stale: nothing is
-   * applying `modifyDocument` broadcasts while the socket is down, so whatever
-   * is in `worldData` from here on is a point-in-time copy, not live state.
-   * The cache is deliberately *kept* rather than dropped — a stale answer with
-   * an honest connection line beats no answer at all — and Socket.IO's own
-   * reconnect logic may bring the link back, at which point `refreshWorldData()`
-   * resyncs it.
-   *
-   * Bound field rather than a method so the same reference reaches `socket.off()`.
-   */
   /**
    * Reacts to socket.io bringing the link back up on its own (#217).
    *
@@ -644,14 +654,15 @@ export class FoundryClient {
    * latched off for the rest of the process while writes and broadcasts were
    * demonstrably working again.
    *
-   * `worldDataStale` is deliberately *not* cleared: broadcasts emitted while
-   * the socket was down were never delivered and are not replayed, so the
-   * cache stays flagged until an explicit `refreshWorldData()`.
+   * Retained data stays stale while automatic snapshot recovery runs. Only a
+   * validated snapshot with buffered events replayed restores current reads.
    *
    * Bound field rather than a method so the same reference reaches `socket.off()`.
    */
   private onSocketConnect = (): void => {
-    if (!this.socket) return;
+    if (!this.socket) {
+      return;
+    }
     this.socketEpoch += 1;
     this.cancelWorldRequests(new Error('Socket connection epoch changed'));
     this.refreshInFlight = null;
@@ -667,6 +678,7 @@ export class FoundryClient {
     logger.info('FoundryVTT socket reconnected — refreshing cached world data');
   };
 
+  /** Retain stale data during an outage and invalidate traversal and pending ACKs. */
   private onSocketDisconnect = (reason?: unknown): void => {
     this.socketEpoch += 1;
     this.cancelWorldRequests(new Error('Socket disconnected during world refresh'));
@@ -681,7 +693,9 @@ export class FoundryClient {
   };
 
   private onSocketSession = (data: { userId?: string } | null): void => {
-    if (!data?.userId || data.userId === this.socketUserId) return;
+    if (!data?.userId || data.userId === this.socketUserId) {
+      return;
+    }
     this.socketUserId = data.userId;
     this.socketEpoch += 1;
     this.cancelWorldRequests(new Error('Authenticated socket session changed'));
@@ -700,7 +714,11 @@ export class FoundryClient {
 
   private bufferRefreshEvent(event: BufferedWorldEvent): void {
     const buffer = this.refreshBuffer;
-    if (!buffer || buffer.generation !== this.socketGeneration || buffer.epoch !== this.socketEpoch) {
+    if (
+      !buffer ||
+      buffer.generation !== this.socketGeneration ||
+      buffer.epoch !== this.socketEpoch
+    ) {
       return;
     }
     if (buffer.events.length >= MAX_REFRESH_EVENT_BUFFER) {
@@ -726,7 +744,9 @@ export class FoundryClient {
     this.refreshInFlight = null;
     this.refreshBuffer = null;
     this.socketUserId = null;
-    if (!socket) return;
+    if (!socket) {
+      return;
+    }
     socket.off('modifyDocument', this.onDocumentBroadcast);
     socket.off('userActivity', this.onUserActivity);
     socket.off('connect', this.onSocketConnect);
@@ -762,7 +782,9 @@ export class FoundryClient {
       typeof value === 'object' && value !== null && 'data' in value
         ? Reflect.get(value, 'data')
         : value;
-    if (typeof candidate !== 'object' || candidate === null) return;
+    if (typeof candidate !== 'object' || candidate === null) {
+      return;
+    }
     const world = Reflect.get(candidate, 'world');
     const directWorldId = Reflect.get(candidate, 'worldId');
     const nestedWorldId =
@@ -776,7 +798,9 @@ export class FoundryClient {
     if (nextWorldId && this.restWorldId && nextWorldId !== this.restWorldId) {
       this.rotateReadSession();
     }
-    if (nextWorldId) this.restWorldId = nextWorldId;
+    if (nextWorldId) {
+      this.restWorldId = nextWorldId;
+    }
   }
 
   /** Non-throwing diagnostics for the source snapshot used by world reads. */
@@ -786,11 +810,7 @@ export class FoundryClient {
       return {
         source: 'rest',
         freshness:
-          this.restObservedAt === null
-            ? 'unavailable'
-            : this.isConnected()
-              ? 'current'
-              : 'stale',
+          this.restObservedAt === null ? 'unavailable' : this.isConnected() ? 'current' : 'stale',
         worldId: this.restWorldId,
         sessionId: this.readSessionId,
         snapshotId: null,
@@ -880,7 +900,9 @@ export class FoundryClient {
       return this.refreshInFlight.promise;
     }
 
-    if (this.worldData) this.worldDataStale = true;
+    if (this.worldData) {
+      this.worldDataStale = true;
+    }
     const buffer: RefreshBuffer = { generation, epoch, events: [], overflowed: false };
     this.refreshBuffer = buffer;
     const promise = this.runWorldRefresh(socket, generation, epoch, buffer);
@@ -888,8 +910,12 @@ export class FoundryClient {
     try {
       await promise;
     } finally {
-      if (this.refreshInFlight?.promise === promise) this.refreshInFlight = null;
-      if (this.refreshBuffer === buffer) this.refreshBuffer = null;
+      if (this.refreshInFlight?.promise === promise) {
+        this.refreshInFlight = null;
+      }
+      if (this.refreshBuffer === buffer) {
+        this.refreshBuffer = null;
+      }
     }
   }
 
@@ -923,8 +949,11 @@ export class FoundryClient {
           throw new Error('World snapshot event buffer overflowed during refresh');
         }
         for (const event of buffer.events) {
-          if (event.kind === 'document') applyDocumentBroadcast(candidate, event.value);
-          else applyUserActivity(candidate, event.value);
+          if (event.kind === 'document') {
+            applyDocumentBroadcast(candidate, event.value);
+          } else {
+            applyUserActivity(candidate, event.value);
+          }
         }
         if (!this.isCurrentSocket(socket, generation, epoch)) {
           throw new Error('World snapshot session changed before publication');
@@ -962,12 +991,17 @@ export class FoundryClient {
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (error?: Error, value?: unknown) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         clearTimeout(timeoutId);
         this.pendingWorldRequests.delete(cancel);
-        if (error) reject(error);
-        else resolve(value);
+        if (error) {
+          reject(error);
+        } else {
+          resolve(value);
+        }
       };
       const cancel = (error: Error) => finish(error);
       const timeoutId = setTimeout(

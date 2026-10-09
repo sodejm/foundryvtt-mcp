@@ -4,7 +4,7 @@ import type { DiagnosticsClient } from '../../../diagnostics/client.js';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { WorldCombat } from '../../../foundry/types.js';
 import { handleReadResource } from '../resources.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 const COMBAT_ID = 'cccccccccccccccc';
 
@@ -37,7 +37,7 @@ const stubDiagnostics = () =>
 const readJson = async (uri: string, client: Partial<FoundryClient>) => {
   const result = await handleReadResource(
     uri,
-    client as unknown as FoundryClient,
+    { getReadMetadata: () => readMetadata(), ...client } as unknown as FoundryClient,
     stubDiagnostics(),
   );
   const text = result.contents[0]?.text ?? '';
@@ -64,7 +64,7 @@ describe('bounded collection resources', () => {
     });
     const payload = await readJson(`foundry://${collection}`, { [method]: fetch });
     expect(payload).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       collection,
       records: [{ id: record._id, documentType }],
       total: 1,

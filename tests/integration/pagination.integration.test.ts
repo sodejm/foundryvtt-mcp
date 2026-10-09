@@ -7,6 +7,7 @@ import Ajv from 'ajv';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FoundryClient } from '../../src/foundry/client.js';
+import { worldReadMetadataSchema } from '../../src/foundry/freshness.js';
 import { createConnectedClient } from './setup.js';
 
 const recordSchema = z.object({
@@ -15,7 +16,7 @@ const recordSchema = z.object({
   name: z.string(),
 }).passthrough();
 const pageSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   records: z.array(recordSchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
@@ -26,6 +27,7 @@ const pageSchema = z.object({
   snapshotId: z.string(),
   expiresAt: z.iso.datetime(),
   consistency: z.literal('snapshot'),
+  readMetadata: worldReadMetadataSchema,
 }).passthrough();
 type Page = z.infer<typeof pageSchema>;
 type DocumentType = 'Actor' | 'Item' | 'JournalEntry' | 'Scene';
@@ -130,10 +132,15 @@ describe('live bounded pagination through MCP stdio', () => {
   async function traverse(name: string, args: Record<string, unknown>, first?: Page) {
     let page = first ?? await search(name, args);
     const snapshot = page.snapshotId;
+    const { freshness: _freshness, respondedAt: _respondedAt, ...provenance } = page.readMetadata;
     const pages: Page[] = [];
     do {
       pages.push(page);
       expect(page.snapshotId).toBe(snapshot);
+      const { freshness, respondedAt, ...source } = page.readMetadata;
+      expect(source).toEqual(provenance);
+      expect(['current', 'stale']).toContain(freshness);
+      expect(Date.parse(respondedAt)).toBeGreaterThanOrEqual(Date.parse(provenance.observedAt!));
       expect(page.page).toBe(pages.length);
       expect(page.complete).toBe(page.nextCursor === null);
       if (page.nextCursor === null) break;
@@ -170,7 +177,9 @@ describe('live bounded pagination through MCP stdio', () => {
     const [created] = await create(type, [{ name: `${prefix} Added ${type}`, type: type === 'Actor' ? 'npc' : 'loot' }]);
     const continuation = { ...args, cursor: first.nextCursor };
     const second = await search(tool, continuation);
-    expect(await search(tool, continuation)).toEqual(second);
+    const replay = await search(tool, continuation);
+    expect({ ...replay, readMetadata: { ...replay.readMetadata, respondedAt: second.readMetadata.respondedAt } }).toEqual(second);
+    expect(second.readMetadata.freshness).toBe('stale');
     const { records } = await traverse(tool, args, first);
     expect(records.map(record => record.id)).toEqual(ids);
     expect(records.find(record => record.id === ids[151])?.name).toBe(`${prefix} Duplicate ${type}`);

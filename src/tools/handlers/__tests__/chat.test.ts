@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleGetChatMessages } from '../chat.js';
+import { readMetadata } from './pagination-fixture.js';
 
 interface MockChatMessage {
   _id: string;
@@ -26,6 +27,7 @@ function buildMessages(count: number): MockChatMessage[] {
 
 function mockFoundryClient(allMessages: MockChatMessage[]): FoundryClient {
   return {
+    getReadMetadata: () => readMetadata(),
     getChatMessages: vi.fn((limit: number) => allMessages.slice(0, limit)),
     getUsers: vi.fn(() => ({ users: [{ _id: 'user-1', name: 'Alice' }] })),
   } as unknown as FoundryClient;

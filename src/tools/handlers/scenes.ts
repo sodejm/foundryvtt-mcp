@@ -5,7 +5,7 @@
  */
 
 import type { FoundryClient } from '../../foundry/client.js';
-import { withToolError } from './utils.js';
+import { withWorldRead } from './utils.js';
 
 /**
  * Handles scene information requests
@@ -18,7 +18,7 @@ export async function handleGetSceneInfo(
 ) {
   const { sceneId } = args;
 
-  return withToolError('get scene info', async () => {
+  return withWorldRead('get scene info', foundryClient, async () => {
     const scene = await foundryClient.getCurrentScene(sceneId);
 
     return {

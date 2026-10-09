@@ -134,9 +134,7 @@ export class SnapshotPaginator {
     const suppliedMetadata =
       typeof readMetadataOrDefaultLimit === 'object' ? readMetadataOrDefaultLimit : undefined;
     const effectiveDefaultLimit =
-      typeof readMetadataOrDefaultLimit === 'number'
-        ? readMetadataOrDefaultLimit
-        : defaultLimit;
+      typeof readMetadataOrDefaultLimit === 'number' ? readMetadataOrDefaultLimit : defaultLimit;
     const currentMetadata: WorldReadMetadata = suppliedMetadata
       ? structuredClone(suppliedMetadata)
       : {

@@ -13,6 +13,7 @@ import {
   handleGetRecentLogs,
   handleGetSystemHealth,
 } from '../diagnostics.js';
+import { readMetadata } from './pagination-fixture.js';
 
 // Minimal LogEntry factory
 function makeEntry(
@@ -332,6 +333,7 @@ describe('handleGetSystemHealth', () => {
 describe('handleGetHealthStatus', () => {
   function worldClient(connected: boolean, stale = false): FoundryClient {
     return {
+      getReadMetadata: () => readMetadata({ freshness: stale ? 'stale' : 'current' }),
       isConnected: () => connected,
       isWorldDataStale: () => stale,
       getWorldInfo: vi.fn().mockResolvedValue({
@@ -388,6 +390,13 @@ describe('handleGetHealthStatus', () => {
 
   it('degrades gracefully when world info is unavailable', async () => {
     const failingWorld = {
+      getReadMetadata: () =>
+        readMetadata({
+          freshness: 'unavailable',
+          snapshotId: null,
+          capturedAt: null,
+          observedAt: null,
+        }),
       isConnected: () => false,
       isWorldDataStale: () => false,
       getWorldInfo: vi.fn().mockRejectedValue(new Error('not connected')),

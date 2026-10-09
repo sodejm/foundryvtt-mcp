@@ -104,12 +104,12 @@ const result = await client.request({
 ### Stable actor/item search-to-detail workflow
 
 Actor/item search and detail tools publish an `outputSchema` and retain text
-alongside version 2 search `structuredContent`. For example, a search can return two
+alongside version 3 search `structuredContent`. For example, a search can return two
 actors with the same name:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "documentType": "Actor",
   "records": [
     {"id": "Actor00000000001", "documentType": "Actor", "name": "Goblin", "type": "npc", "hp": {"value": 0, "max": 7}},
@@ -123,13 +123,24 @@ actors with the same name:
   "complete": true,
   "snapshotId": "opaque-snapshot-id",
   "expiresAt": "2026-10-09T03:00:00.000Z",
-  "consistency": "snapshot"
+  "consistency": "snapshot",
+  "readMetadata": {
+    "source": "socket",
+    "freshness": "current",
+    "worldId": "example-world",
+    "sessionId": "opaque-session-id",
+    "snapshotId": "opaque-source-snapshot-id",
+    "revision": 1,
+    "capturedAt": "2026-10-09T02:55:00.000Z",
+    "observedAt": "2026-10-09T02:55:00.000Z",
+    "respondedAt": "2026-10-09T02:55:01.000Z"
+  }
 }
 ```
 
 Choose the record by `id` and call `get_actor_details` with
 `{"actorId":"Actor00000000002"}`. The detail response has
-`{"schemaVersion":1,"documentType":"Actor","record":{...}}` and verifies that
+`{"schemaVersion":2,"documentType":"Actor","record":{...},"readMetadata":{...}}` and verifies that
 `record.id` equals the requested ID. The item workflow uses `search_items`,
 `documentType: "Item"`, and `get_item_details` with `{"itemId":"..."}`. It
 reads world items only, excluding actor-owned and compendium items. Example IDs
@@ -145,7 +156,7 @@ nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
 Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
 world/search returns `records: []`; an unavailable world snapshot returns an
-error. Detail reads may retain cached data after transport loss; pagination
+error. Reads may retain cached data after transport loss with `freshness: "stale"`; pagination
 cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
 error. This adds no fallback to owned items or compendiums. Socket pagination
@@ -154,13 +165,13 @@ pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
-detail version 1 retains existing mapped system fields without promising a complete
+detail version 2 retains existing mapped system fields without promising a complete
 actor sheet, inventory or cross-system normalization.
 
 ### Traversing bounded searches and resources
 
 All four world searches (`search_actors`, `search_items`, `search_journals`,
-`search_world`) return a version 2 page. Start with a query and optional limit,
+`search_world`) return a version 3 page. Start with a query and optional limit,
 then pass `nextCursor` back to the same tool with the same query, filters and
 limit. Stop at `nextCursor: null` / `complete: true`. Search limits default to
 10 and cannot exceed 100. Numeric page input and unknown parameters are rejected
@@ -178,12 +189,13 @@ cache budget. Each snapshot is capped at 10,000 records and 8 MiB. It never
 silently truncates an oversized snapshot.
 
 Collection resources (`foundry://actors`, `items`, `scenes`, `journals`, `users`)
-now return `{schemaVersion: 2, collection, records, ...pagination, nextUri}`.
+now return `{schemaVersion: 3, collection, records, ...pagination, nextUri}`.
 Start at, for example, `foundry://actors?limit=25` and follow `nextUri` until null.
 The five `resources/templates/list` entries advertise `{?limit,cursor}`.
 Resource limits default to 100, with the same maximum of 100. Old consumers
 must switch from unbounded arrays to `records` and continuation links. Singleton
-resources, such as `foundry://scenes/current`, retain their previous formats.
+resources, such as `foundry://scenes/current`, retain existing fields and add
+`readMetadata`.
 Journal/world searches and non-actor/item resources contain metadata and stable
 IDs rather than full document bodies.
 
@@ -192,6 +204,35 @@ page is too large, reduce the limit; no partial page is returned. REST actor/ite
 adapters fetch every backend page and reject repeated/non-progressing pages or
 inconsistent totals. REST journal/world searches and scene/journal/user pages
 remain unsupported and fail explicitly.
+
+### Consuming freshness metadata
+
+Successful world reads include `readMetadata` with `freshness: "current"` or
+`"stale"`. Without a validated source snapshot they return an error. Presence,
+chat, combat, scene and summary reads follow the same policy as document reads.
+Use `get_health_status` to inspect unavailable cache state; a successful REST
+health request does not mark socket data current.
+
+`worldId`, `sessionId`, source `snapshotId` and `revision` identify the data view.
+`capturedAt` is source capture time; `observedAt` is local source receipt time;
+`respondedAt` is response time. Reading retained data does not refresh its source
+clocks. REST responses without a source capture time use null `capturedAt` and
+`snapshotId`. Pagination has a separate top-level `snapshotId`: its records and
+source metadata remain immutable, and later pages report stale when that source
+has advanced.
+
+After a socket outage the client automatically attempts bounded snapshot recovery.
+`refresh_world_data` explicitly retries the same recovery mechanism. Concurrent
+requests coalesce; retained data stays stale until a complete, validated response
+replaces it. Timeouts, malformed responses and obsolete session responses cannot
+make stale data current. Consumers should discard cached pages and restart
+traversal after world/session changes or invalidated cursor errors.
+
+The default recovery budget is four attempts (one initial attempt plus three
+retries), each with a 10-second acknowledgment timeout and a 1-second retry
+delay. Configure `timeout`, `retryAttempts` and `retryDelay` on
+`FoundryClientConfig` to change this budget. The refresh event buffer is capped
+at 1,000 events; overflow fails recovery without publishing a partial snapshot.
 
 Run `npm run test:reads:coverage` for the full unit suite with 100% statement,
 branch, function and line coverage enforced for the shared read contract and

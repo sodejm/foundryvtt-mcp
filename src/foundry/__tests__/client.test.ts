@@ -432,9 +432,7 @@ describe('FoundryClient', () => {
       await expect(client.searchActors({ query: 'test' })).rejects.toThrow(
         'World data unavailable',
       );
-      await expect(client.searchItems({ query: 'test' })).rejects.toThrow(
-        'World data unavailable',
-      );
+      await expect(client.searchItems({ query: 'test' })).rejects.toThrow('World data unavailable');
     });
 
     it('should reject world info when no snapshot has been captured', async () => {
@@ -791,7 +789,10 @@ describe('FoundryClient', () => {
       attachSocket(socket);
 
       const refresh = client.refreshWorldData();
-      Reflect.get(client, 'onDocumentBroadcast')({
+      Reflect.get(
+        client,
+        'onDocumentBroadcast',
+      )({
         type: 'Actor',
         action: 'update',
         result: [{ _id: ACTOR_ID, name: 'During refresh' }],

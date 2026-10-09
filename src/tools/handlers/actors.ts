@@ -12,8 +12,9 @@ import {
   paginationSchema,
   paginationText,
   parseReadInput,
+  readMetadataText,
 } from '../../foundry/read-contract.js';
-import { withToolError } from './utils.js';
+import { availableReadMetadata, withToolError } from './utils.js';
 
 export async function handleSearchActors(
   args: { query?: string; type?: string; limit?: number; cursor?: string },
@@ -29,7 +30,7 @@ export async function handleSearchActors(
     };
     const result = actorSearchDocumentSchema.parse(await foundryClient.searchActors(searchParams));
     const structuredContent = actorSearchSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       documentType: 'Actor',
       records: result.actors.map(actorReadRecord),
       ...paginationSchema.parse(result),
@@ -76,9 +77,10 @@ export async function handleGetActorDetails(
       throw new Error('Actor response ID mismatch');
     }
     const structuredContent = actorDetailsSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'Actor',
       record: actor,
+      readMetadata: availableReadMetadata(foundryClient),
     });
     const abilities = actor.abilities
       ? Object.entries(actor.abilities)
@@ -103,7 +105,7 @@ export async function handleGetActorDetails(
 **Ability Scores:**
 ${abilities}
 
-**Biography:** ${actor.biography ?? 'No biography available.'}`,
+**Biography:** ${actor.biography ?? 'No biography available.'}\n\n${readMetadataText(structuredContent.readMetadata)}`,
         },
       ],
     };

@@ -18,15 +18,28 @@ const recordIdentity = z.object({
   name: z.string(),
   type: z.string(),
 }).passthrough();
+const restReadMetadata = z.object({
+  source: z.literal('rest'),
+  freshness: z.enum(['current', 'stale']),
+  worldId: z.null(),
+  sessionId: z.string().min(1),
+  snapshotId: z.null(),
+  revision: z.number().int().positive(),
+  capturedAt: z.null(),
+  observedAt: z.string().datetime({ offset: true }),
+  respondedAt: z.string().datetime({ offset: true }),
+}).strict();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
+  readMetadata: restReadMetadata,
   records: z.array(recordIdentity),
   total: z.number(), page: z.number(), limit: z.number(), returnedCount: z.number(),
   nextCursor: z.string().nullable(), complete: z.boolean(),
   snapshotId: z.string(), expiresAt: z.string(), consistency: z.literal('snapshot'),
 }).passthrough();
 const detailEnvelope = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
+  readMetadata: restReadMetadata,
   record: recordIdentity,
 }).passthrough();
 
@@ -223,7 +236,12 @@ describe('built MCP CLI structured read workflow', () => {
       collection.get(expected[151]!)!.name = 'A renamed record';
       const args = { limit: 100, cursor: first.nextCursor! };
       const second = searchEnvelope.parse((await call(name, args)).structured);
-      expect(searchEnvelope.parse((await call(name, args)).structured)).toEqual(second);
+      const replay = searchEnvelope.parse((await call(name, args)).structured);
+      expect(replay).toEqual({ ...second, readMetadata: {
+        ...second.readMetadata, respondedAt: replay.readMetadata.respondedAt,
+      } });
+      expect(Date.parse(replay.readMetadata.respondedAt))
+        .toBeGreaterThanOrEqual(Date.parse(second.readMetadata.respondedAt));
       const third = searchEnvelope.parse((await call(name, { limit: 100, cursor: second.nextCursor! })).structured);
       expect([...first.records, ...second.records, ...third.records].map(record => record.id)).toEqual(expected);
       expect(second.records.find(record => record.id === deletedId)).toBeDefined();
@@ -231,6 +249,13 @@ describe('built MCP CLI structured read workflow', () => {
       const fresh = searchEnvelope.parse((await call(name, { limit: 100 })).structured);
       expect(fresh.snapshotId).not.toBe(first.snapshotId);
       expect(fresh.records[0]?.id).toBe('zzzzzzzzzzzzzzzz');
+      expect(fresh.readMetadata.revision).toBeGreaterThan(first.readMetadata.revision);
+      expect(fresh.readMetadata.sessionId).toBe(first.readMetadata.sessionId);
+      const superseded = searchEnvelope.parse((await call(name, args)).structured);
+      expect(superseded.readMetadata).toMatchObject({
+        ...first.readMetadata, freshness: 'stale',
+        respondedAt: superseded.readMetadata.respondedAt,
+      });
     },
   );
 

@@ -11,7 +11,7 @@ import {
   parseReadInput,
   worldSearchInputSchema,
 } from '../../foundry/read-contract.js';
-import { withToolError } from './utils.js';
+import { withToolError, withWorldRead } from './utils.js';
 
 export async function handleSearchJournals(
   args: { query?: string; limit?: number; cursor?: string },
@@ -21,7 +21,7 @@ export async function handleSearchJournals(
   return withToolError('search journals', async () => {
     const page = await foundryClient.searchJournalsPage(params);
     const structuredContent = collectionSearchSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       scope: 'journals',
       ...page,
     });
@@ -41,7 +41,7 @@ export async function handleSearchJournals(
 }
 
 export async function handleGetJournal(args: { journalId: string }, foundryClient: FoundryClient) {
-  return withToolError('get journal', async () => {
+  return withWorldRead('get journal', foundryClient, async () => {
     const journal = foundryClient.getJournal(args.journalId);
 
     if (!journal) {

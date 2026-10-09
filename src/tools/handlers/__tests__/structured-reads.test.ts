@@ -5,7 +5,7 @@ import type { FoundryClient } from '../../../foundry/client.js';
 import { getAllTools } from '../../definitions.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
 import { handleGetItemDetails, handleSearchItems } from '../items.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 const A = 'Actor00000000001';
 const B = 'Actor00000000002';
@@ -32,7 +32,7 @@ const item = {
   identified: false,
 };
 function clientStub(data: Record<string, unknown>): FoundryClient {
-  return data as unknown as FoundryClient;
+  return { getReadMetadata: () => readMetadata(), ...data } as unknown as FoundryClient;
 }
 const surfaces = [
   {
@@ -78,7 +78,7 @@ for (const surface of surfaces) {
       });
       const search = await surface.search({}, client);
       expect(search.structuredContent).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         documentType: surface.documentType,
         records: [{ id: surface.sample._id }, { id: surface.second }],
       });

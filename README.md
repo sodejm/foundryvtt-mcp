@@ -153,11 +153,11 @@ Ask your AI assistant things like:
 
 `search_actors`, `get_actor_details`, `search_items` and `get_item_details`
 retain readable `content` text and add typed MCP `structuredContent`, validated
-against the `outputSchema` advertised by `tools/list`. Version 2 search results
+against the `outputSchema` advertised by `tools/list`. Version 3 search results
 contain `schemaVersion`, `documentType`, `records`, `total`, `page`, `limit`,
 `returnedCount`, `nextCursor`, `complete`, `snapshotId`, `expiresAt` and
-`consistency: "snapshot"`. Details remain version 1 and contain `schemaVersion`,
-`documentType` and `record`. Every actor/item record has
+`consistency: "snapshot"`. Version 2 details contain `schemaVersion`,
+`documentType` and `record`. Both include `readMetadata`. Every actor/item record has
 `id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
 optional values are omitted; zero, false and empty strings remain real values.
 Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
@@ -216,6 +216,37 @@ are capped at 10,000 records and 8 MiB, with at most 32 retained per client
 within an aggregate 8 MiB cache budget;
 evicted snapshots require a new first-page call.
 
+### World freshness and recovery
+
+World reads include `readMetadata` in structured results and readable freshness
+text. A validated socket snapshot is `current` while its live stream is connected.
+After transport loss, retained records are `stale`; reads still succeed and label
+them accordingly. Without a validated snapshot, reads fail as unavailable rather
+than returning an empty world. Health diagnostics can report `unavailable` without
+requiring a successful world read.
+
+Metadata identifies `source`, `worldId`, `sessionId`, source `snapshotId` and
+`revision`. `capturedAt` records source capture, `observedAt` records local receipt
+of source data, and `respondedAt` records the response. Repeated reads advance
+only `respondedAt`. A page's top-level `snapshotId` identifies its immutable
+pagination snapshot; `readMetadata.snapshotId` identifies the source snapshot.
+Continuation pages retain their captured source metadata and become `stale`
+when the live source advances.
+
+Socket reconnection automatically requests and validates a replacement snapshot.
+Manual `refresh_world_data` uses the same bounded recovery path. Existing data
+remains stale until replacement succeeds; failed or timed-out recovery does not
+promote it to current. Recovery coalesces overlapping requests and rejects late
+responses from older sessions. Disconnects and world/session changes invalidate
+pagination cursors. REST health availability is reported separately and does not
+establish that the socket cache is current.
+
+By default, recovery allows three retries after the initial attempt, with a
+10-second acknowledgment timeout per attempt and a 1-second delay between
+attempts. `FoundryClientConfig` can override these limits. Recovery buffers at
+most 1,000 incoming events; overflow aborts recovery and leaves retained data
+stale until a subsequent refresh succeeds.
+
 Socket.IO pagination currently requires a GM session while player visibility
 filtering is developed. REST actor/item pagination uses the authenticated
 backend's visible collection and requires working backend pagination; it rejects
@@ -248,8 +279,8 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 
 - `search_world` — full-text search across all game entities
 - `get_world_summary` — overview of the current world state
-- `refresh_world_data` — reload world data from FoundryVTT; needed after a dropped
-  connection, whose missed updates are never replayed into the cache
+- `refresh_world_data` — request a validated replacement world snapshot; also
+  available to retry automatic reconnect recovery
 
 ### Game Mechanics
 
@@ -287,13 +318,13 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 - `foundry://world/settings` — world and campaign settings
 - `foundry://system/diagnostics` — system diagnostics (requires REST API module)
 
-The five collection resources return version 2 envelopes with `records`, the
+The five collection resources return version 3 envelopes with `records`, the
 same snapshot metadata as searches, and `nextUri` (null on the last page).
 Their default page size is 100. Follow `nextUri` or use the advertised resource
 template `foundry://actors{?limit,cursor}` (and its item/scene/journal/user
 equivalents). For example, start at `foundry://actors?limit=25`. Consumers of the
 former unbounded arrays must migrate to `records` and follow every page. The
-singleton resources keep their existing response formats.
+singleton resources retain their existing fields and add `readMetadata`.
 
 ## Troubleshooting
 

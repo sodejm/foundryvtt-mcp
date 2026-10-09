@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { ActorSearchResult, FoundryActor } from '../../../foundry/types.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 function getText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -129,6 +129,7 @@ describe('handleGetActorDetails', () => {
   it('returns formatted actor details on happy path', async () => {
     const actor = buildActor({ name: 'Legolas', type: 'character', level: 7 });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
@@ -164,6 +165,7 @@ describe('handleGetActorDetails', () => {
   it('shows fallback text when abilities are missing', async () => {
     const actor = buildActor({ abilities: undefined });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
@@ -178,6 +180,7 @@ describe('handleGetActorDetails', () => {
       abilities: { str: { value: 8, mod: -1 } },
     });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getActor: vi.fn().mockResolvedValue(actor),
     } as unknown as FoundryClient;
 
@@ -189,6 +192,7 @@ describe('handleGetActorDetails', () => {
 
   it('wraps fetch errors in McpError', async () => {
     const client = {
+      getReadMetadata: () => readMetadata(),
       getActor: vi.fn().mockRejectedValue(new Error('not found')),
     } as unknown as FoundryClient;
 

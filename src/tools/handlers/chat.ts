@@ -3,13 +3,13 @@
  */
 
 import type { FoundryClient } from '../../foundry/client.js';
-import { withToolError } from './utils.js';
+import { withWorldRead } from './utils.js';
 
 export async function handleGetChatMessages(
   args: { limit?: number },
   foundryClient: FoundryClient,
 ) {
-  return withToolError('get chat messages', async () => {
+  return withWorldRead('get chat messages', foundryClient, async () => {
     const limit = Math.min(args.limit ?? 20, 100);
     const messages = foundryClient.getChatMessages(limit);
 

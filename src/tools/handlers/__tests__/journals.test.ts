@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleGetJournal, handleSearchJournals } from '../journals.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 interface MockJournal {
   _id: string;
@@ -32,7 +32,7 @@ describe('handleSearchJournals', () => {
       searchJournalsPage,
     } as unknown as FoundryClient);
     expect(result.structuredContent).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       scope: 'journals',
       records,
       total: 1,
@@ -89,6 +89,7 @@ describe('handleGetJournal', () => {
         ],
       };
       const client = {
+        getReadMetadata: () => readMetadata(),
         getJournal: vi.fn((_id: string) => journal),
       } as unknown as FoundryClient;
 
@@ -108,6 +109,7 @@ describe('handleGetJournal', () => {
     it('falls back to "No pages." when journal has no pages', async () => {
       const journal: MockJournal = { _id: 'jrnl-2', name: 'Empty', pages: [] };
       const client = {
+        getReadMetadata: () => readMetadata(),
         getJournal: vi.fn(() => journal),
       } as unknown as FoundryClient;
 
@@ -122,6 +124,7 @@ describe('handleGetJournal', () => {
   describe('edge cases', () => {
     it('throws McpError when journal not found', async () => {
       const client = {
+        getReadMetadata: () => readMetadata(),
         getJournal: vi.fn(() => undefined),
       } as unknown as FoundryClient;
 
@@ -145,6 +148,7 @@ describe('handleGetJournal', () => {
         ],
       };
       const client = {
+        getReadMetadata: () => readMetadata(),
         getJournal: vi.fn(() => journal),
       } as unknown as FoundryClient;
 

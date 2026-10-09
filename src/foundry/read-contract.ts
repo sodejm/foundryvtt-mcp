@@ -1,6 +1,12 @@
 /** World-document read contracts shared by runtime validation and MCP schemas. */
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { type WorldReadMetadata, worldReadMetadataSchema } from './freshness.js';
+
+// Successful reads require an established source; health can also report unavailable.
+const availableWorldReadMetadataSchema = worldReadMetadataSchema.extend({
+  freshness: z.enum(['current', 'stale']),
+});
 
 /** Matches the existing Foundry document-ID boundary; UUIDs are not accepted as IDs. */
 export const FOUNDRY_ID_PATTERN = /^[a-zA-Z0-9]{16}$/;
@@ -127,6 +133,7 @@ export const paginationShape = {
   snapshotId: z.string(),
   expiresAt: z.iso.datetime(),
   consistency: z.literal('snapshot'),
+  readMetadata: availableWorldReadMetadataSchema,
 };
 export const paginationSchema = z.object(paginationShape);
 const searchInput = {
@@ -175,7 +182,7 @@ export function parseReadInput<T extends z.ZodType>(schema: T, value: unknown): 
   return result.data;
 }
 export function paginationText(page: z.infer<typeof paginationSchema>): string {
-  return `**Page:** ${page.page} | **Limit:** ${page.limit} | **Returned:** ${page.returnedCount}/${page.total} | **Complete:** ${page.complete}\n**Next cursor:** ${page.nextCursor ?? 'none'}\n**Snapshot expires:** ${page.expiresAt}`;
+  return `**Page:** ${page.page} | **Limit:** ${page.limit} | **Returned:** ${page.returnedCount}/${page.total} | **Complete:** ${page.complete}\n**Next cursor:** ${page.nextCursor ?? 'none'}\n**Snapshot expires:** ${page.expiresAt}\n${readMetadataText(page.readMetadata)}`;
 }
 export const actorSearchDocumentSchema = z.object({
   actors: z.array(actorDocumentSchema),
@@ -186,13 +193,13 @@ export const itemSearchDocumentSchema = z.object({
   ...paginationShape,
 });
 export const actorSearchSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   documentType: z.literal('Actor'),
   records: z.array(actorRecordSchema),
   ...paginationShape,
 });
 export const itemSearchSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   documentType: z.literal('Item'),
   records: z.array(itemRecordSchema),
   ...paginationShape,
@@ -207,7 +214,7 @@ export const collectionRecordSchema = z.strictObject({
   role: z.number().optional(),
 });
 export const collectionSearchSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   scope: z.enum(['journals', 'world']),
   records: z.array(collectionRecordSchema),
   ...paginationShape,
@@ -216,14 +223,16 @@ export const collectionSearchOutputSchema = z.toJSONSchema(collectionSearchSchem
   target: 'draft-7',
 });
 export const actorDetailsSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('Actor'),
   record: actorRecordSchema,
+  readMetadata: availableWorldReadMetadataSchema,
 });
 export const itemDetailsSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('Item'),
   record: itemRecordSchema,
+  readMetadata: availableWorldReadMetadataSchema,
 });
 export const actorSearchOutputSchema = z.toJSONSchema(actorSearchSchema, { target: 'draft-7' });
 export const itemSearchOutputSchema = z.toJSONSchema(itemSearchSchema, { target: 'draft-7' });
@@ -262,4 +271,9 @@ export function actorReadRecord(value: unknown): ActorReadRecord {
 }
 export function itemReadRecord(value: unknown): ItemReadRecord {
   return publicRecord(itemRecordSchema, value, 'Item');
+}
+
+/** Source observation times are distinct from the time this response was emitted. */
+export function readMetadataText(metadata: WorldReadMetadata): string {
+  return `**Freshness:** ${metadata.freshness} | **Source:** ${metadata.source}\n**World:** ${metadata.worldId ?? 'unknown'} | **Session:** ${metadata.sessionId}\n**Source snapshot:** ${metadata.snapshotId ?? 'none'} | **Revision:** ${metadata.revision}\n**Captured:** ${metadata.capturedAt ?? 'unavailable'} | **Observed:** ${metadata.observedAt ?? 'unavailable'}\n**Responded:** ${metadata.respondedAt}`;
 }

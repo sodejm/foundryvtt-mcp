@@ -76,14 +76,14 @@ export const actorTools = [
     name: 'search_actors',
     outputSchema: actorSearchOutputSchema,
     description:
-      'Search world actors by name and type. Returns version 2 structuredContent with stable IDs, mapped stats and bounded snapshot pagination. Follow nextCursor with the same query/type/limit until complete. Default limit 10; maximum 100. Snapshots expire after five minutes; start a new search after expiry. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_actor_details. Missing stats are omitted; zero is preserved.',
+      'Search world actors by name and type. Returns version 3 structuredContent with stable IDs, mapped stats, bounded snapshot pagination and readMetadata freshness/source timestamps. Follow nextCursor with the same query/type/limit until complete. Default limit 10; maximum 100. Snapshots expire after five minutes; start a new search after expiry. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_actor_details. Missing stats are omitted; zero is preserved.',
     inputSchema: actorSearchInputJsonSchema,
   },
   {
     name: 'get_actor_details',
     outputSchema: actorDetailsOutputSchema,
     description:
-      'Read one world actor by its 16-character alphanumeric actorId from search_actors. Returns version 1 structuredContent and text with ID, type and available level, HP, AC, ability scores and biography. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified. Use for a read-before-write step; actor-owned items and full sheets are outside this read.',
+      'Read one world actor by its 16-character alphanumeric actorId from search_actors. Returns version 2 structuredContent and text with ID, type and available level, HP, AC, ability scores and biography. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps. Use for a read-before-write step; actor-owned items and full sheets are outside this read.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,14 +140,14 @@ export const itemTools = [
     name: 'search_items',
     outputSchema: itemSearchOutputSchema,
     description:
-      'Search world items by name, type and rarity. Returns version 2 structuredContent with stable IDs, mapped fields and bounded snapshot pagination. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
+      'Search world items by name, type and rarity. Returns version 3 structuredContent with stable IDs, mapped fields, bounded snapshot pagination and readMetadata freshness/source timestamps. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
     inputSchema: itemSearchInputJsonSchema,
   },
   {
     name: 'get_item_details',
     outputSchema: itemDetailsOutputSchema,
     description:
-      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 1 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified.',
+      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 2 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -491,7 +491,7 @@ export const diagnosticsTools = [
   {
     name: 'get_health_status',
     description:
-      "Get a combined health report: MCP-to-FoundryVTT connection state, world title/system/core version, and the server's health status with its active/total user counts, uptime, heap memory and recent error/warning counts. The world section is prefixed with a stale marker when the cached snapshot stopped following live document changes - typically a dropped connection, whose missed updates are never replayed - and refresh_world_data resyncs it. The connection line is a live read of the socket on the default Socket.IO transport, so it follows a link that drops or comes back in both directions; with FOUNDRY_API_KEY set there is no socket and it reports the outcome of the last REST request instead, not a live probe, so a server that went away between requests still reads as connected until the next request fails. Uptime and memory are omitted when the server does not report them; CPU, disk and playtime are not reported at all. Degrades gracefully - sections that need the REST API module (FOUNDRY_API_KEY) report as unavailable rather than failing. Use when: first checking which world is loaded and whether the server reports itself healthy.",
+      "Get a combined health report: MCP-to-FoundryVTT connection state, world title/system/core version, and the server's health status with its active/total user counts, uptime, heap memory and recent error/warning counts. The world section reports current, stale, or unavailable data with source, world/session identity, snapshot revision, capture/observation times, and response time. Retained data stays stale during bounded automatic recovery after reconnect; refresh_world_data retries recovery manually. REST diagnostics are reported separately from socket snapshot freshness. The connection line is a live read of the socket on the default Socket.IO transport, so it follows a link that drops or comes back in both directions; with FOUNDRY_API_KEY set there is no socket and it reports the outcome of the last REST request instead, not a live probe, so a server that went away between requests still reads as connected until the next request fails. Uptime and memory are omitted when the server does not report them; CPU, disk and playtime are not reported at all. Degrades gracefully - sections that need the REST API module (FOUNDRY_API_KEY) report as unavailable rather than failing. Use when: first checking which world is loaded and whether the server reports itself healthy.",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -695,7 +695,7 @@ export const userTools = [
   {
     name: 'get_users',
     description:
-      "List the world's users with their roles and online status. Online status is live while the Socket.IO connection is up: FoundryVTT's userActivity broadcasts are applied to the cached presence list as users connect and disconnect. It stops tracking if that connection drops and the missed changes are not replayed - get_health_status shows the snapshot as stale, and refresh_world_data resyncs it. Use when: you need to know which user holds the GM role, or who is connected right now.",
+      "List the world's users with their roles and online status. Online status is live while the Socket.IO connection is up: FoundryVTT's userActivity broadcasts are applied to the cached presence list as users connect and disconnect. If the connection drops, retained presence is marked stale until automatic reconnect recovery or refresh_world_data validates a new snapshot. The response includes freshness and source timestamps; unavailable snapshots fail explicitly. Use when: you need to know which user holds the GM role, or who is connected right now.",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -711,7 +711,7 @@ export const journalTools = [
     name: 'search_journals',
     outputSchema: collectionSearchOutputSchema,
     description:
-      'Search journal names and page content. Returns version 2 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page text.',
+      'Search journal names and page content. Returns version 3 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page text.',
     inputSchema: worldSearchInputJsonSchema,
   },
   {
@@ -790,7 +790,7 @@ export const worldTools = [
     name: 'search_world',
     outputSchema: collectionSearchOutputSchema,
     description:
-      'Search actor, item, scene and journal names in one ordered stream. Returns version 2 metadata records with stable IDs and bounded snapshot pagination. Omit query to enumerate; limit applies to the whole page. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported.',
+      'Search actor, item, scene and journal names in one ordered stream. Returns version 3 metadata records with stable IDs, bounded snapshot pagination and readMetadata freshness/source timestamps. Omit query to enumerate; limit applies to the whole page. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported.',
     inputSchema: worldSearchInputJsonSchema,
   },
   {
@@ -805,7 +805,7 @@ export const worldTools = [
   {
     name: 'refresh_world_data',
     description:
-      'Force a re-fetch of the cached world data from the FoundryVTT server. Reads are normally served from a cache that follows live document changes for as long as the connection holds, so this is rarely needed. Use when: the connection dropped and came back - the cache stopped following changes while it was down and nothing replays them, so it stays a point-in-time copy until this runs, and get_health_status flags it as stale until then; or a read still looks stale after an out-of-band change - notably edits to unlinked (synthetic) token actors, which the live update feed does not cover. Refreshes the cache only; it does not modify the world.',
+      'Force a re-fetch of the cached world data from the FoundryVTT server. Reads are normally served from a cache that follows live document changes for as long as the connection holds, so this is rarely needed. Use when: the connection dropped and came back - automatic reconnect recovery has not yet restored a current snapshot; or a read still looks stale after an out-of-band change - notably edits to unlinked (synthetic) token actors, which the live update feed does not cover. Refreshes the cache only; it does not modify the world.',
     inputSchema: {
       type: 'object',
       properties: {},

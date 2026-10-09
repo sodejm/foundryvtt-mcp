@@ -12,8 +12,9 @@ import {
   paginationSchema,
   paginationText,
   parseReadInput,
+  readMetadataText,
 } from '../../foundry/read-contract.js';
-import { withToolError } from './utils.js';
+import { availableReadMetadata, withToolError } from './utils.js';
 
 export async function handleSearchItems(
   args: { query?: string; type?: string; rarity?: string; limit?: number; cursor?: string },
@@ -30,7 +31,7 @@ export async function handleSearchItems(
     };
     const result = itemSearchDocumentSchema.parse(await foundryClient.searchItems(searchParams));
     const structuredContent = itemSearchSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       documentType: 'Item',
       records: result.items.map(itemReadRecord),
       ...paginationSchema.parse(result),
@@ -78,9 +79,10 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
       throw new Error('Item response ID mismatch');
     }
     const structuredContent = itemDetailsSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'Item',
       record: item,
+      readMetadata: availableReadMetadata(foundryClient),
     });
     const price = item.price ? `${item.price.value} ${item.price.denomination}` : 'Unknown price';
     return {
@@ -98,7 +100,7 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
 **Equipped:** ${item.equipped ?? 'Unknown'}
 **Identified:** ${item.identified ?? 'Unknown'}
 
-**Description:** ${item.description ?? 'No description available.'}`,
+**Description:** ${item.description ?? 'No description available.'}\n\n${readMetadataText(structuredContent.readMetadata)}`,
         },
       ],
     };

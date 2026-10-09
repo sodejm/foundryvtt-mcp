@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleSearchItems } from '../items.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 interface MockItem {
   _id: string;
@@ -30,6 +30,7 @@ function mockFoundryClient(result: {
 }): { client: FoundryClient; calls: { params: MockSearchParams[] } } {
   const calls = { params: [] as MockSearchParams[] };
   const client = {
+    getReadMetadata: () => readMetadata(),
     searchItems: vi.fn(async (params: MockSearchParams) => {
       calls.params.push(params);
       return { ...result, ...paginationMetadata(result.items.length, result.total, result.limit) };

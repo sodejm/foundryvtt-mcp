@@ -10,6 +10,7 @@ import Ajv from 'ajv';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FoundryClient } from '../../src/foundry/client.js';
+import { worldReadMetadataSchema } from '../../src/foundry/freshness.js';
 import type { WorldActor, WorldItem } from '../../src/foundry/types.js';
 import { createConnectedClient } from './setup.js';
 
@@ -21,12 +22,14 @@ const fixtureRecord = z.object({
   uuid: z.string().optional(),
 }).passthrough();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   records: z.array(fixtureRecord),
+  readMetadata: worldReadMetadataSchema,
 }).passthrough();
 const detailEnvelope = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   record: fixtureRecord,
+  readMetadata: worldReadMetadataSchema,
 }).passthrough();
 const foundryId = /^[A-Za-z0-9]{16}$/;
 
@@ -121,6 +124,12 @@ describe('live structured actor/item reads through MCP stdio', () => {
     ).toBe(true);
     const text = result.content.flatMap(block =>
       block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('\n');
+    const metadata = worldReadMetadataSchema.parse(result.structuredContent?.readMetadata);
+    expect(metadata).toMatchObject({ source: 'socket', freshness: 'current', worldId: 'test1world' });
+    expect(metadata.snapshotId).not.toBeNull();
+    expect(metadata.capturedAt).not.toBeNull();
+    expect(metadata.observedAt).not.toBeNull();
+    expect(text).toContain(metadata.sessionId);
     return { structured: result.structuredContent, text };
   }
 
