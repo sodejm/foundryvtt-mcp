@@ -51,6 +51,9 @@ export interface Tool {
   /** JSON Schema for input validation */
   readonly inputSchema: object;
 
+  /** JSON Schema for structured output, when the tool returns one */
+  readonly outputSchema?: object;
+
   /**
    * Execute the tool with validated arguments
    * @param args - Validated input arguments

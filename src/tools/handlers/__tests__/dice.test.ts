@@ -1,80 +1,117 @@
-/**
- * @fileoverview Unit tests for dice handler — roll_dice formatting
- */
-
-import { describe, expect, it, vi } from 'vitest';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
+import type { DiceRollOutput } from '../../../foundry/dice-contract.js';
+import * as parser from '../../../foundry/dice-formula.js';
 import { handleRollDice } from '../dice.js';
 
-interface MockDiceRoll {
-  formula: string;
-  total: number;
-  breakdown: string;
-  reason?: string;
-  timestamp: string;
-}
-
-function mockFoundryClient(roll: MockDiceRoll): FoundryClient {
+function result(formula = '2d6kh1+3'): DiceRollOutput {
+  const roll = parser.evaluateDiceFormula(formula, () => 0.5);
   return {
-    rollDice: vi.fn(async (_formula: string, _reason?: string) => roll),
-  } as unknown as FoundryClient;
+    schemaVersion: 1,
+    engine: 'local',
+    normalizedFormula: roll.normalizedFormula,
+    dice: roll.dice.map((die, termIndex) => ({ ...die, termIndex })),
+    total: roll.total,
+    breakdown: roll.breakdown,
+    timestamp: '2026-10-09T12:00:00.000Z',
+    fallback: null,
+  };
 }
 
-function getText(result: Awaited<ReturnType<typeof handleRollDice>>): string {
-  return (result as { content: Array<{ type: string; text: string }> }).content[0]?.text ?? '';
+function client(roll: unknown = result()): FoundryClient {
+  return { rollDice: vi.fn().mockResolvedValue(roll) } as unknown as FoundryClient;
 }
 
-describe('handleRollDice', () => {
-  describe('happy path', () => {
-    it('returns formatted result for a basic d20 roll', async () => {
-      const client = mockFoundryClient({
-        formula: '1d20',
-        total: 14,
-        breakdown: '[14]',
-        timestamp: '2024-06-01T12:00:00.000Z',
-      });
+afterEach(() => vi.restoreAllMocks());
 
-      const result = await handleRollDice({ formula: '1d20' }, client);
-      const text = getText(result);
-
-      expect(text).toContain('Dice Roll Result');
-      expect(text).toContain('**Formula:** 1d20');
-      expect(text).toContain('**Total:** 14');
-      expect(text).toContain('**Breakdown:** [14]');
-      expect(text).toContain('**Timestamp:** 2024-06-01T12:00:00.000Z');
-      // No reason supplied — that line should be absent
-      expect(text).not.toContain('**Reason:**');
-      expect(client.rollDice).toHaveBeenCalledWith('1d20', undefined);
-    });
-
-    it('includes the reason line when supplied', async () => {
-      const client = mockFoundryClient({
-        formula: '3d6+4',
-        total: 17,
-        breakdown: '[5,4,4] + 4',
-        reason: 'Damage roll',
-        timestamp: '2024-06-01T12:00:00.000Z',
-      });
-
-      const result = await handleRollDice({ formula: '3d6+4', reason: 'Damage roll' }, client);
-      const text = getText(result);
-
-      expect(text).toContain('**Formula:** 3d6+4');
-      expect(text).toContain('**Total:** 17');
-      expect(text).toContain('**Reason:** Damage roll');
-      expect(client.rollDice).toHaveBeenCalledWith('3d6+4', 'Damage roll');
-    });
+describe('roll_dice shared handler', () => {
+  it.each([
+    'auto',
+    'local',
+    'foundry',
+  ] as const)('passes engine %s and returns identical JSON and structured output', async (engine) => {
+    const roll = {
+      ...result(),
+      engine: engine === 'foundry' ? 'foundry' : 'local',
+      reason: 'attack',
+    };
+    const foundry = client(roll);
+    const response = await handleRollDice(
+      { formula: '2d6kh1+3', reason: 'attack', engine },
+      foundry,
+    );
+    expect(response.structuredContent).toEqual(roll);
+    expect(JSON.parse(response.content[0]?.text ?? '')).toEqual(roll);
+    expect(foundry.rollDice).toHaveBeenCalledExactlyOnceWith('2d6kh1+3', 'attack', engine);
   });
 
-  describe('edge cases', () => {
-    it('propagates errors from the FoundryClient as an McpError', async () => {
-      const client = {
-        rollDice: vi.fn(async () => {
-          throw new Error('Invalid formula');
-        }),
-      } as unknown as FoundryClient;
+  it('defaults the engine and preserves fallback provenance', async () => {
+    const roll = {
+      ...result(),
+      fallback: { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' },
+    };
+    const foundry = client(roll);
+    expect((await handleRollDice({ formula: '2d6kh1+3' }, foundry)).structuredContent).toEqual(
+      roll,
+    );
+    expect(foundry.rollDice).toHaveBeenCalledExactlyOnceWith('2d6kh1+3', undefined, 'auto');
+  });
 
-      await expect(handleRollDice({ formula: 'bogus' }, client)).rejects.toThrow();
+  it.each([
+    {},
+    { formula: 2 },
+    { formula: '' },
+    { formula: ' ' },
+    { formula: 'd6', engine: 'other' },
+    { formula: 'd6', reason: '' },
+    { formula: 'd6', unexpected: true },
+    { formula: 'd6r1' },
+    { formula: 'd6+trash' },
+    { formula: '1000d6' },
+  ])('rejects invalid input before execution: %j', async (args) => {
+    const foundry = client();
+    await expect(handleRollDice(args, foundry)).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
     });
+    expect(foundry.rollDice).not.toHaveBeenCalled();
+  });
+
+  it('does not classify unexpected parser failures as invalid parameters', async () => {
+    const foundry = client();
+    vi.spyOn(parser, 'parseDiceFormula').mockImplementation(() => {
+      throw new Error('parser failed');
+    });
+    await expect(handleRollDice({ formula: 'd6' }, foundry)).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+    });
+    expect(foundry.rollDice).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed execution output instead of publishing a successful result', async () => {
+    const foundry = client({ ...result(), total: '6' });
+    await expect(handleRollDice({ formula: 'd6' }, foundry)).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+    });
+    expect(foundry.rollDice).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an MCP failure without a second roll', async () => {
+    const foundry = client();
+    const error = new McpError(ErrorCode.InvalidParams, 'execution rejected');
+    vi.mocked(foundry.rollDice).mockRejectedValue(error);
+    await expect(handleRollDice({ formula: 'd6' }, foundry)).rejects.toBe(error);
+    expect(foundry.rollDice).toHaveBeenCalledOnce();
+  });
+
+  it('reports uncertain transport failures without a second roll', async () => {
+    const foundry = client();
+    vi.mocked(foundry.rollDice).mockRejectedValue(
+      new Error('no retry or local fallback was attempted'),
+    );
+    await expect(handleRollDice({ formula: 'd6', engine: 'foundry' }, foundry)).rejects.toThrow(
+      'no retry or local fallback',
+    );
+    expect(foundry.rollDice).toHaveBeenCalledOnce();
   });
 });

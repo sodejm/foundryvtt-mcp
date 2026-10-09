@@ -1,11 +1,12 @@
 title = "foundryvtt-mcp gitleaks configuration"
 
-[allowlist]
-  description = "Allow test fixtures and example files"
-  paths = [
-    '''src/__tests__/''',
-    '''src/.+/__tests__/''',
-    '''tests/''',
-    '''\.env\.example$''',
-    '''\.env\.integration\.example$''',
-  ]
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Literal YOUR_API_KEY placeholder in documented curl examples"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^YOUR_API_KEY$''']
+paths = ['''^(?:TROUBLESHOOTING\.md|(?:docs|\.generated-docs)/media/TROUBLESHOOTING\.md|foundry-local-rest-api/README\.md)$''']

@@ -7,7 +7,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 
 ## Features
 
-- **Dice Rolling** — standard RPG notation with any formula
+- **Dice Rolling** — bounded additive formulas, keep/drop modifiers and explicit engine provenance
 - **Data Querying** — search and inspect actors, items, scenes, journals
 - **Game State** — combat tracking, chat messages, user presence
 - **Optional Capabilities** — verified compendium search with typed availability states
@@ -165,14 +165,21 @@ Ask your AI assistant things like:
 
 `search_actors`, `get_actor_details`, `search_items` and `get_item_details`
 retain readable `content` text and add typed MCP `structuredContent`, validated
-against the `outputSchema` advertised by `tools/list`. Version 3 search results
+against the `outputSchema` advertised by `tools/list`. Actor search uses version 3
+and actor details version 2; item search uses version 4 and item details version 3.
+Search results
 contain `schemaVersion`, `documentType`, `records`, `total`, `page`, `limit`,
 `returnedCount`, `nextCursor`, `complete`, `snapshotId`, `expiresAt` and
-`consistency: "snapshot"`. Version 2 details contain `schemaVersion`,
+`consistency: "snapshot"`. Details contain `schemaVersion`,
 `documentType` and `record`. Both include `readMetadata`. Every actor/item record has
 `id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
 optional values are omitted; zero, false and empty strings remain real values.
-Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
+Item `economy` separates bounded source candidates from normalized currencies,
+purchase quantity and rarity values. Explicit statuses distinguish known, missing,
+invalid, not-applicable and unsupported data. Zero remains known; missing prices
+and rarities receive no invented currency or default. Legacy `price`/`rarity`
+aliases appear only for unambiguous known values. See the
+[item economy version matrix and fixture provenance](docs/item-economy-fixtures.md).
 
 Search first, select by ID even when names repeat, then pass that ID to the
 matching detail tool:
@@ -189,8 +196,9 @@ Only 16-character alphanumeric document IDs are accepted, not names or UUIDs.
 World-cache records have verified `Actor.<id>` / `Item.<id>` UUIDs; REST records
 omit UUIDs because the REST payload does not establish their source scope.
 Item details read only the same world-item collection as `search_items`,
-excluding actor-owned and compendium items. Item search applies both type and
-rarity filters to the current world-item view.
+excluding actor-owned and compendium items. Item search applies query, type and canonical rarity filters before pagination
+on both transports. Unsupported system/version or invalid rarity selectors
+return `InvalidParams`; localized labels are not guessed.
 This contract preserves currently mapped fields, not a complete game-system
 sheet or an inventory.
 
@@ -201,6 +209,10 @@ A connected world with no matching documents returns a successful empty
 search; unavailable world data returns an error. REST detail reads use
 `/api/actors/:id` and `/api/items/:id`; a REST module without item-detail support
 returns its backend error rather than silently selecting a same-name item.
+REST item normalization also needs system ID/version from `/api/world`; a missing
+route yields explicit unsupported economy. The live `foundry-rest-api` 3.4.1
+module provides neither `/api/items` nor `/api/world`, so item REST coverage uses
+a synthetic endpoint fixture, not a claim of module compatibility.
 
 Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
@@ -209,7 +221,9 @@ contracts are exported from `foundry/types` and `foundry/read-contract`.
 
 ### Bounded actor sheet and inventory reads
 
-The four actor sheet tools use schema version 1 and preserve the existing
+`get_actor_sheet` and `get_actor_section` use schema version 1;
+`list_actor_items` and `get_actor_item` use version 2 and include the same typed
+item economy as world items. These tools preserve the existing
 `get_actor_details` summary. Start with `get_actor_sheet` to discover the actor's
 system ID/version, supported sections and visible inventory count. Read one
 section at a time with `get_actor_section`; fields identify their source,
@@ -380,8 +394,11 @@ most 1,000 incoming events; overflow aborts recovery and leaves retained data
 stale until a subsequent refresh succeeds.
 
 Service-identity Socket.IO pagination requires a GM session. REST actor/item pagination uses the authenticated
-backend's visible collection and requires working backend pagination; it rejects
-ignored pages, repeated IDs and inconsistent totals. REST journal/world searches
+backend's visible collection. A multi-page REST result requires a backend-issued
+`snapshotId` identifying an immutable collection: the client sends it on subsequent
+requests and requires the same token on every response. Legacy backends without
+this contract support only results completed in one backend page. Changed or missing
+tokens, ignored pages, repeated IDs and inconsistent totals fail the read. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.
 
 ### Authenticated player reads
@@ -436,11 +453,17 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 
 ### Game Mechanics
 
-- `roll_dice` — roll dice; dice terms (`NdS`) and whole numbers joined by `+`/`-`, with
-  unsupported notation (`4d6kh3`, `1d20r1`, `*`) rejected rather than dropped.
-  Parentheses are the one transport difference: FoundryVTT evaluates them when
-  `FOUNDRY_API_KEY` is set, the local roller rejects them otherwise
-- `lookup_rule` — **stub**: returns a templated placeholder, consults no rules source
+- `roll_dice` — evaluate bounded additive dice formulas with parentheses and
+  `kh`, `kl`, `dh`, `dl` modifiers. Select `auto`, `local` or `foundry`; the result
+  identifies the engine that actually evaluated the roll. Unsupported syntax is
+  rejected before rolling, and failed remote attempts are never rolled again.
+  See the [dice contract](docs/guides/dice.md) for grammar, limits and transport behavior.
+- `lookup_rule` — returns a versioned `rulesLookup: unavailable` capability result
+  because no verified rules provider is implemented. Accepts a nonblank `query`
+  up to 256 characters and optional nonblank `system` up to 128 characters;
+  rejects unknown fields. It returns matching JSON text and structured content
+  without generated mechanics or source claims. See the
+  [rule lookup contract](docs/guides/optional-capabilities.md#rule-lookup).
 
 ### Optional Foundry Capabilities
 
@@ -457,19 +480,28 @@ disabled in delegated mode.
 
 ### Content Generation
 
-- `generate_npc` — template text; no verified Foundry-backed generation
-- `generate_loot` — template text; no verified Foundry-backed generation
+- `generate_npc` — structured creative NPC preview with validated level, race and class
+- `generate_loot` — structured fictional loot preview with explicit currency arithmetic and unknown item values
 
-`get_capabilities` reports generation and rules lookup as unavailable.
+Both tools return `persisted: false`, `rulesVerified: false`, limitations and no
+document IDs. They do not modify the world. Verified system generation remains
+unavailable in `get_capabilities`; local creative previews remain available. See
+[content generation](docs/guides/content-generation.md) for inputs, output and
+compatibility changes.
 
 ### Diagnostics
 
 - `get_health_status` — connection and world snapshot health, including stale cache state
-- `get_recent_logs`, `search_logs`, `get_system_health`, `diagnose_errors` — legacy
+- `get_recent_logs`, `search_logs`, `get_system_health` — legacy
   utilities without a verified Foundry diagnostics adapter; registration or a
   configured key does not prove access to Foundry server logs or metrics
 
-`get_capabilities` reports optional Foundry diagnostics as unavailable.
+- `diagnose_errors` — explicit, versioned unavailable result because no verified
+  diagnostic source exists; no inferred health, error counts or troubleshooting
+  suggestions. Optional `category` is validated; unsupported fields are rejected.
+
+`get_capabilities` reports optional Foundry diagnostics as unavailable. See the
+[error diagnosis guide](docs/guides/error-diagnosis.md) for the contract and limits.
 
 ## Available Resources
 

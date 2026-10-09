@@ -5,6 +5,12 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { AttributePatch, FoundryClient } from '../foundry/client.js';
+import { parseErrorDiagnosisInput } from '../foundry/diagnosis-contract.js';
+import {
+  parseLootGenerationInput,
+  parseNpcGenerationInput,
+} from '../foundry/generation-contract.js';
+import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type {
   ActorItemCreateSource,
   DocumentVisibility,
@@ -41,7 +47,7 @@ import {
 } from './handlers/diagnostics.js';
 // Import all tool handlers
 import { handleRollDice } from './handlers/dice.js';
-import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
+import { handleGenerateLoot, handleGenerateNPC } from './handlers/generation.js';
 import {
   handleCreateActorItem,
   handleDeleteActorItem,
@@ -55,6 +61,7 @@ import {
   handleSearchJournals,
 } from './handlers/journals.js';
 import { handleReadResource } from './handlers/resources.js';
+import { handleLookupRule } from './handlers/rules.js';
 import {
   handleGetSceneInfo,
   handleGetSceneSpatial,
@@ -111,10 +118,7 @@ export async function routeToolRequest(
   switch (name) {
     // Dice tools
     case 'roll_dice':
-      if (!('formula' in args) || typeof args.formula !== 'string') {
-        throw new Error('Missing required parameter: formula');
-      }
-      return handleRollDice(args as { formula: string; reason?: string }, foundryClient);
+      return handleRollDice(args, foundryClient);
 
     // Actor tools
     case 'search_actors':
@@ -309,20 +313,14 @@ export async function routeToolRequest(
 
     // Generation tools
     case 'generate_npc':
-      return handleGenerateNPC(
-        args as { level?: number; race?: string; class?: string },
-        foundryClient,
-      );
+      parseNpcGenerationInput(args);
+      return handleGenerateNPC(args);
     case 'generate_loot':
-      return handleGenerateLoot(
-        args as { challengeRating?: number; treasureType?: string },
-        foundryClient,
-      );
+      parseLootGenerationInput(args);
+      return handleGenerateLoot(args);
     case 'lookup_rule':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleLookupRule(args as { query: string; system?: string }, foundryClient);
+      parseRuleLookupInput(args);
+      return handleLookupRule(args, foundryClient);
 
     // Diagnostics tools (require REST API module)
     case 'get_recent_logs':
@@ -338,7 +336,8 @@ export async function routeToolRequest(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      parseErrorDiagnosisInput(args);
+      return handleDiagnoseErrors(args);
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 
