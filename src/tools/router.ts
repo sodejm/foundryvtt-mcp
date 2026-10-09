@@ -55,7 +55,12 @@ import {
   handleSearchJournals,
 } from './handlers/journals.js';
 import { handleReadResource } from './handlers/resources.js';
-import { handleGetSceneInfo } from './handlers/scenes.js';
+import {
+  handleGetSceneInfo,
+  handleGetSceneSpatial,
+  handleGetSceneToken,
+  handleListSceneTokens,
+} from './handlers/scenes.js';
 import { handleApplyStatusEffect, handleMoveToken } from './handlers/token-mutations.js';
 import { handleGetUsers } from './handlers/users.js';
 import {
@@ -196,6 +201,12 @@ export async function routeToolRequest(
     // Scene tools
     case 'get_scene_info':
       return handleGetSceneInfo(args, foundryClient);
+    case 'get_scene_spatial':
+      return handleGetSceneSpatial(args, foundryClient);
+    case 'list_scene_tokens':
+      return handleListSceneTokens(args, foundryClient);
+    case 'get_scene_token':
+      return handleGetSceneToken(args, foundryClient);
 
     // Combat tools
     case 'get_combat_state':

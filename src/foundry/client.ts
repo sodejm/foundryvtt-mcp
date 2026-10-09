@@ -65,6 +65,15 @@ import {
   itemDocumentSchema,
 } from './read-contract.js';
 import { CompendiumRestAdapter } from './rest-compendium.js';
+import {
+  projectSceneSpatial,
+  type SceneIdentity,
+  type SceneSpatialOutput,
+  type SceneSpatialProjection,
+  type SceneTokenListOutput,
+  type SceneTokenOutput,
+  type SceneTokenSummary,
+} from './scene-spatial-contract.js';
 import type {
   ActorAttributeUpdateResult,
   ActorItemCreateSource,
@@ -524,6 +533,13 @@ export interface ListActorItemsParams {
   cursor?: string;
 }
 
+export interface ListSceneTokensParams {
+  sceneId?: string;
+  query?: string;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface SearchCollectionParams {
   query?: string | undefined;
   limit?: number | undefined;
@@ -566,6 +582,7 @@ export class FoundryClient {
   private restLinkLive = true;
   private readonly paginator = new SnapshotPaginator();
   private readonly compendiumPaginator = new SnapshotPaginator();
+  private readonly sceneTokenPaginator = new SnapshotPaginator();
   private readonly compendiumAdapter: CompendiumRestAdapter;
   private paginationSession = randomUUID();
   private restStatusIdentity = 'not-connected';
@@ -740,12 +757,14 @@ export class FoundryClient {
         throw new CallerAuthorizationError();
       }
       const view = deepFreeze(projectWorldData(snapshot, caller));
+      const spatialView = deepFreeze(projectSceneSpatial(snapshot, caller));
       const authorizationFingerprint = createHash('sha256')
-        .update(JSON.stringify({ context: validated, view }))
+        .update(JSON.stringify({ context: validated, view, spatialView }))
         .digest('hex');
       state = Object.freeze({
         context: validated,
         view,
+        spatialView,
         authorizationFingerprint,
         capturedAt: new Date().toISOString(),
       });
@@ -1123,6 +1142,7 @@ export class FoundryClient {
   private resetPaginationSession(): void {
     this.paginator.clear();
     this.compendiumPaginator.clear();
+    this.sceneTokenPaginator.clear();
     this.paginationSession = randomUUID();
   }
 
@@ -2448,6 +2468,129 @@ export class FoundryClient {
   // ==========================================================================
   // Scene methods
   // ==========================================================================
+
+  private sceneSpatialProjection(): SceneSpatialProjection {
+    this.assertReadSurfaceAllowed('scene-spatial');
+    if (this.config.apiKey) {
+      throw new Error('Structured scene spatial reads are unsupported by the REST backend');
+    }
+    if (this.isDelegatedMode()) {
+      return this.requireDelegatedState().spatialView;
+    }
+    const source = this.requireWorldData();
+    const callers = source.users.filter((candidate) => candidate._id === source.userId);
+    const caller = callers.length === 1 ? callers[0] : undefined;
+    if (
+      !caller ||
+      !Number.isInteger(caller.role) ||
+      caller.role <= 0 ||
+      caller.role > 4 ||
+      typeof caller.name !== 'string' ||
+      caller.name.length === 0 ||
+      typeof caller.color !== 'string'
+    ) {
+      throw new Error('Scene spatial read unavailable');
+    }
+    return projectSceneSpatial(source, caller);
+  }
+
+  private selectSpatialScene(
+    projection: SceneSpatialProjection,
+    sceneId: string | undefined,
+  ): SceneSpatialProjection['scenes'][number] {
+    const selected = sceneId
+      ? projection.scenes.find((entry) => entry.scene.id === sceneId)
+      : projection.scenes.find((entry) => entry.scene.active);
+    if (!selected) {
+      throw new Error('Scene spatial read unavailable');
+    }
+    return selected;
+  }
+
+  private sceneIdentity(scene: SceneSpatialProjection['scenes'][number]['scene']): SceneIdentity {
+    return { id: scene.id, uuid: scene.uuid, name: scene.name, active: scene.active };
+  }
+
+  getSceneSpatial(sceneId?: string): SceneSpatialOutput {
+    if (sceneId !== undefined) {
+      assertReadId(sceneId, 'sceneId');
+    }
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), sceneId);
+    return {
+      schemaVersion: 1,
+      documentType: 'Scene',
+      scene: selected.scene,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  listSceneTokens(params: ListSceneTokensParams): SceneTokenListOutput {
+    if (params.sceneId !== undefined) {
+      assertReadId(params.sceneId, 'sceneId');
+    }
+    validateBoundedText(params.query, 'query');
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), params.sceneId);
+    const identity = this.sceneIdentity(selected.scene);
+    const contentFingerprint = createHash('sha256')
+      .update(JSON.stringify({ scene: selected.scene, tokens: selected.tokens }))
+      .digest('hex');
+    const context = this.paginationContext('scene-token-list', {
+      sceneSelector: params.sceneId === undefined ? 'active' : 'explicit',
+      requestedSceneId: params.sceneId,
+      resolvedSceneId: selected.scene.id,
+      query: params.query,
+      contentFingerprint,
+    });
+    let records: SceneTokenSummary[] | undefined;
+    if (params.cursor === undefined) {
+      const query = params.query?.normalize('NFKC').toLowerCase();
+      records = selected.tokens
+        .filter((token) => !query || token.name.normalize('NFKC').toLowerCase().includes(query))
+        .sort((left, right) => {
+          const leftName = left.name.normalize('NFKC').toLowerCase();
+          const rightName = right.name.normalize('NFKC').toLowerCase();
+          return leftName < rightName
+            ? -1
+            : leftName > rightName
+              ? 1
+              : left.id.localeCompare(right.id);
+        })
+        .map(({ texture: _texture, ...summary }) => summary);
+    }
+    const page = this.sceneTokenPaginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getAvailableReadMetadata(),
+    );
+    const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
+    return {
+      schemaVersion: 1,
+      documentType: 'Token',
+      scene: identity,
+      ...page,
+      readMetadata,
+    };
+  }
+
+  getSceneToken(sceneId: string | undefined, tokenId: string): SceneTokenOutput {
+    if (sceneId !== undefined) {
+      assertReadId(sceneId, 'sceneId');
+    }
+    assertReadId(tokenId, 'tokenId');
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), sceneId);
+    const token = selected.tokens.find((candidate) => candidate.id === tokenId);
+    if (!token) {
+      throw new Error('Scene token read unavailable');
+    }
+    return {
+      schemaVersion: 1,
+      documentType: 'Token',
+      scene: this.sceneIdentity(selected.scene),
+      token,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
 
   async getCurrentScene(sceneId?: string): Promise<FoundryScene> {
     this.assertReadSurfaceAllowed('scenes');

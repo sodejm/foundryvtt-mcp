@@ -37,6 +37,14 @@ import {
   itemSearchOutputSchema,
   worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
+import {
+  sceneSpatialInputJsonSchema,
+  sceneSpatialOutputJsonSchema,
+  sceneTokenInputJsonSchema,
+  sceneTokenListInputJsonSchema,
+  sceneTokenListOutputJsonSchema,
+  sceneTokenOutputJsonSchema,
+} from '../foundry/scene-spatial-contract.js';
 import { delegatedTools } from './authorization.js';
 
 /**
@@ -349,6 +357,27 @@ export const sceneTools = [
         },
       },
     },
+  },
+  {
+    name: 'get_scene_spatial',
+    description:
+      'Return bounded, versioned spatial metadata for an observable scene, including native canvas dimensions and origin, grid orientation and size, source pixel dimensions, padding, shifts, and explicit units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneSpatialInputJsonSchema,
+    outputSchema: sceneSpatialOutputJsonSchema,
+  },
+  {
+    name: 'list_scene_tokens',
+    description:
+      'List observable token summaries for an observable scene with stable snapshot pagination. Coordinates are canvas pixels, token width and height are grid spaces, rotation is degrees, and elevation uses scene distance units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenListInputJsonSchema,
+    outputSchema: sceneTokenListOutputJsonSchema,
+  },
+  {
+    name: 'get_scene_token',
+    description:
+      'Return one observable token detail by tokenId within an observable scene, including texture scaling when available. Actor references are included only when the caller can observe the effective linked or synthetic actor. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenInputJsonSchema,
+    outputSchema: sceneTokenOutputJsonSchema,
   },
 ];
 
