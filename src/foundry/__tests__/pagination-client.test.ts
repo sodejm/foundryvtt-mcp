@@ -580,7 +580,7 @@ describe('verified compendium client boundary', () => {
       }),
     ).rejects.toThrow();
   });
-  it('keeps credential-derived cursor context private to each client', async () => {
+  it('keeps relay cursor context private to each client', async () => {
     const { client: firstClient } = compendiumClient();
     const { client: secondClient } = compendiumClient();
     Reflect.set(secondClient, 'paginationSession', Reflect.get(firstClient, 'paginationSession'));
@@ -592,6 +592,17 @@ describe('verified compendium client boundary', () => {
     const firstHash = await contextHash(firstClient);
     expect(await contextHash(firstClient)).toBe(firstHash);
     expect(await contextHash(secondClient)).not.toBe(firstHash);
+  });
+  it('does not restore old cursors when relay credentials are restored', async () => {
+    const { client } = compendiumClient();
+    const first = await client.searchCompendium({ query: 'Entry', limit: 1 });
+    const cursor = requireCursor(first.nextCursor);
+    const config = Reflect.get(client, 'config') as { restApiKey: string };
+    const originalKey = config.restApiKey;
+    config.restApiKey = 'other-key';
+    await client.searchCompendium({ query: 'Entry', limit: 1 });
+    config.restApiKey = originalKey;
+    await expect(client.searchCompendium({ query: 'Entry', cursor })).rejects.toThrow();
   });
   it.each([
     'unavailable',

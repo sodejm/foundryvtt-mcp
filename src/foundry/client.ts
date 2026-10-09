@@ -5,7 +5,7 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
@@ -581,7 +581,12 @@ export class FoundryClient {
   private restLinkLive = true;
   private readonly paginator = new SnapshotPaginator();
   private readonly compendiumPaginator = new SnapshotPaginator();
-  private readonly compendiumRelaySecret = randomBytes(32);
+  private compendiumRelayIdentity = randomUUID();
+  private compendiumRelayConfig: {
+    restUrl: string | undefined;
+    restClientId: string | undefined;
+    restApiKey: string | undefined;
+  } | null = null;
   private readonly sceneTokenPaginator = new SnapshotPaginator();
   private readonly compendiumAdapter: CompendiumRestAdapter;
   private paginationSession = randomUUID();
@@ -2009,6 +2014,22 @@ export class FoundryClient {
     };
   }
 
+  private getCompendiumRelayIdentity(): string {
+    const previous = this.compendiumRelayConfig;
+    const { restUrl, restClientId, restApiKey } = this.config;
+    if (
+      !previous ||
+      previous.restUrl !== restUrl ||
+      previous.restClientId !== restClientId ||
+      previous.restApiKey !== restApiKey
+    ) {
+      this.compendiumRelayConfig = { restUrl, restClientId, restApiKey };
+      this.compendiumRelayIdentity = randomUUID();
+      this.compendiumPaginator.clear();
+    }
+    return this.compendiumRelayIdentity;
+  }
+
   /** Search the optional authenticated relay, preserving the core Socket.IO session. */
   async searchCompendium(input: CompendiumSearchParams): Promise<CompendiumSearchResult> {
     this.assertReadSurfaceAllowed('compendia');
@@ -2036,11 +2057,7 @@ export class FoundryClient {
       filters,
       session: this.paginationSession,
       world: this.snapshotWorldId ?? this.restWorldId,
-      relayIdentity: createHmac('sha256', this.compendiumRelaySecret)
-        .update(
-          JSON.stringify([this.config.restUrl, this.config.restClientId, this.config.restApiKey]),
-        )
-        .digest('hex'),
+      relayIdentity: this.getCompendiumRelayIdentity(),
     };
     const now = new Date().toISOString();
     const metadata: WorldReadMetadata = {
