@@ -38,7 +38,7 @@ import {
   type TrustedCallerContext,
   validateTrustedCallerContext,
 } from './caller-context.js';
-import type { CapabilityReport } from './capabilities.js';
+import { type CapabilityReport, RULES_LOOKUP_UNAVAILABLE } from './capabilities.js';
 import { compendiumParamsSchema } from './compendium-contract.js';
 import { evaluateDiceFormula } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
@@ -1937,6 +1937,7 @@ export class FoundryClient {
   async getCapabilities(): Promise<CapabilityReport> {
     this.assertReadSurfaceAllowed('compendia');
     const compendium = await this.compendiumAdapter.probe();
+    const verifiedAt = new Date().toISOString();
     if (compendium.status !== 'available') {
       this.compendiumPaginator.clear();
     }
@@ -1944,13 +1945,18 @@ export class FoundryClient {
       schemaVersion: 1,
       capabilities: [
         compendium,
-        ...(['rulesLookup', 'diagnostics', 'contentGeneration'] as const).map((feature) => ({
+        {
+          ...RULES_LOOKUP_UNAVAILABLE,
+          verifiedAt,
+          transport: 'rest',
+        },
+        ...(['diagnostics', 'contentGeneration'] as const).map((feature) => ({
           feature,
           status: 'unavailable' as const,
           reason: 'No verified Foundry-backed adapter is implemented for this feature.',
           remediation:
             'Use this feature only after a compatible Foundry integration is implemented and verified.',
-          verifiedAt: new Date().toISOString(),
+          verifiedAt,
           transport: 'rest' as const,
         })),
       ],

@@ -37,6 +37,7 @@ import {
   itemSearchOutputSchema,
   worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
+import { ruleLookupInputJsonSchema, ruleLookupOutputJsonSchema } from '../foundry/rule-contract.js';
 import {
   sceneSpatialInputJsonSchema,
   sceneSpatialOutputJsonSchema,
@@ -434,21 +435,9 @@ export const generationTools = [
   {
     name: 'lookup_rule',
     description:
-      'Stub: builds a templated placeholder from the query and consults no rules source, so the text it returns carries no rules content. No tool in this server looks rules up.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Rule or mechanic to look up',
-        },
-        system: {
-          type: 'string',
-          description: 'Game system (D&D 5e, Pathfinder, etc.)',
-        },
-      },
-      required: ['query'],
-    },
+      'Validate a bounded rules query and report that rules lookup is unavailable because no verified rules provider is implemented. Returns no generated rule text or source claims.',
+    inputSchema: ruleLookupInputJsonSchema,
+    outputSchema: ruleLookupOutputJsonSchema,
   },
 ];
 

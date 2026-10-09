@@ -8,6 +8,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { FoundryClient } from '../foundry/client.js';
+import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
 import { assertResourceAllowed, assertToolAllowed } from './authorization.js';
@@ -28,9 +29,10 @@ import {
   handleGetSystemHealth,
   handleSearchLogs,
 } from './handlers/diagnostics.js';
-import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
+import { handleGenerateLoot, handleGenerateNPC } from './handlers/generation.js';
 import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleReadResource } from './handlers/resources.js';
+import { handleLookupRule } from './handlers/rules.js';
 import {
   handleGetSceneInfo,
   handleGetSceneSpatial,
@@ -141,10 +143,8 @@ async function routeLegacyTool(
         foundryClient,
       );
     case 'lookup_rule':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleLookupRule(args as { query: string; system?: string }, foundryClient);
+      parseRuleLookupInput(args);
+      return handleLookupRule(args, foundryClient);
 
     // Diagnostics tools
     case 'get_recent_logs':

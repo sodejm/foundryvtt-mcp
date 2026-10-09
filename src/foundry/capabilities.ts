@@ -31,3 +31,11 @@ export interface CapabilityReport {
   schemaVersion: 1;
   capabilities: Capability[];
 }
+
+/** Static fact shared by capability discovery and the unavailable lookup tool. */
+export const RULES_LOOKUP_UNAVAILABLE = Object.freeze({
+  feature: 'rulesLookup' as const,
+  status: 'unavailable' as const,
+  reason: 'No verified rules provider is implemented.',
+  remediation: 'Consult an authoritative rules source or configure a verified rules provider.',
+});

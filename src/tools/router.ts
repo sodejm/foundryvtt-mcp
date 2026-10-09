@@ -5,6 +5,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { AttributePatch, FoundryClient } from '../foundry/client.js';
+import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type {
   ActorItemCreateSource,
   DocumentVisibility,
@@ -41,7 +42,7 @@ import {
 } from './handlers/diagnostics.js';
 // Import all tool handlers
 import { handleRollDice } from './handlers/dice.js';
-import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
+import { handleGenerateLoot, handleGenerateNPC } from './handlers/generation.js';
 import {
   handleCreateActorItem,
   handleDeleteActorItem,
@@ -55,6 +56,7 @@ import {
   handleSearchJournals,
 } from './handlers/journals.js';
 import { handleReadResource } from './handlers/resources.js';
+import { handleLookupRule } from './handlers/rules.js';
 import {
   handleGetSceneInfo,
   handleGetSceneSpatial,
@@ -319,10 +321,8 @@ export async function routeToolRequest(
         foundryClient,
       );
     case 'lookup_rule':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleLookupRule(args as { query: string; system?: string }, foundryClient);
+      parseRuleLookupInput(args);
+      return handleLookupRule(args, foundryClient);
 
     // Diagnostics tools (require REST API module)
     case 'get_recent_logs':
