@@ -27,9 +27,11 @@ an empty roll. Dice and modifier letters are case-insensitive (`D6`, `2D6KH1`).
 Short aliases such as `k` and `d`, chained modifiers, rerolls,
 explosions, pools, fractions, variables and JavaScript are not accepted.
 
+Each dice term allows at most 999 dice, matching Foundry 14's evaluation limit.
 The bounds apply to the entire formula: at most 1,000 dice, 50 numeric/dice terms,
 10 levels of parentheses, 1,000,000 faces per die and 1,000,000,000 per integer
-constant. Splitting dice across terms does not bypass the aggregate limit.
+constant. `999d1` and `500d1+500d1` are valid; `1000d1` is rejected.
+Splitting dice across terms does not bypass the aggregate limit.
 
 Foundry supports a wider notation and has its own modifier defaults. The MCP
 subset deliberately rejects explicit zero or oversized modifier counts. See

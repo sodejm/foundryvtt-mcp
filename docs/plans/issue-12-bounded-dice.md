@@ -18,7 +18,7 @@ parity. Combat automation and arbitrary scripting remain outside this issue.
 ## Contract and implementation
 
 - Parse and validate the entire expression before randomness or server access.
-  Enforce 100 input characters, 1,000 aggregate dice, 50 terms, 10 parenthesis
+  Enforce 100 input characters, 999 dice per term, 1,000 aggregate dice, 50 terms, 10 parenthesis
   levels, at most 1,000,000 sides and safe bounded integer arithmetic. Preserve
   existing valid simple expressions wherever Foundry semantics permit.
 - Publish strict versioned structured results and equivalent bounded JSON text:

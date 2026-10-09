@@ -130,7 +130,8 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
       expect(value.reason).toBe('live dice proof');
       expect(value.fallback).toEqual(index === 0 ? { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' } : null);
       if (formula === '((7 - 3) + 2)') expect(value.total).toBe(6);
-      if (formula === '1000d1') expect(value.total).toBe(1000);
+      if (formula === '999d1') expect(value.total).toBe(999);
+      if (formula === '500d1+500d1') expect(value.total).toBe(1000);
     });
     it.each(invalidDiceCases)(`rejects invalid input before a live roll, transport ${index}: %j`, async args => {
       await expect(call(index, args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
