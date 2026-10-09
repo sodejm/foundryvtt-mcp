@@ -341,12 +341,25 @@ describe('built MCP CLI structured read workflow', () => {
     await expect(client.callTool({ name: 'search_actors', arguments: { limit: 1 } })).rejects.toThrow();
   });
 
-  it('advertises all four result schemas and rejects an invalid result against each', () => {
-    for (const name of ['search_actors', 'get_actor_details', 'search_items', 'get_item_details']) {
+  it('advertises all eight actor/item result schemas and rejects invalid results', () => {
+    for (const name of ['search_actors', 'get_actor_details', 'search_items', 'get_item_details',
+      'get_actor_sheet', 'get_actor_section', 'list_actor_items', 'get_actor_item']) {
       const schema = schemas.get(name);
       expect(schema).toBeDefined();
       expect(ajv.validate(schema!, { schemaVersion: 999 })).toBe(false);
     }
+  });
+
+  it.each([
+    ['get_actor_sheet', {}], ['get_actor_section', { section: 'attributes' }],
+    ['list_actor_items', {}], ['get_actor_item', { itemId: itemIds[0] }],
+  ])('%s rejects unsupported REST reads before document access', async (name, extra) => {
+    const before = requests.length;
+    await expect(client.callTool({ name: String(name), arguments: { actorId: actorIds[0], ...extra } }))
+      .rejects.toMatchObject({ code: ErrorCode.InternalError, message: expect.stringMatching(/unsupported/i) });
+    await expect(client.callTool({ name: String(name), arguments: { actorId: 'bad', ...extra } }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(requests).toHaveLength(before);
   });
 
   it.each([

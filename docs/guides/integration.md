@@ -216,6 +216,107 @@ adapters fetch every backend page and reject repeated/non-progressing pages or
 inconsistent totals. REST journal/world searches and scene/journal/user pages
 remain unsupported and fail explicitly.
 
+### Bounded actor sheets and owned items
+
+`get_actor_sheet`, `get_actor_section`, `list_actor_items` and `get_actor_item`
+return schema version 1, with advertised output schemas and matching JSON in
+`content[0].text` and `structuredContent`. Import the corresponding
+`actorSheetOutputSchema`, `actorSectionOutputSchema`, `actorItemListOutputSchema`
+and `actorItemOutputSchema` from `foundry/actor-sheet-contract`.
+The existing version 2 `get_actor_details` summary remains compatible.
+
+`get_actor_sheet` takes `actorId` and returns actor identity, `system` ID/version
+and profile, visible `itemCount`, and descriptors for seven sections:
+`attributes`, `abilities`, `skills`, `details`, `currency`, `resources` and
+`system`. Each descriptor reports `supported` and `fieldCount`.
+`get_actor_section` takes that actor ID and a section name. A field has `key`,
+`label`, `source: "normalized" | "system-path"`, optional source `path`,
+`present`, optional scalar `value` and optional `truncated`. Missing values have
+`present: false` with no invented default; zero, false, null and empty text can
+be real values. Unsupported sections explicitly return `supported: false` and
+an empty field list.
+
+DND5e profiles map HP/AC, abilities, skills, details, currency and resources;
+PF2e profiles map their distinct paths for modifiers, ancestry/class details,
+hero points and conditions. Both expose six normalized sections and leave the
+generic `system` section unsupported. Synthetic unit/workflow fixtures carry
+DND5e 6.0.6 and PF2e 6.2.0 version metadata and exercise different level paths
+(`details.level` and `details.level.value`). Live validation uses DND5e 6.0.6;
+PF2e has not been validated against a running system. The synthetic fixtures
+establish field mappings and version propagation, not release compatibility.
+For unknown systems, service-identity mode provides only a
+bounded primitive system-path section and bounded owned-item identity.
+Delegated unknown-system reads are rejected.
+
+Sections and item details contain at most 64 fields. A text field allows at
+most 4,096 UTF-16 code units and all field text shares an 8,192-unit budget.
+Names are clipped to 512 units. Clipping preserves Unicode surrogate pairs;
+field truncation is explicit. Generic traversal visits at most 256 nodes at
+depth four and omits arrays, nested document bodies and sensitive paths such
+as credentials, ownership, flags and tokens. Delegated known-system reads
+check actor/embedded-document permissions first and omit rich descriptions
+and biographies because those fields lack a verified field-visibility contract.
+All combined MCP responses retain the 128 KiB limit.
+
+`list_actor_items` takes `actorId`, optional `query`, `type`, `limit` and
+`cursor`. Limits default to 10 and allow 1–100; queries/cursors allow at most
+1,024 characters and types 128. IDs must be 16 alphanumeric characters.
+The response includes parent actor context, item records with stable IDs and
+verified embedded UUIDs, and shared pagination/freshness fields. Select by ID
+even when names repeat, then fetch detail with both parent and item IDs:
+
+```ts
+const ownedItems = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'list_actor_items',
+    arguments: { actorId, limit: 10, ...(cursor ? { cursor } : {}) },
+  });
+  const page = actorItemListOutputSchema.parse(result.structuredContent);
+  ownedItems.push(...page.records);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+const selected = ownedItems[0];
+if (selected) {
+  const result = await client.callTool({
+    name: 'get_actor_item',
+    arguments: { actorId, itemId: selected.id },
+  });
+  const detail = actorItemOutputSchema.parse(result.structuredContent);
+  console.log(detail.item.parentActorId, detail.item.fields);
+}
+```
+
+An item ID from another actor cannot resolve under the requested parent.
+Empty inventory returns a successful complete page. Keep actor, query, type
+and limit unchanged on continuation. Cursors expire after five minutes, bind
+to world/caller/session, and invalidate after inventory content, order or
+visibility changes in both modes. Restart from the first page after edits,
+deletions, reconnects or permission changes. Native Socket.IO is required;
+REST explicitly reports unsupported reads.
+
+`tests/integration/actor-sheet.integration.test.ts` exercises the built MCP
+stdio server against disposable DND5e `test1world`. Start
+`node scripts/actor-test-control.mjs` with explicit `FOUNDRY_URL`,
+`FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` outside source. The controller binds
+to `127.0.0.1:3013`, requires that world/system and a GM browser, and creates,
+updates or removes only actors named with the prefix `MCP Actor Issue 7`.
+Set `FOUNDRY_ACTOR_TEST_CONTROL_URL=http://127.0.0.1:3013`, then run:
+
+```sh
+npm run build
+npm run test:integration -- tests/integration/actor-sheet.integration.test.ts
+```
+
+The suite covers empty/251-item inventories, duplicate and Unicode names,
+zero values, missing fields, long descriptions, exact ID composition,
+schema/response bounds, filter/cursor isolation, and post-edit/sort/delete
+reads. Caller-permission integration separately verifies observer grants,
+hidden parents/items, redaction and immediate revocation using Foundry's
+native permission oracle. Missing prerequisites fail instead of skipping.
+
 ### Complete journal pages
 
 Journal summaries and page content have separate contracts. `get_journal`

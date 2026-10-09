@@ -98,6 +98,7 @@ failures use `InvalidParams` with a generic message; missing trusted context use
 `InvalidRequest`. Hidden and absent direct IDs return identical errors.
 
 Supported tools are `search_actors`, `get_actor_details`, `search_items`,
+`get_actor_sheet`, `get_actor_section`, `list_actor_items`, `get_actor_item`,
 `get_item_details`, `search_journals`, `get_journal`, `get_journal_page`, `get_chat_messages`,
 `get_users`, `search_world` and `get_world_summary`. Collection resources are
 `foundry://actors`, `foundry://items`, `foundry://journals` and `foundry://users`.
@@ -108,6 +109,13 @@ journal pages require their entry and page permissions. Chat content follows
 author, whisper-recipient and blind-message visibility. Players see only their
 own user record, stripped of credentials and flags; assigned characters are
 included only when visible. Summary counts derive from these visible collections.
+
+Actor-sheet reads use conservative DND5e and PF2e field profiles. Actor and
+embedded-item permissions are checked before fields, inventory counts and IDs
+are serialized. Rich actor biographies and item descriptions are withheld from
+delegated callers, including delegated GMs. Unknown-system sheet, section and
+inventory reads fail closed because no field-visibility profile is established;
+service-identity mode supports a bounded primitive system-path fallback.
 
 Scenes, tokens, combat, compendia, rules, settings, diagnostics, refresh and all
 writes remain disabled in delegated mode, including for GM callers. These

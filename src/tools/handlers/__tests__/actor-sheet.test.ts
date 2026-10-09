@@ -192,6 +192,22 @@ describe('actor sheet structured read handlers', () => {
     ).rejects.toThrow(McpError);
   });
 
+  it('wraps inventory backend failures without classifying them as cursor errors', async () => {
+    await expect(
+      handleListActorItems(
+        { actorId: ACTOR_ID },
+        client({
+          listActorItems: vi.fn(() => {
+            throw new Error('Inventory backend unavailable');
+          }),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining('Inventory backend unavailable'),
+    });
+  });
+
   it.each([
     { mode: 'service', delegated: false, message: 'Pagination cursor is malformed' },
     { mode: 'delegated', delegated: true, message: 'Pagination cursor unavailable' },

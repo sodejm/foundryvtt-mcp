@@ -144,6 +144,10 @@ Ask your AI assistant things like:
 
 - `search_actors` — find characters, NPCs, monsters
 - `get_actor_details` — detailed character information
+- `get_actor_sheet` — discover bounded actor sections and system metadata
+- `get_actor_section` — read supported sheet fields with explicit presence metadata
+- `list_actor_items` — page through an actor's inventory using stable item IDs
+- `get_actor_item` — read one owned item within its parent actor
 - `search_items` — find world equipment, spells, consumables with stable IDs
 - `get_item_details` — read one world item by ID
 - `get_scene_info` — current scene details
@@ -199,6 +203,43 @@ Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
 `records[].id`, not parse IDs or optional values from Markdown. TypeScript
 contracts are exported from `foundry/types` and `foundry/read-contract`.
+
+### Bounded actor sheet and inventory reads
+
+The four actor sheet tools use schema version 1 and preserve the existing
+`get_actor_details` summary. Start with `get_actor_sheet` to discover the actor's
+system ID/version, supported sections and visible inventory count. Read one
+section at a time with `get_actor_section`; fields identify their source,
+presence and optional truncation instead of returning a raw actor blob.
+
+```json
+{"name":"get_actor_sheet","arguments":{"actorId":"Actor00000000001"}}
+{"name":"get_actor_section","arguments":{"actorId":"Actor00000000001","section":"attributes"}}
+{"name":"list_actor_items","arguments":{"actorId":"Actor00000000001","limit":10}}
+{"name":"get_actor_item","arguments":{"actorId":"Actor00000000001","itemId":"Item000000000001"}}
+```
+
+Use IDs returned by the current world, not these placeholders. Inventory records
+include verified `Actor.<actorId>.Item.<itemId>` UUIDs; item detail also includes
+`parentActorId`. Duplicate names are safe to select by ID. Inventory limits
+default to 10 and allow 1–100, with optional `query`, `type` and opaque `cursor`.
+Repeat the same actor, filters and limit with `nextCursor` until `complete`.
+Inventory edits, sorting, deletion or permission changes invalidate cursors in
+both service-identity and delegated modes. Cursors expire after five minutes
+and bind to the world, caller and session.
+
+DND5e and PF2e have bounded normalized profiles. Unknown systems expose a bounded
+primitive `system` section in service-identity mode; delegated unknown-system
+reads fail closed. Delegated reads require actor and embedded-item visibility
+before serialization and withhold rich descriptions. Sections contain at most
+64 fields, each text value at most 4,096 UTF-16 code units, with an aggregate
+text budget of 8,192. Text clipping preserves surrogate pairs and reports
+`truncated`; zero and false remain values, while missing fields use
+`present: false`. Final responses remain limited to 128 KiB.
+
+These tools require native Socket.IO; REST returns an explicit unsupported error.
+See the [integration guide](docs/guides/integration.md#bounded-actor-sheets-and-owned-items)
+for schema imports, profile fixtures and live test setup.
 
 ### Complete journal page reads
 
@@ -317,7 +358,7 @@ Players receive only their own sanitized user record, and summary counts include
 only visible records. Missing authentication, revoked permissions, disconnected
 backends and stale cursors fail closed. Errors omit privileged backend details.
 
-Delegated discovery exposes eleven read tools and four collection resources (actors,
+Delegated discovery exposes fifteen read tools and four collection resources (actors,
 items, journals and users). Scenes, tokens, combat, compendia, rules, settings,
 diagnostics, refresh and every write are disabled for all delegated callers,
 including GMs. REST/API-key backends are unavailable in delegated mode.
