@@ -138,8 +138,9 @@ Detail IDs must be exactly 16 alphanumeric characters. Invalid, empty,
 nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
 Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
-world/search returns `records: []`; disconnected cached world data returns an
-error. REST modules must implement `/api/items/:id` for item details; unsupported
+world/search returns `records: []`; an unavailable world snapshot returns an
+error. A retained snapshot may remain readable after transport loss; this
+contract does not guarantee freshness. REST modules must implement `/api/items/:id` for item details; unsupported
 routes produce their backend error. This adds no fallback to owned items or
 compendiums and changes no access permissions.
 
