@@ -108,6 +108,15 @@ export class FoundryMCPServer {
     if (config.foundry.apiKey) {
       clientConfig.apiKey = config.foundry.apiKey;
     }
+    if (config.foundry.restUrl !== undefined) {
+      clientConfig.restUrl = config.foundry.restUrl;
+    }
+    if (config.foundry.restApiKey !== undefined) {
+      clientConfig.restApiKey = config.foundry.restApiKey;
+    }
+    if (config.foundry.restClientId !== undefined) {
+      clientConfig.restClientId = config.foundry.restClientId;
+    }
     if (config.foundry.username) {
       clientConfig.username = config.foundry.username;
     }

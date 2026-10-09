@@ -21,6 +21,8 @@ import {
   type TrustedCallerContext,
   validateTrustedCallerContext,
 } from './caller-context.js';
+import type { CapabilityReport } from './capabilities.js';
+import { compendiumParamsSchema } from './compendium-contract.js';
 import { evaluateDiceFormula } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
 import {
@@ -32,6 +34,7 @@ import {
   validateBoundedText,
 } from './pagination.js';
 import { actorDocumentSchema, FOUNDRY_ID_PATTERN, itemDocumentSchema } from './read-contract.js';
+import { CompendiumRestAdapter } from './rest-compendium.js';
 import type {
   ActorAttributeUpdateResult,
   ActorItemCreateSource,
@@ -419,6 +422,9 @@ interface RefreshBuffer {
 export interface FoundryClientConfig {
   baseUrl: string;
   apiKey?: string;
+  restUrl?: string;
+  restApiKey?: string;
+  restClientId?: string;
   username?: string;
   password?: string;
   userId?: string;
@@ -463,15 +469,15 @@ export interface SearchCollectionParams {
 }
 
 export interface CompendiumSearchParams {
-  query?: string;
-  packType?: string;
-  itemType?: string;
-  spellLevel?: number;
-  source?: string;
-  compendiumId?: string;
-  limit?: number;
+  query?: string | undefined;
+  packType?: string | undefined;
+  itemType?: string | undefined;
+  spellLevel?: number | undefined;
+  source?: string | undefined;
+  compendiumId?: string | undefined;
+  limit?: number | undefined;
   /** Opaque pagination cursor from a prior result's `nextCursor`. */
-  cursor?: string;
+  cursor?: string | undefined;
 }
 
 /**
@@ -497,6 +503,8 @@ export class FoundryClient {
    */
   private restLinkLive = true;
   private readonly paginator = new SnapshotPaginator();
+  private readonly compendiumPaginator = new SnapshotPaginator();
+  private readonly compendiumAdapter: CompendiumRestAdapter;
   private paginationSession = randomUUID();
   private restStatusIdentity = 'not-connected';
   private readSessionId = randomUUID();
@@ -544,6 +552,12 @@ export class FoundryClient {
       throw new Error('authorizationMode must be service-identity or delegated');
     }
 
+    this.compendiumAdapter = new CompendiumRestAdapter({
+      baseUrl: this.config.restUrl,
+      clientId: this.config.restClientId,
+      apiKey: this.config.restApiKey,
+      timeout: this.config.timeout,
+    });
     this.http = axios.create({
       baseURL: this.config.baseUrl,
       timeout: this.config.timeout || 30000,
@@ -1046,6 +1060,7 @@ export class FoundryClient {
 
   private resetPaginationSession(): void {
     this.paginator.clear();
+    this.compendiumPaginator.clear();
     this.paginationSession = randomUUID();
   }
 
@@ -1671,45 +1686,95 @@ export class FoundryClient {
   // Compendium methods
   // ==========================================================================
 
-  /**
-   * Searches FoundryVTT compendium packs by name and metadata.
-   *
-   * Compendium data is not present in the cached worldData snapshot, so this
-   * read requires the REST API module (FOUNDRY_API_KEY). When the key is
-   * absent it returns a graceful empty result with `restAvailable: false`
-   * rather than throwing, mirroring the no-worldData behaviour of
-   * {@link searchItems}/{@link searchActors}; the handler surfaces a note
-   * explaining why no results were returned.
-   */
-  async searchCompendium(params: CompendiumSearchParams): Promise<CompendiumSearchResult> {
+  /** Actively verify compendium support and report other Foundry integrations honestly. */
+  async getCapabilities(): Promise<CapabilityReport> {
     this.assertReadSurfaceAllowed('compendia');
-    const limit = params.limit ?? 20;
-    const offset = decodeCursor(params.cursor);
-
-    if (this.config.apiKey) {
-      return this.executeWithRetry(async () => {
-        // Translate the opaque cursor into a wire offset for the bridge.
-        const { cursor: _cursor, ...rest } = params;
-        const response = await this.http.get('/api/compendium/search', {
-          params: { ...rest, limit, offset },
-        });
-        const data = (
-          isRecord(response.data) ? response.data : {}
-        ) as Partial<CompendiumSearchResult>;
-        const results = data.results ?? [];
-        const total = typeof data.total === 'number' ? data.total : results.length;
-        const nextOffset = offset + results.length;
-        return {
-          results,
-          total,
-          page: Math.floor(offset / limit) + 1,
-          limit,
-          restAvailable: true,
-          nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
-        };
-      });
+    const compendium = await this.compendiumAdapter.probe();
+    if (compendium.status !== 'available') {
+      this.compendiumPaginator.clear();
     }
-    return { results: [], total: 0, page: 1, limit, restAvailable: false, nextCursor: null };
+    return {
+      schemaVersion: 1,
+      capabilities: [
+        compendium,
+        ...(['rulesLookup', 'diagnostics', 'contentGeneration'] as const).map((feature) => ({
+          feature,
+          status: 'unavailable' as const,
+          reason: 'No verified Foundry-backed adapter is implemented for this feature.',
+          remediation:
+            'Use this feature only after a compatible Foundry integration is implemented and verified.',
+          verifiedAt: new Date().toISOString(),
+          transport: 'rest' as const,
+        })),
+      ],
+    };
+  }
+
+  /** Search the optional authenticated relay, preserving the core Socket.IO session. */
+  async searchCompendium(input: CompendiumSearchParams): Promise<CompendiumSearchResult> {
+    this.assertReadSurfaceAllowed('compendia');
+    const params = compendiumParamsSchema.parse(input);
+    const { limit, cursor, ...filters } = params;
+    const response =
+      cursor !== undefined
+        ? { capability: await this.compendiumAdapter.probe(), entries: undefined }
+        : await this.compendiumAdapter.search(params);
+    const capability = response.capability;
+    if (capability.status !== 'available') {
+      this.compendiumPaginator.clear();
+      return {
+        schemaVersion: 1,
+        capability: { ...capability, status: capability.status },
+        restAvailable: false,
+        results: null,
+        total: null,
+        page: null,
+        limit: limit ?? 20,
+        nextCursor: null,
+      };
+    }
+    const context = {
+      filters,
+      session: this.paginationSession,
+      world: this.snapshotWorldId ?? this.restWorldId,
+      relayIdentity: createHash('sha256')
+        .update(
+          JSON.stringify([this.config.restUrl, this.config.restClientId, this.config.restApiKey]),
+        )
+        .digest('hex'),
+    };
+    const now = new Date().toISOString();
+    const metadata: WorldReadMetadata = {
+      source: 'rest',
+      freshness: 'current',
+      worldId: this.snapshotWorldId ?? this.restWorldId,
+      sessionId: this.readSessionId,
+      snapshotId: null,
+      revision: 0,
+      capturedAt: now,
+      observedAt: now,
+      respondedAt: now,
+    };
+    const entries = response.entries?.sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        left.compendiumId.localeCompare(right.compendiumId) ||
+        (left.itemId < right.itemId ? -1 : left.itemId > right.itemId ? 1 : 0),
+    );
+    const { records, ...page } = this.compendiumPaginator.paginate(
+      entries,
+      this.paginationParams(params),
+      context,
+      metadata,
+      20,
+    );
+    return {
+      schemaVersion: 1,
+      capability: { ...capability, status: 'available' },
+      restAvailable: true,
+      results: records,
+      ...page,
+    };
   }
 
   // ==========================================================================
@@ -2933,23 +2998,6 @@ function systemOf(obj: unknown): Record<string, unknown> | undefined {
     return obj.system;
   }
   return undefined;
-}
-
-/**
- * Compendium pagination cursors are opaque base64-encoded result offsets.
- * `encodeCursor` turns an offset into a cursor; `decodeCursor` reads it back,
- * returning 0 when the cursor is absent or malformed.
- */
-function encodeCursor(offset: number): string {
-  return Buffer.from(String(offset), 'utf8').toString('base64');
-}
-
-function decodeCursor(cursor: string | undefined): number {
-  if (!cursor) {
-    return 0;
-  }
-  const decoded = Number.parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10);
-  return Number.isFinite(decoded) && decoded >= 0 ? decoded : 0;
 }
 
 function extractNested(obj: Record<string, unknown>, ...keys: string[]): unknown {

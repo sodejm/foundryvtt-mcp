@@ -6,6 +6,12 @@
  */
 
 import {
+  capabilitiesInputJsonSchema,
+  capabilitiesOutputSchema,
+  compendiumSearchInputJsonSchema,
+  compendiumSearchOutputSchema,
+} from '../foundry/compendium-contract.js';
+import {
   actorDetailsOutputSchema,
   actorSearchInputJsonSchema,
   actorSearchOutputSchema,
@@ -170,53 +176,16 @@ export const compendiumTools = [
   {
     name: 'search_compendium',
     description:
-      'Search FoundryVTT compendium packs by name and metadata; searches all enabled packs unless compendiumId scopes it to one pack. Use when: looking up spells, monsters, or equipment that are not yet present in the world. Do not use when: the document already exists in the world - use search_items or search_world. Requires the REST API module (FOUNDRY_API_KEY); without it the search returns no results instead of failing.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for compendium entry names',
-        },
-        filters: {
-          type: 'object',
-          description: 'Optional metadata filters to narrow the search',
-          properties: {
-            compendiumId: {
-              type: 'string',
-              description: 'Scope the search to a single compendium pack',
-            },
-            packType: {
-              type: 'string',
-              description: 'Pack document type (Item, Actor, JournalEntry, Macro)',
-            },
-            itemType: {
-              type: 'string',
-              description: 'Item type filter (spell, weapon, feat, etc.)',
-            },
-            spellLevel: {
-              type: 'number',
-              description: 'Spell level filter',
-            },
-            source: {
-              type: 'string',
-              description: 'Source/rules filter (e.g. a sourcebook abbreviation)',
-            },
-          },
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results per page',
-          default: 20,
-        },
-        cursor: {
-          type: 'string',
-          description:
-            'Opaque pagination cursor from a prior result\'s "Next page" cursor; omit for the first page',
-        },
-      },
-      required: ['query'],
-    },
+      'Search compendium names and metadata through an optional authenticated Foundry REST relay. Returns verified capability status; unavailable results are null, while a verified zero-match search returns an empty array. Filters and cursors bind to an immutable snapshot. Requires FOUNDRY_REST_URL, FOUNDRY_REST_CLIENT_ID, and FOUNDRY_REST_API_KEY alongside the core Foundry connection.',
+    inputSchema: compendiumSearchInputJsonSchema,
+    outputSchema: compendiumSearchOutputSchema,
+  },
+  {
+    name: 'get_capabilities',
+    description:
+      'Actively verify optional Foundry integrations and return versioned, redacted status and remediation. Reports Foundry-backed rules, diagnostics, and content generation as unavailable until implemented and verified.',
+    inputSchema: capabilitiesInputJsonSchema,
+    outputSchema: capabilitiesOutputSchema,
   },
 ];
 

@@ -24,7 +24,7 @@ import {
   handleSetInitiative,
   handleStartCombat,
 } from './handlers/combat-mutations.js';
-import { handleSearchCompendium } from './handlers/compendium.js';
+import { handleGetCapabilities, handleSearchCompendium } from './handlers/compendium.js';
 import {
   handleDiagnoseErrors,
   handleGetHealthStatus,
@@ -134,24 +134,9 @@ export async function routeToolRequest(
 
     // Compendium tools (#144)
     case 'search_compendium':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleSearchCompendium(
-        args as {
-          query: string;
-          filters?: {
-            compendiumId?: string;
-            packType?: string;
-            itemType?: string;
-            spellLevel?: number;
-            source?: string;
-          };
-          limit?: number;
-          cursor?: string;
-        },
-        foundryClient,
-      );
+      return handleSearchCompendium(args, foundryClient);
+    case 'get_capabilities':
+      return handleGetCapabilities(args, foundryClient);
 
     // Item mutation tools (WRITE) — Socket.IO modifyDocument protocol
     // (foundryClient); require FOUNDRY_WRITE_ENABLED=true + a GM user.

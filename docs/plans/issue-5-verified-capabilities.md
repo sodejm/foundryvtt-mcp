@@ -1,0 +1,17 @@
+# Issue 5: verified capabilities and compendium support
+
+Base: issue 4 commit 3ffd9898d5c6c81fdb6f67b0ae0c90e3f7e5c325. Worktree: /private/tmp/foundryvtt-mcp-issue-5, branch codex/issue-5-verified-capabilities. Remote issue: https://github.com/sodejm/foundryvtt-mcp/issues/5.
+
+Expose a versioned typed capability contract and `get_capabilities` tool. Available, unavailable, unauthorized, unreachable, and incompatible responses contain fixed non-secret reasons and remediation. Public core status and a configured key are insufficient verification.
+
+Connect the optional ThreeHats Foundry REST API module through its separate relay URL, scoped API key, and client ID. Preserve the Socket.IO world connection. Verify support with authenticated `/search` and `/get`, validating both envelopes and entity identity; never use the nonexistent core `/api/compendium/search` route. An installation with no verifiable compendium entry remains unavailable until an entry can prove the read contract. Actual relay tag 3.4.1 and module tag 3.4.1 will be tested locally against Foundry 14.369/dnd5e 6.0.6.
+
+Search uses `resultType:CompendiumEntity` plus document/subtype/package filters. Fetch at most 500 entries; if the relay cap is reached, report incompatible capacity and ask for narrower filters rather than claim a complete result. Hydrate `/get` for source, level, school, and entry metadata. Validate identity and response shape. Apply source/level filters without fabricated data.
+
+Use an independent bounded SnapshotPaginator for immutable compendium results with opaque context-bound cursors. Probe again before cursor continuation; lost authorization or module availability invalidates those snapshots. Socket/session changes also invalidate them. Delegated callers remain denied REST compendium access because this relay protocol does not prove per-caller permissions.
+
+Only a successful executed search may return an empty results array. Unavailable outcomes carry explicit capability status with absent/null search results and total. Text and structured output must agree. Rules, diagnostics, and generation receive honest unsupported statuses until their operations are verified or implemented.
+
+Subagent owns only new capabilities.ts, rest-compendium.ts, and focused adapter tests. Parent owns client/types/config/tool wiring, docs, local relay and Foundry module setup, and live workflow validation. No overlapping concurrent file edits. No new mandatory dependency. Preserve existing dirty files. Commit checkpoints and open a stacked draft PR before the next issue; no merge or issue close.
+
+Verification: adapter unit matrix (missing config, wrong key, 404, network/timeout, malformed success, module error, valid empty, multiple matches, filter/metadata validation, bounded capacity, redaction); client/handler positive and negative tests; real module search, pagination, key revocation and module disconnect; actual MCP stdio structured/text and output-schema parity. Required build, unit, lint, docs check, smoke, packed-runtime smoke, and appropriate live suites. Record unrelated inherited failures and exact versions rather than claim universal coverage.

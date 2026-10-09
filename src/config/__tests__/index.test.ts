@@ -161,6 +161,43 @@ describe('Config', () => {
     });
   });
 
+  describe('optional REST relay configuration', () => {
+    it('keeps REST relay credentials separate from legacy core credentials', async () => {
+      process.env = {
+        ...mockEnv,
+        FOUNDRY_REST_URL: 'https://relay.example.test/foundry',
+        FOUNDRY_REST_API_KEY: 'relay-key',
+        FOUNDRY_REST_CLIENT_ID: 'client-1',
+      };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.apiKey).toBe('test-api-key');
+      expect(config.foundry.restUrl).toBe('https://relay.example.test/foundry');
+      expect(config.foundry.restApiKey).toBe('relay-key');
+      expect(config.foundry.restClientId).toBe('client-1');
+    });
+    it('does not default optional support to the core Foundry URL or key', async () => {
+      process.env = { ...mockEnv };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.restUrl).toBeUndefined();
+      expect(config.foundry.restApiKey).toBeUndefined();
+      expect(config.foundry.restClientId).toBeUndefined();
+    });
+    it.each([
+      'invalid-url',
+      'ftp://relay.test',
+      'https://user:secret@relay.test',
+      'https://relay.test?apiKey=secret',
+      'https://relay.test#secret',
+    ])('rejects unsafe or invalid REST URLs', async (url) => {
+      process.env = { ...mockEnv, FOUNDRY_REST_URL: url };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(() => config.foundry.restUrl).toThrow();
+    });
+  });
+
   describe('type conversion', () => {
     it('should convert string numbers to numbers', async () => {
       process.env = {

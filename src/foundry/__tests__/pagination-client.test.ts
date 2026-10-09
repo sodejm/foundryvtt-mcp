@@ -292,3 +292,211 @@ describe('REST snapshot pagination', () => {
     await expect(client.getCollectionPage('scenes', {})).rejects.toThrow(/unsupported/);
   });
 });
+
+describe('verified compendium client boundary', () => {
+  function capability(
+    status: import('../capabilities.js').CapabilityStatus = 'available',
+  ): import('../capabilities.js').Capability {
+    return {
+      feature: 'compendiumSearch',
+      status,
+      reason: `Verified ${status}`,
+      remediation: null,
+      verifiedAt: '2026-10-09T00:00:00.000Z',
+      transport: 'rest',
+    };
+  }
+  function entries(count = 101) {
+    return Array.from({ length: count }, (_, index) => ({
+      compendiumId: 'world.test',
+      itemId: id('I', index),
+      name: `Entry ${String(index).padStart(3, '0')}`,
+      type: 'spell',
+    })).reverse();
+  }
+  function compendiumClient() {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      apiKey: 'core-key',
+      restUrl: 'https://relay.example.test',
+      restApiKey: 'relay-key',
+      restClientId: 'client-1',
+    });
+    const adapter = Reflect.get(
+      client,
+      'compendiumAdapter',
+    ) as import('../rest-compendium.js').CompendiumRestAdapter;
+    const probe = vi.spyOn(adapter, 'probe').mockResolvedValue(capability());
+    const search = vi
+      .spyOn(adapter, 'search')
+      .mockResolvedValue({ capability: capability(), entries: entries() });
+    return { client, probe, search };
+  }
+  it('does not mistake a legacy core key for verified relay support', async () => {
+    const result = await restClient().searchCompendium({ query: 'x' });
+    expect(result).toMatchObject({
+      restAvailable: false,
+      results: null,
+      total: null,
+      capability: { status: 'unavailable' },
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+  it('reports socket-only support and unsupported optional features honestly', async () => {
+    const { client } = socketClient();
+    const report = await client.getCapabilities();
+    expect(report.capabilities).toHaveLength(4);
+    expect(report.capabilities.every((entry) => entry.status === 'unavailable')).toBe(true);
+    expect(get).not.toHaveBeenCalled();
+  });
+  it('does not infer rules, diagnostics, or generation from a working compendium adapter', async () => {
+    const { client, probe } = compendiumClient();
+    const report = await client.getCapabilities();
+    expect(probe).toHaveBeenCalledOnce();
+    expect(report.capabilities[0].status).toBe('available');
+    expect(report.capabilities.slice(1).map((entry) => entry.status)).toEqual([
+      'unavailable',
+      'unavailable',
+      'unavailable',
+    ]);
+  });
+  it.each([
+    'unavailable',
+    'unauthorized',
+    'unreachable',
+    'incompatible',
+  ] as const)('preserves the %s failure instead of fabricating an empty page', async (status) => {
+    const { client, search } = compendiumClient();
+    search.mockResolvedValue({ capability: capability(status) });
+    const result = await client.searchCompendium({ query: 'x', limit: 7 });
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      restAvailable: false,
+      results: null,
+      total: null,
+      page: null,
+      limit: 7,
+      nextCursor: null,
+      capability: { status },
+    });
+  });
+  it('distinguishes a verified zero match from failure, with a default limit of 20', async () => {
+    const { client, search } = compendiumClient();
+    search.mockResolvedValue({ capability: capability(), entries: [] });
+    expect(await client.searchCompendium({ query: 'none' })).toMatchObject({
+      restAvailable: true,
+      results: [],
+      total: 0,
+      limit: 20,
+      complete: true,
+    });
+  });
+  it('returns 251 unique immutable entries and verifies capability on every cursor request', async () => {
+    const { client, search, probe } = compendiumClient();
+    const fixture = entries(251);
+    search.mockResolvedValue({ capability: capability(), entries: fixture });
+    let page = await client.searchCompendium({ query: 'Entry', limit: 100 });
+    if (!page.restAvailable) {
+      throw new Error('Expected success');
+    }
+    fixture[100].name = 'Mutated after snapshot';
+    const names: string[] = [];
+    const ids: string[] = [];
+    for (;;) {
+      names.push(...page.results.map((entry) => entry.name));
+      ids.push(...page.results.map((entry) => entry.itemId));
+      if (!page.nextCursor) {
+        break;
+      }
+      const next = await client.searchCompendium({ query: 'Entry', cursor: page.nextCursor });
+      if (!next.restAvailable) {
+        throw new Error('Expected success');
+      }
+      page = next;
+    }
+    expect(ids).toHaveLength(251);
+    expect(new Set(ids).size).toBe(251);
+    expect(names).not.toContain('Mutated after snapshot');
+    expect(search).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(page.complete).toBe(true);
+  });
+  it('orders duplicate names by pack and case-sensitive opaque ID', async () => {
+    const { client, search } = compendiumClient();
+    search.mockResolvedValue({
+      capability: capability(),
+      entries: [
+        { compendiumId: 'world.b', itemId: 'aAAAAAAAAAAAAAAA', name: 'Twin', type: 'spell' },
+        { compendiumId: 'world.a', itemId: 'aAAAAAAAAAAAAAAA', name: 'Twin', type: 'spell' },
+        { compendiumId: 'world.a', itemId: 'AAAAAAAAAAAAAAAA', name: 'Twin', type: 'spell' },
+      ],
+    });
+    const result = await client.searchCompendium({ query: '' });
+    if (!result.restAvailable) {
+      throw new Error('Expected success');
+    }
+    expect(result.results.map((entry) => `${entry.compendiumId}:${entry.itemId}`)).toEqual([
+      'world.a:AAAAAAAAAAAAAAAA',
+      'world.a:aAAAAAAAAAAAAAAA',
+      'world.b:aAAAAAAAAAAAAAAA',
+    ]);
+  });
+  it.each([
+    'query',
+    'limit',
+    'world',
+    'relay',
+    'session',
+  ] as const)('binds cursors to %s', async (binding) => {
+    const { client } = compendiumClient();
+    const first = await client.searchCompendium({ query: 'Entry', limit: 1, source: '2014' });
+    const cursor = requireCursor(first.nextCursor);
+    if (binding === 'world') {
+      Reflect.set(client, 'snapshotWorldId', 'other-world');
+    }
+    if (binding === 'relay') {
+      (Reflect.get(client, 'config') as { restClientId: string }).restClientId = 'other-client';
+    }
+    if (binding === 'session') {
+      Reflect.set(client, 'paginationSession', 'other-session');
+    }
+    await expect(
+      client.searchCompendium({
+        query: binding === 'query' ? 'other' : 'Entry',
+        source: '2014',
+        ...(binding === 'limit' ? { limit: 2 } : {}),
+        cursor,
+      }),
+    ).rejects.toThrow();
+  });
+  it.each([
+    'unavailable',
+    'unauthorized',
+  ] as const)('invalidates snapshots after %s and rejects old cursors after recovery', async (status) => {
+    const { client, probe } = compendiumClient();
+    const first = await client.searchCompendium({ query: 'Entry', limit: 1 });
+    const cursor = requireCursor(first.nextCursor);
+    probe.mockResolvedValue(capability(status));
+    expect(await client.searchCompendium({ query: 'Entry', cursor })).toMatchObject({
+      restAvailable: false,
+      capability: { status },
+    });
+    probe.mockResolvedValue(capability());
+    await expect(client.searchCompendium({ query: 'Entry', cursor })).rejects.toThrow();
+    expect(await client.searchCompendium({ query: 'Entry', limit: 1 })).toMatchObject({
+      restAvailable: true,
+    });
+  });
+  it('denies delegated callers before sending compendium HTTP requests', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      authorizationMode: 'delegated',
+      restUrl: 'https://relay.example.test',
+      restApiKey: 'key',
+      restClientId: 'client',
+    });
+    await expect(client.searchCompendium({ query: 'x' })).rejects.toThrow();
+    await expect(client.getCapabilities()).rejects.toThrow();
+    expect(get).not.toHaveBeenCalled();
+  });
+});

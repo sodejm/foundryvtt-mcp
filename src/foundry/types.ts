@@ -10,6 +10,7 @@
  * @see {@link https://foundryvtt.com/api/} FoundryVTT API Documentation
  */
 
+import type { Capability } from './capabilities.js';
 import type { PaginationMetadata } from './pagination.js';
 
 /** Public versioned MCP read envelopes and their allowlisted document records. */
@@ -572,24 +573,24 @@ export interface CompendiumSearchEntry {
   };
 }
 
-/**
- * Result envelope for a compendium search.
- *
- * `restAvailable` signals whether the REST API module (FOUNDRY_API_KEY) was
- * present. When false, `results` is empty and the handler surfaces a note
- * explaining that compendium search requires REST mode.
- *
- * `nextCursor` carries the opaque pagination cursor for the following page
- * (an offset, base64-encoded); it is `null` when no further results exist.
- */
-export interface CompendiumSearchResult {
-  results: CompendiumSearchEntry[];
-  total: number;
-  page: number;
-  limit: number;
-  restAvailable: boolean;
-  nextCursor: string | null;
-}
+/** Unsupported searches carry null results; a verified search may return an empty array. */
+export type CompendiumSearchResult =
+  | (PaginationMetadata & {
+      schemaVersion: 1;
+      capability: Capability & { status: 'available' };
+      restAvailable: true;
+      results: CompendiumSearchEntry[];
+    })
+  | {
+      schemaVersion: 1;
+      capability: Capability & { status: Exclude<Capability['status'], 'available'> };
+      restAvailable: false;
+      results: null;
+      total: null;
+      page: null;
+      limit: number;
+      nextCursor: null;
+    };
 
 /**
  * Source for creating an item on an actor.
