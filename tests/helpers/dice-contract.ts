@@ -13,7 +13,10 @@ export const validDiceCases = [
 export const invalidDiceCases: Record<string, unknown>[] = [
   {}, { formula: '' }, { formula: ' ' }, { formula: 2 }, { formula: null },
   { formula: '1d6', unknown: true }, { formula: '1d6', engine: 'remote' },
-  { formula: '1d6', reason: '' }, { formula: '1d6', reason: 'x'.repeat(257) },
+  { formula: '1d6', engine: '' }, { formula: '1d6', engine: null },
+  { formula: '1d6', engine: 1 }, { formula: '1d6', reason: '' },
+  { formula: '1d6', reason: ' ' }, { formula: '1d6', reason: null },
+  { formula: '1d6', reason: 1 }, { formula: '1d6', reason: 'x'.repeat(257) },
   ...['1d6*2', '1d6/2', '1d6r1', '1d6!', '1d6kh1dl1', '{1d6,1d4}', '@actor.hp',
     '1d6junk', '1d6 +', '()', '(1d6', '1d6)', '1d0', '1001d6', '600d6+600d6',
     '1d1000001', '1000000001', '1.5', 'Infinity', 'NaN', '1e3', '1d6;process.exit()',
