@@ -39,8 +39,23 @@ describe('built MCP bounded dice workflow', () => {
       if (mode === 'wrong-face') roll.dice[0]!.results[0]!.result = 7;
       if (mode === 'wrong-active') roll.dice[0]!.results[1]!.active = true;
       if (mode === 'missing-die') roll.dice = [];
+      if (mode === 'extra-die') roll.dice.push({ faces: 6, results: [{ result: 1, active: true }] });
+      if (mode === 'extra-outcome') roll.dice[0]!.results.push({ result: 1, active: false });
+      if (mode === 'wrong-die-faces') roll.dice[0]!.faces = 8;
+      if (mode === 'fractional-outcome') roll.dice[0]!.results[0]!.result = 1.5;
+      if (mode === 'missing-active') Reflect.deleteProperty(roll.dice[0]!.results[0]!, 'active');
+      if (mode === 'missing-faces') Reflect.deleteProperty(roll.dice[0]!, 'faces');
+      if (mode === 'wrong-timestamp') Object.assign(roll, { timestamp: 'now' });
+      if (mode === 'unknown-roll-field') Object.assign(roll, { unverified: true });
+      if (mode === 'unknown-die-field') Object.assign(roll.dice[0]!, { unverified: true });
+      if (mode === 'unknown-result-field') Object.assign(roll.dice[0]!.results[0]!, { unverified: true });
+      if (mode === 'optional-roll-fields') Object.assign(roll, { isCritical: false, isFumble: false });
       const envelope = { type: 'roll-result', requestId: 'fixture', success: mode !== 'unsuccessful',
         data: { id: 'manual_fixture', chatMessageCreated: mode === 'chat-created', roll } };
+      if (mode === 'wrong-envelope-type') envelope.type = 'other-result';
+      if (mode === 'missing-request-id') Reflect.deleteProperty(envelope, 'requestId');
+      if (mode === 'unknown-envelope-field') Object.assign(envelope, { unverified: true });
+      if (mode === 'unknown-data-field') Object.assign(envelope.data, { unverified: true });
       response.end(mode === 'malformed' ? '{' : JSON.stringify(envelope));
     });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -114,23 +129,35 @@ describe('built MCP bounded dice workflow', () => {
     expect(new URL(attempts[0]!.path, 'http://fixture').pathname).toBe('/roll');
   });
   it.each(['auto', 'foundry'])('returns verified server outcomes once for engine %s', async engine => {
-    const result = await call(1, { formula: '2d6kh1 + 3', engine });
+    const result = await call(1, { formula: '2d6kh1 + 3', engine, reason: 'workflow native roll' });
     const value = assertDice(result, 'foundry');
     expect(value.total).toBe(9); expect(value.fallback).toBeNull();
     expect(ajv.validate(schemas[1]!, value), JSON.stringify(ajv.errors)).toBe(true);
     expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({ key: 'fixture-key', body: { createChatMessage: false } });
+    expect(attempts[0]).toMatchObject({ key: 'fixture-key', body: { formula: value.normalizedFormula,
+      createChatMessage: false, flavor: 'workflow native roll' } });
     expect(new URL(attempts[0]!.path, 'http://fixture').searchParams.get('clientId')).toBe('fixture');
     expect(JSON.stringify(result)).not.toContain('fixture-key');
   });
-  it.each(['401', '403', '500', 'timeout', 'disconnect', 'malformed', 'unsuccessful', 'wrong-total',
-    'wrong-formula', 'wrong-face', 'wrong-active', 'missing-die', 'chat-created'])('never retries or rolls locally after %s', async failure => {
-    mode = failure;
-    const result = await call(1, { formula: '2d6kh1 + 3', engine: 'auto' });
-    expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
-    expect(attempts).toHaveLength(1);
-    expect(JSON.stringify(result)).not.toContain('fixture-key');
-    await new Promise(resolve => setTimeout(resolve, 10));
-    expect(attempts).toHaveLength(1);
+  it('accepts documented optional roll metadata without changing verified outcomes', async () => {
+    mode = 'optional-roll-fields';
+    const value = assertDice(await call(1, { formula: '2d6kh1 + 3' }), 'foundry');
+    expect(value.total).toBe(9); expect(attempts).toHaveLength(1);
   });
+  for (const engine of ['auto', 'foundry']) {
+    it.each(['401', '403', '500', 'timeout', 'disconnect', 'malformed', 'unsuccessful', 'wrong-total',
+      'wrong-formula', 'wrong-face', 'wrong-active', 'missing-die', 'chat-created', 'extra-die',
+      'extra-outcome', 'wrong-die-faces', 'fractional-outcome', 'missing-active', 'missing-faces',
+      'wrong-timestamp', 'unknown-roll-field', 'unknown-die-field', 'unknown-result-field',
+      'wrong-envelope-type', 'missing-request-id', 'unknown-envelope-field', 'unknown-data-field',
+    ])(`never retries or rolls locally after %s with engine ${engine}`, async failure => {
+      mode = failure;
+      const result = await call(1, { formula: '2d6kh1 + 3', engine });
+      expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
+      expect(attempts).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain('fixture-key');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(attempts).toHaveLength(1);
+    });
+  }
 });
