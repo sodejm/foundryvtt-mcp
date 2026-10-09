@@ -845,6 +845,7 @@ export interface WorldJournal {
     video?: Record<string, unknown>;
     src?: string;
     sort?: number;
+    ownership?: Record<string, number>;
   }>;
   folder?: string | null;
   sort?: number;
@@ -858,6 +859,8 @@ export interface WorldJournal {
 export interface WorldMessage {
   _id: string;
   type: number;
+  /** Foundry v14 persists the author id as `author`; older snapshots use `user`. */
+  author?: string;
   user: string;
   timestamp: number;
   flavor?: string;

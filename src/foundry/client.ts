@@ -5,12 +5,22 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
+import {
+  type AuthorizationMode,
+  type AuthorizedCallerState,
+  CallerAuthorizationError,
+  CallerContextStorage,
+  DELEGATED_READ_SURFACES,
+  type ReadSurface,
+  type TrustedCallerContext,
+  validateTrustedCallerContext,
+} from './caller-context.js';
 import { evaluateDiceFormula } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
 import {
@@ -229,6 +239,171 @@ const WorldDataSchema = z.object({
 });
 
 const MAX_REFRESH_EVENT_BUFFER = 1000;
+const OBSERVER_PERMISSION = 2;
+const GAMEMASTER_ROLE = 3;
+const INHERIT_PERMISSION = -1;
+
+function cloneValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  Object.freeze(value);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(child);
+  }
+  return value;
+}
+
+function permissionLevel(ownership: unknown, userId: string, inheritedLevel?: number): number {
+  if (ownership === undefined) {
+    return inheritedLevel ?? 0;
+  }
+  if (typeof ownership !== 'object' || ownership === null || Array.isArray(ownership)) {
+    return 0;
+  }
+  const record = ownership as Record<string, unknown>;
+  const raw = Object.hasOwn(record, userId)
+    ? record[userId]
+    : Object.hasOwn(record, 'default')
+      ? record.default
+      : INHERIT_PERMISSION;
+  if (!Number.isInteger(raw) || (raw as number) < INHERIT_PERMISSION || (raw as number) > 3) {
+    return 0;
+  }
+  return raw === INHERIT_PERMISSION ? (inheritedLevel ?? 0) : (raw as number);
+}
+
+function ownershipIsValid(ownership: unknown): boolean {
+  if (ownership === undefined) {
+    return true;
+  }
+  if (typeof ownership !== 'object' || ownership === null || Array.isArray(ownership)) {
+    return false;
+  }
+  return Object.entries(ownership).every(
+    ([key, level]) =>
+      key.length > 0 &&
+      Number.isInteger(level) &&
+      (level as number) >= INHERIT_PERMISSION &&
+      (level as number) <= 3,
+  );
+}
+
+function canObserve(ownership: unknown, user: WorldUser, inheritedLevel?: number): boolean {
+  if (ownership === undefined && inheritedLevel === undefined) {
+    return false;
+  }
+  if (!ownershipIsValid(ownership)) {
+    return false;
+  }
+  return (
+    user.role >= GAMEMASTER_ROLE ||
+    permissionLevel(ownership, user._id, inheritedLevel) >= OBSERVER_PERMISSION
+  );
+}
+
+function sanitizeUser(user: WorldUser, visibleActorIds: ReadonlySet<string>): WorldUser {
+  const sanitized: WorldUser = {
+    _id: user._id,
+    name: user.name,
+    role: user.role,
+    color: user.color,
+  };
+  if (user.avatar !== undefined) {
+    sanitized.avatar = user.avatar;
+  }
+  if (user.character !== undefined && visibleActorIds.has(user.character)) {
+    sanitized.character = user.character;
+  }
+  if (user.pronouns !== undefined) {
+    sanitized.pronouns = user.pronouns;
+  }
+  return sanitized;
+}
+
+function canReadChatMessage(message: WorldMessage, user: WorldUser): boolean {
+  const author = message.author ?? message.user;
+  if (typeof author !== 'string' || author.length === 0) {
+    return false;
+  }
+  if (message.blind !== undefined && typeof message.blind !== 'boolean') {
+    return false;
+  }
+  let whisper: string[];
+  if (message.whisper === undefined) {
+    whisper = [];
+  } else if (
+    !Array.isArray(message.whisper) ||
+    message.whisper.some((entry) => typeof entry !== 'string' || entry.length === 0)
+  ) {
+    return false;
+  } else {
+    whisper = message.whisper;
+  }
+  if (author === user._id) {
+    return message.blind !== true || user.role >= GAMEMASTER_ROLE;
+  }
+  return whisper.length === 0 || whisper.includes(user._id);
+}
+
+function projectWorldData(source: WorldData, user: WorldUser): WorldData {
+  const actors = source.actors
+    .filter((actor) => canObserve(actor.ownership, user))
+    .map((actor) => {
+      const actorLevel = permissionLevel(actor.ownership, user._id);
+      const result = cloneValue(actor);
+      if (Array.isArray(result.items)) {
+        result.items = result.items.filter((item) => canObserve(item.ownership, user, actorLevel));
+      }
+      return result;
+    });
+  const items = source.items.filter((item) => canObserve(item.ownership, user)).map(cloneValue);
+  const journal = source.journal
+    .filter((entry) => canObserve(entry.ownership, user))
+    .map((entry) => {
+      const entryLevel = permissionLevel(entry.ownership, user._id);
+      const result = cloneValue(entry);
+      if (Array.isArray(result.pages)) {
+        result.pages = result.pages.filter((page) => canObserve(page.ownership, user, entryLevel));
+      }
+      return result;
+    });
+  const messages = source.messages
+    .filter((message) => canReadChatMessage(message, user))
+    .map((message) => {
+      const result = cloneValue(message);
+      result.user = message.author ?? message.user;
+      return result;
+    });
+  const ownUser = sanitizeUser(user, new Set(actors.map((actor) => actor._id)));
+  return {
+    userId: user._id,
+    release: cloneValue(source.release),
+    world: cloneValue(source.world),
+    system: cloneValue(source.system),
+    modules: [],
+    demoMode: source.demoMode,
+    actors,
+    scenes: [],
+    items,
+    journal,
+    messages,
+    combats: [],
+    users: [ownUser],
+    activeUsers: source.activeUsers.includes(user._id) ? [user._id] : [],
+    settings: [],
+    macros: [],
+    playlists: [],
+    tables: [],
+    folders: [],
+    cards: [],
+    packs: [],
+  };
+}
 
 type BufferedWorldEvent =
   | { kind: 'document'; value: DocumentBroadcast }
@@ -253,6 +428,8 @@ export interface FoundryClientConfig {
   socketPath?: string;
   /** Opt-in gate for game-state mutations (FOUNDRY_WRITE_ENABLED). Default false. */
   writeEnabled?: boolean;
+  /** Authorization boundary for public reads. Default preserves service-identity behavior. */
+  authorizationMode?: AuthorizationMode;
 }
 
 /** Minimal shape of FoundryVTT's `modifyDocument` Socket.IO acknowledgement. */
@@ -342,6 +519,7 @@ export class FoundryClient {
   } | null = null;
   private refreshBuffer: RefreshBuffer | null = null;
   private readonly pendingWorldRequests = new Set<(error: Error) => void>();
+  private readonly callerContext = new CallerContextStorage();
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -359,8 +537,12 @@ export class FoundryClient {
       retryAttempts: 3,
       retryDelay: 1000,
       socketPath: '/socket.io/',
+      authorizationMode: 'service-identity',
       ...config,
     };
+    if (!['service-identity', 'delegated'].includes(this.config.authorizationMode ?? '')) {
+      throw new Error('authorizationMode must be service-identity or delegated');
+    }
 
     this.http = axios.create({
       baseURL: this.config.baseUrl,
@@ -401,6 +583,103 @@ export class FoundryClient {
 
     const mode = this.config.apiKey ? 'REST API' : 'Socket.IO';
     logger.info(`FoundryVTT client initialized (${mode} mode)`);
+  }
+
+  isDelegatedMode(): boolean {
+    return this.config.authorizationMode === 'delegated';
+  }
+
+  assertReadSurfaceAllowed(surface: ReadSurface): void {
+    if (!this.isDelegatedMode()) {
+      return;
+    }
+    if (!DELEGATED_READ_SURFACES.has(surface)) {
+      throw new CallerAuthorizationError();
+    }
+    this.requireDelegatedState();
+  }
+
+  private requireDelegatedState(): AuthorizedCallerState {
+    const state = this.callerContext.getStore();
+    if (!state || !this.connectionIsLive()) {
+      throw new CallerAuthorizationError();
+    }
+    return state;
+  }
+
+  private readWorld(surface: ReadSurface): WorldData {
+    if (!this.isDelegatedMode()) {
+      return this.requireWorldData();
+    }
+    if (!DELEGATED_READ_SURFACES.has(surface)) {
+      throw new CallerAuthorizationError();
+    }
+    return this.requireDelegatedState().view as WorldData;
+  }
+
+  async runWithCaller<T>(
+    context: TrustedCallerContext,
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    if (!this.isDelegatedMode()) {
+      return await operation();
+    }
+    let state: AuthorizedCallerState;
+    try {
+      const validated = validateTrustedCallerContext(context);
+      if (this.config.apiKey) {
+        throw new CallerAuthorizationError();
+      }
+      const socket = this.socket;
+      if (!socket?.connected || !this._isConnected) {
+        throw new CallerAuthorizationError();
+      }
+      const generation = this.socketGeneration;
+      const epoch = this.socketEpoch;
+      const parsed = WorldDataSchema.safeParse(
+        await this.requestWorldSnapshot(socket, generation, epoch),
+      );
+      if (
+        !parsed.success ||
+        !this.isCurrentSocket(socket, generation, epoch) ||
+        !socket.connected
+      ) {
+        throw new CallerAuthorizationError();
+      }
+      const snapshot = parsed.data as unknown as WorldData;
+      if (snapshot.userId !== this.socketUserId || snapshot.world.id !== validated.worldId) {
+        throw new CallerAuthorizationError();
+      }
+      const matchingUsers = snapshot.users.filter((entry) => entry._id === validated.userId);
+      const caller = matchingUsers.length === 1 ? matchingUsers[0] : undefined;
+      if (
+        !caller ||
+        !Number.isInteger(caller.role) ||
+        caller.role <= 0 ||
+        caller.role > 4 ||
+        typeof caller.name !== 'string' ||
+        caller.name.length === 0 ||
+        typeof caller.color !== 'string'
+      ) {
+        throw new CallerAuthorizationError();
+      }
+      const view = deepFreeze(projectWorldData(snapshot, caller));
+      const authorizationFingerprint = createHash('sha256')
+        .update(JSON.stringify({ context: validated, view }))
+        .digest('hex');
+      state = Object.freeze({
+        context: validated,
+        view,
+        authorizationFingerprint,
+        capturedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof CallerAuthorizationError) {
+        throw error;
+      }
+      throw new CallerAuthorizationError();
+    }
+    return await this.callerContext.run(state, operation);
   }
 
   /**
@@ -493,7 +772,7 @@ export class FoundryClient {
         this._isConnected = true;
         this.attachSocketListeners(socket);
         try {
-          await this.refreshWorldData();
+          await this.refreshWorldDataInternal();
           if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
             return;
           }
@@ -670,7 +949,7 @@ export class FoundryClient {
     this.resetPaginationSession();
     this._isConnected = true;
     this.worldDataStale = this.worldData !== null;
-    void this.refreshWorldData().catch((error: unknown) => {
+    void this.refreshWorldDataInternal().catch((error: unknown) => {
       logger.warn('Automatic world snapshot recovery failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -704,7 +983,7 @@ export class FoundryClient {
     this.rotateReadSession();
     this.clearSocketSnapshot();
     if (this.socket?.connected) {
-      void this.refreshWorldData().catch((error: unknown) => {
+      void this.refreshWorldDataInternal().catch((error: unknown) => {
         logger.warn('World snapshot load after session change failed', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -806,6 +1085,20 @@ export class FoundryClient {
   /** Non-throwing diagnostics for the source snapshot used by world reads. */
   getReadMetadata(): WorldReadMetadata {
     const respondedAt = new Date().toISOString();
+    if (this.isDelegatedMode()) {
+      const state = this.requireDelegatedState();
+      return {
+        source: 'socket',
+        freshness: 'current',
+        worldId: state.context.worldId,
+        sessionId: state.context.sessionId,
+        snapshotId: state.authorizationFingerprint,
+        revision: 1,
+        capturedAt: state.capturedAt,
+        observedAt: state.capturedAt,
+        respondedAt,
+      };
+    }
     if (this.config.apiKey) {
       return {
         source: 'rest',
@@ -858,6 +1151,13 @@ export class FoundryClient {
    * I/O of its own, because this accessor is synchronous and widely called.
    */
   isConnected(): boolean {
+    if (this.isDelegatedMode()) {
+      this.assertReadSurfaceAllowed('diagnostics');
+    }
+    return this.connectionIsLive();
+  }
+
+  private connectionIsLive(): boolean {
     if (this.config.apiKey) {
       return this._isConnected && this.restLinkLive;
     }
@@ -870,6 +1170,7 @@ export class FoundryClient {
    * the cache; this flags that the answer is a point-in-time copy.
    */
   isWorldDataStale(): boolean {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.worldDataStale;
   }
 
@@ -877,6 +1178,7 @@ export class FoundryClient {
    * Returns true if worldData is available (Socket.IO mode connected).
    */
   hasWorldData(): boolean {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.worldData !== null;
   }
 
@@ -885,6 +1187,13 @@ export class FoundryClient {
   // ==========================================================================
 
   async refreshWorldData(): Promise<void> {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
+    }
+    return this.refreshWorldDataInternal();
+  }
+
+  private async refreshWorldDataInternal(): Promise<void> {
     const socket = this.socket;
     if (!socket?.connected) {
       throw new Error('Not connected — cannot refresh world data');
@@ -1024,7 +1333,7 @@ export class FoundryClient {
   }
 
   getWorldData(): WorldData | null {
-    return this.worldData;
+    return this.isDelegatedMode() ? this.readWorld('search') : this.worldData;
   }
 
   // ==========================================================================
@@ -1032,6 +1341,18 @@ export class FoundryClient {
   // ==========================================================================
 
   private paginationContext(kind: string, filters: Record<string, unknown>): string {
+    if (this.isDelegatedMode()) {
+      const state = this.requireDelegatedState();
+      return JSON.stringify({
+        kind,
+        filters,
+        callerId: state.context.callerId,
+        userId: state.context.userId,
+        worldId: state.context.worldId,
+        sessionId: state.context.sessionId,
+        authorizationFingerprint: state.authorizationFingerprint,
+      });
+    }
     const world = this.config.apiKey
       ? this.restStatusIdentity
       : JSON.stringify(this.worldData?.world ?? null);
@@ -1042,6 +1363,10 @@ export class FoundryClient {
   }
 
   private assertSocketPaginationAuthorized(): void {
+    if (this.isDelegatedMode()) {
+      this.requireDelegatedState();
+      return;
+    }
     if (this.config.apiKey) {
       return;
     }
@@ -1182,6 +1507,7 @@ export class FoundryClient {
   }
 
   async searchActors(params: SearchActorsParams): Promise<ActorSearchResult> {
+    this.assertReadSurfaceAllowed('actors');
     const filters = { query: params.query, type: params.type };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
@@ -1191,10 +1517,7 @@ export class FoundryClient {
       if (this.config.apiKey) {
         records = await this.fetchAllRestActors(filters);
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-        }
+        const worldData = this.readWorld('actors');
         records = worldData.actors
           .filter(
             (actor) =>
@@ -1211,17 +1534,14 @@ export class FoundryClient {
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
+    this.assertReadSurfaceAllowed('actors');
     assertReadId(actorId, 'actorId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
       return restActor(response.data, actorId);
     }
 
-    if (!this.worldData) {
-      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-    }
-
-    const actor = this.worldData.actors.find((a) => a._id === actorId);
+    const actor = this.readWorld('actors').actors.find((a) => a._id === actorId);
     if (!actor) {
       throw new Error(`Actor not found: ${actorId}`);
     }
@@ -1233,7 +1553,7 @@ export class FoundryClient {
    * Returns the raw WorldActor with the full system data (game-system specific).
    */
   getRawActor(actorId: string): WorldActor | undefined {
-    return this.requireWorldData().actors.find((a) => a._id === actorId);
+    return this.readWorld('actors').actors.find((a) => a._id === actorId);
   }
 
   /**
@@ -1303,6 +1623,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async searchItems(params: SearchItemsParams): Promise<ItemSearchResult> {
+    this.assertReadSurfaceAllowed('items');
     const filters = { query: params.query, type: params.type, rarity: params.rarity };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
@@ -1312,10 +1633,7 @@ export class FoundryClient {
       if (this.config.apiKey) {
         records = await this.fetchAllRestItems(filters);
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-        }
+        const worldData = this.readWorld('items');
         records = worldData.items
           .filter(
             (item) =>
@@ -1336,15 +1654,13 @@ export class FoundryClient {
 
   /** Read one world item only; actor-owned and compendium items are excluded. */
   async getItem(itemId: string): Promise<FoundryItem> {
+    this.assertReadSurfaceAllowed('items');
     assertReadId(itemId, 'itemId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
       return restItem(response.data, itemId);
     }
-    if (!this.worldData) {
-      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-    }
-    const item = this.worldData.items.find((entry) => entry._id === itemId);
+    const item = this.readWorld('items').items.find((entry) => entry._id === itemId);
     if (!item) {
       throw new Error(`Item not found: ${itemId}`);
     }
@@ -1366,6 +1682,7 @@ export class FoundryClient {
    * explaining why no results were returned.
    */
   async searchCompendium(params: CompendiumSearchParams): Promise<CompendiumSearchResult> {
+    this.assertReadSurfaceAllowed('compendia');
     const limit = params.limit ?? 20;
     const offset = decodeCursor(params.cursor);
 
@@ -1405,6 +1722,9 @@ export class FoundryClient {
    * Throws a clear, actionable error otherwise.
    */
   private assertWriteable(): void {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
+    }
     if (!this.config.writeEnabled) {
       throw new Error(
         'Write operations are disabled. Set FOUNDRY_WRITE_ENABLED=true to allow game-state mutation.',
@@ -1718,6 +2038,7 @@ export class FoundryClient {
     tokenId: string,
     sceneId?: string,
   ): { scene: WorldScene; token: Record<string, unknown> } | null {
+    this.assertReadSurfaceAllowed('tokens');
     if (!this.worldData) {
       return null;
     }
@@ -1837,6 +2158,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async getCurrentScene(sceneId?: string): Promise<FoundryScene> {
+    this.assertReadSurfaceAllowed('scenes');
     if (sceneId !== undefined && !FOUNDRY_ID_PATTERN.test(sceneId)) {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
@@ -1871,6 +2193,7 @@ export class FoundryClient {
   }
 
   getScenes(): WorldScene[] {
+    this.assertReadSurfaceAllowed('scenes');
     return this.requireWorldData().scenes;
   }
 
@@ -1879,6 +2202,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async getWorldInfo(): Promise<FoundryWorld> {
+    this.assertReadSurfaceAllowed('diagnostics');
     if (this.config.apiKey) {
       return this.executeWithRetry(async () => {
         const response = await this.http.get('/api/world');
@@ -1915,6 +2239,7 @@ export class FoundryClient {
   // ==========================================================================
 
   getCombatState(): WorldCombat | null {
+    this.assertReadSurfaceAllowed('combat');
     return this.requireWorldData().combats.find((c) => c.active) ?? null;
   }
 
@@ -1923,7 +2248,7 @@ export class FoundryClient {
   // ==========================================================================
 
   getChatMessages(limit = 20): WorldMessage[] {
-    return this.requireWorldData().messages.slice(-limit);
+    return this.readWorld('chat').messages.slice(-limit);
   }
 
   // ==========================================================================
@@ -1931,7 +2256,7 @@ export class FoundryClient {
   // ==========================================================================
 
   getUsers(): { users: WorldUser[]; activeUsers: string[] } {
-    const worldData = this.requireWorldData();
+    const worldData = this.readWorld('users');
     return {
       users: worldData.users,
       activeUsers: worldData.activeUsers,
@@ -1943,11 +2268,11 @@ export class FoundryClient {
   // ==========================================================================
 
   getJournals(): WorldJournal[] {
-    return this.requireWorldData().journal;
+    return this.readWorld('journals').journal;
   }
 
   searchJournals(query: string): WorldJournal[] {
-    const worldData = this.requireWorldData();
+    const worldData = this.readWorld('journals');
     const q = query.toLowerCase();
     return worldData.journal.filter((j) => {
       if (j.name.toLowerCase().includes(q)) {
@@ -1989,7 +2314,7 @@ export class FoundryClient {
   }
 
   getJournal(journalId: string): WorldJournal | undefined {
-    return this.requireWorldData().journal.find((j) => j._id === journalId);
+    return this.readWorld('journals').journal.find((j) => j._id === journalId);
   }
 
   // ==========================================================================
@@ -2066,7 +2391,7 @@ export class FoundryClient {
     scenes: WorldScene[];
     journals: WorldJournal[];
   } {
-    const worldData = this.requireWorldData();
+    const worldData = this.readWorld('search');
 
     const q = query.toLowerCase();
 
@@ -2086,10 +2411,7 @@ export class FoundryClient {
       );
     }
     this.assertSocketPaginationAuthorized();
-    const worldData = this.worldData;
-    if (!worldData) {
-      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-    }
+    const worldData = this.readWorld('search');
     const filters = { query: params.query };
     const context = this.paginationContext('world-search', filters);
     let records: CollectionRecord[] | undefined;
@@ -2142,6 +2464,8 @@ export class FoundryClient {
     collection: 'actors' | 'items' | 'scenes' | 'journals' | 'users',
     params: PaginationParams,
   ): Promise<CollectionPage> {
+    const surface: ReadSurface = collection === 'scenes' ? 'scenes' : collection;
+    this.assertReadSurfaceAllowed(surface);
     this.assertSocketPaginationAuthorized();
     if (this.config.apiKey && !['actors', 'items'].includes(collection)) {
       throw new Error(
@@ -2171,10 +2495,7 @@ export class FoundryClient {
           }));
         }
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-        }
+        const worldData = this.readWorld(surface);
         switch (collection) {
           case 'actors':
             records = worldData.actors.map((record) => ({
@@ -2229,7 +2550,16 @@ export class FoundryClient {
   // ==========================================================================
 
   getWorldSummary(): Record<string, number> {
-    const worldData = this.requireWorldData();
+    const worldData = this.readWorld('world-summary');
+    if (this.isDelegatedMode()) {
+      return {
+        actors: worldData.actors.length,
+        items: worldData.items.length,
+        journals: worldData.journal.length,
+        users: worldData.users.length,
+        messages: worldData.messages.length,
+      };
+    }
     return {
       actors: worldData.actors.length,
       items: worldData.items.length,
@@ -2276,6 +2606,9 @@ export class FoundryClient {
    * mis-totalled locally.
    */
   async rollDice(formula: string, reason?: string): Promise<DiceRoll> {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
+    }
     if (typeof formula !== 'string' || formula.length > MAX_DICE_FORMULA_LENGTH) {
       throw new Error(`Invalid dice formula: ${formula}`);
     }
@@ -2337,6 +2670,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async testConnection(): Promise<boolean> {
+    this.assertReadSurfaceAllowed('diagnostics');
     try {
       const user = this.config.userId || this.config.username;
       if (this.config.apiKey || (user && this.config.password !== undefined)) {
@@ -2389,6 +2723,7 @@ export class FoundryClient {
   }
 
   async get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.executeWithRetry(() => this.http.get(url, config));
   }
 
@@ -2397,6 +2732,7 @@ export class FoundryClient {
     data?: unknown,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.post(url, data, config));
   }
 
@@ -2405,10 +2741,12 @@ export class FoundryClient {
     data?: unknown,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.put(url, data, config));
   }
 
   async delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.delete(url, config));
   }
 }
