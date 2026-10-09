@@ -938,7 +938,13 @@ export class FoundryClient {
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        if (!this.isCurrentSocket(socket, generation, epoch) || !socket.connected) break;
+        if (
+          buffer.overflowed ||
+          !this.isCurrentSocket(socket, generation, epoch) ||
+          !socket.connected
+        ) {
+          break;
+        }
         if (attempt < attempts && (this.config.retryDelay ?? 0) > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, this.config.retryDelay));
         }

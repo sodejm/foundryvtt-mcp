@@ -86,6 +86,17 @@ describe('SnapshotPaginator', () => {
     expect(second.consistency).toBe('snapshot');
   });
 
+  it('supports the legacy numeric default-limit argument', () => {
+    const paginator = new SnapshotPaginator({ secret: 'test-secret' });
+
+    expect(paginator.paginate([1, 2, 3], {}, 'context', 2)).toMatchObject({
+      records: [1, 2],
+      limit: 2,
+      returnedCount: 2,
+      complete: false,
+    });
+  });
+
   it('supports deterministic cursor replay and isolates the snapshot from mutations', () => {
     const source = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
     const paginator = new SnapshotPaginator({ secret: 'test-secret' });
