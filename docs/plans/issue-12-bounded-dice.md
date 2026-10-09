@@ -29,9 +29,11 @@ parity. Combat automation and arbitrary scripting remain outside this issue.
   transport is configured, and reports that reason. Foundry-required execution
   without configuration fails. Partial configuration is an error.
 - Prefer the configured paired REST `/roll` transport, disable chat creation and
-  use its official Foundry engine. Preserve the legacy route only where its
-  response can be validated against the bounded formula and returned outcomes.
-  Reject invalid, inconsistent or incomplete responses.
+  use its official Foundry engine. The inspected legacy route returns only a
+  total and optional numeric results; it cannot establish dice counts, faces,
+  active flags or a matching formula. Reject legacy-only configuration before
+  HTTP and explain the paired REST migration. Complete paired configuration
+  takes precedence. Reject invalid, inconsistent or incomplete responses.
 - Once a request is attempted, authentication failures, network failures,
   timeouts, uncertain completion and malformed responses return errors. Never
   retry or silently reroll locally. Preserve delegated caller restrictions.

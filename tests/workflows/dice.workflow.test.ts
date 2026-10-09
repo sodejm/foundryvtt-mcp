@@ -26,8 +26,8 @@ describe('built MCP bounded dice workflow', () => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       let raw = '';
       for await (const chunk of request) raw += chunk;
+      attempts.push({ path: request.url!, body: JSON.parse(raw || '{}'), key: request.headers['x-api-key'] as string | undefined });
       if (url.pathname !== '/roll') { response.writeHead(404).end('{}'); return; }
-      attempts.push({ path: request.url!, body: JSON.parse(raw), key: request.headers['x-api-key'] as string | undefined });
       response.setHeader('content-type', 'application/json');
       if (['401', '403', '500'].includes(mode)) { response.writeHead(Number(mode)).end('{"error":"fixture-key"}'); return; }
       if (mode === 'timeout') { setTimeout(() => response.end('{}'), 600); return; }
@@ -48,7 +48,12 @@ describe('built MCP bounded dice workflow', () => {
     if (!address || typeof address === 'string') throw new Error('Missing fixture port');
     const url = `http://127.0.0.1:${address.port}`;
     cwd = await mkdtemp(join(tmpdir(), 'foundry-dice-workflow-'));
-    for (const config of [{}, { FOUNDRY_REST_URL: url, FOUNDRY_REST_API_KEY: 'fixture-key', FOUNDRY_REST_CLIENT_ID: 'fixture' }, { FOUNDRY_REST_URL: url }]) {
+    for (const config of [{},
+      { FOUNDRY_REST_URL: url, FOUNDRY_REST_API_KEY: 'fixture-key', FOUNDRY_REST_CLIENT_ID: 'fixture' },
+      { FOUNDRY_REST_URL: url },
+      { FOUNDRY_API_KEY: 'legacy-dice-key' },
+      { FOUNDRY_REST_URL: url, FOUNDRY_REST_API_KEY: 'fixture-key', FOUNDRY_REST_CLIENT_ID: 'fixture', FOUNDRY_API_KEY: 'legacy-dice-key' },
+    ]) {
       const transport = new StdioClientTransport({ command: process.execPath,
         args: [fileURLToPath(new URL('../../dist/index.js', import.meta.url))], cwd, stderr: 'pipe', env: {
           NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: url, FOUNDRY_USERNAME: 'fixture',
@@ -78,7 +83,7 @@ describe('built MCP bounded dice workflow', () => {
     expect(ajv.validate(schemas[0]!, value), JSON.stringify(ajv.errors)).toBe(true);
     expect(attempts).toEqual([]);
   });
-  for (const index of [0, 1, 2]) {
+  for (const index of [0, 1, 2, 3, 4]) {
     it.each(invalidDiceCases)(`rejects invalid input before rolling, transport ${index}: %j`, async args => {
       await expect(call(index, args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
       expect(attempts).toEqual([]);
@@ -93,6 +98,20 @@ describe('built MCP bounded dice workflow', () => {
       const result = await call(index, args); expect(result.isError).toBe(true);
       expect(result.structuredContent).toBeUndefined(); expect(attempts).toEqual([]);
     }
+  });
+  it.each(['auto', 'foundry'])('rejects an unsupported legacy dice transport for engine %s before HTTP', async engine => {
+    const result = await call(3, { formula: '1d6', engine });
+    expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
+    expect(JSON.stringify(result)).toMatch(/legacy|FOUNDRY_REST/i);
+    expect(JSON.stringify(result)).not.toContain('legacy-dice-key');
+    expect(attempts).toEqual([]);
+  });
+  it('prefers complete paired configuration when a legacy API key is also present', async () => {
+    const value = assertDice(await call(4, { formula: '2d6kh1 + 3' }), 'foundry');
+    expect(value.total).toBe(9); expect(value.fallback).toBeNull();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ key: 'fixture-key', body: { createChatMessage: false } });
+    expect(new URL(attempts[0]!.path, 'http://fixture').pathname).toBe('/roll');
   });
   it.each(['auto', 'foundry'])('returns verified server outcomes once for engine %s', async engine => {
     const result = await call(1, { formula: '2d6kh1 + 3', engine });

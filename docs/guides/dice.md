@@ -45,12 +45,15 @@ for the official engine.
 | `auto`, configured transport | Evaluate once through Foundry; errors remain errors |
 | `foundry` | Require a configured Foundry transport; missing transport is an error |
 
-The preferred Foundry transport is the paired REST module/relay configured with
+The supported Foundry transport is the paired REST module/relay configured with
 all three `FOUNDRY_REST_URL`, `FOUNDRY_REST_API_KEY` and
 `FOUNDRY_REST_CLIENT_ID` values. Partial REST configuration is an error, not a
 reason to evaluate locally. The adapter calls `POST /roll` with
-`createChatMessage: false`. A legacy `FOUNDRY_API_KEY` transport is accepted only
-when its response can be validated against the complete formula and outcomes.
+`createChatMessage: false`. Complete paired configuration takes precedence when
+a legacy `FOUNDRY_API_KEY` is also present. A legacy-only configuration fails
+before HTTP: that route's total and optional numeric results cannot establish
+dice counts, faces, active flags or a matching formula. Configure the paired REST
+values to use Foundry, or select `engine: local` explicitly.
 
 After a remote roll request starts, authentication failures, disconnects,
 timeouts, malformed responses and other failures never cause an automatic retry
@@ -79,8 +82,8 @@ and `fallback`, and validate against the schema advertised by `tools/list`.
 
 ## Verification
 
-The workflow suite drives the built MCP server through local, paired REST and
-partial-configuration paths. It checks schema agreement, rejected input before
+The workflow suite drives the built MCP server through local, paired REST,
+partial configuration and legacy-only paths. It checks schema agreement, rejected input before
 HTTP, one remote attempt on failure and absence of silent fallback. The live
 suite uses the disposable `test1world` on Foundry 14 and compares the local
 evaluator with official `Roll.evaluate()` under identical controlled random
