@@ -471,30 +471,8 @@ export interface FoundryCombat {
   };
 }
 
-/**
- * Represents the result of a dice roll in FoundryVTT
- *
- * Contains all information about a completed dice roll including
- * the formula used, total result, breakdown, and metadata.
- *
- * @example
- * ```typescript
- * const attackRoll: DiceRoll = {
- *   formula: '1d20+5',
- *   total: 18,
- *   breakdown: '13 + 5',
- *   reason: 'Sword attack',
- *   timestamp: '2024-01-15T10:30:00Z'
- * };
- * ```
- */
-export interface DiceRoll {
-  formula: string;
-  total: number;
-  breakdown: string;
-  reason?: string;
-  timestamp: string;
-}
+/** Versioned, verified outcomes with explicit engine provenance. */
+export type DiceRoll = import('./dice-contract.js').DiceRollOutput;
 
 export interface FoundryUser {
   _id: string;

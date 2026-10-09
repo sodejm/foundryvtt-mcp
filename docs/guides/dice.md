@@ -35,6 +35,10 @@ The bounds apply to the entire formula: at most 1,000 dice, 50 numeric/dice term
 constant. `999d1` and `500d1+500d1` are valid; `1000d1` is rejected.
 Splitting dice across terms does not bypass the aggregate limit.
 
+Normalization preserves additive grouping while flattening left-associative
+expressions and collapsing repeated unary signs. This keeps boundary-length
+formulas within the native engine's practical nesting limits.
+
 Foundry supports a wider notation and has its own modifier defaults. The MCP
 subset deliberately rejects explicit zero or oversized modifier counts. See
 Foundry's [dice modifier reference](https://foundryvtt.com/article/dice-modifiers/)

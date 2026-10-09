@@ -34,6 +34,7 @@ import {
   handleGetSystemHealth,
   handleSearchLogs,
 } from './handlers/diagnostics.js';
+import { handleRollDice } from './handlers/dice.js';
 import { handleGenerateLoot, handleGenerateNPC } from './handlers/generation.js';
 import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleReadResource } from './handlers/resources.js';
@@ -100,6 +101,8 @@ async function routeLegacyTool(
   _diagnosticSystem: DiagnosticSystem,
 ) {
   switch (name) {
+    case 'roll_dice':
+      return handleRollDice(args, foundryClient);
     // Actor tools
     case 'search_actors':
       return handleSearchActors(args, foundryClient);

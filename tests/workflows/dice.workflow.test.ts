@@ -9,10 +9,12 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { WebSocketServer } from 'ws';
 import { assertDice, invalidDiceCases, validDiceCases } from '../helpers/dice-contract.js';
 
 describe('built MCP bounded dice workflow', () => {
   let server: Server;
+  let sockets: WebSocketServer;
   let cwd: string;
   let mode = 'success';
   let attempts: Array<{ method: string | undefined; path: string; body: Record<string, unknown>; key: string | undefined }> = [];
@@ -21,14 +23,21 @@ describe('built MCP bounded dice workflow', () => {
   const schemas: object[] = [];
   const ajv = new Ajv({ allErrors: true, strict: false });
   const pairedClientId = 'fixture client/+';
+  const userId = 'fixtureUser00001';
   beforeEach(() => { attempts = []; mode = 'success'; });
   beforeAll(async () => {
     server = createServer(async (request, response) => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname === '/join') {
+        response.setHeader('set-cookie', 'session=fixture-session; HttpOnly; Path=/');
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ status: 'success' })); return;
+      }
+      if (url.pathname === '/api/status') { response.end('{"connected":true}'); return; }
+      if (url.pathname !== '/roll') { response.writeHead(404).end('{}'); return; }
       let raw = '';
       for await (const chunk of request) raw += chunk;
       attempts.push({ method: request.method, path: request.url!, body: JSON.parse(raw || '{}'), key: request.headers['x-api-key'] as string | undefined });
-      if (url.pathname !== '/roll') { response.writeHead(404).end('{}'); return; }
       response.setHeader('content-type', 'application/json');
       if (['401', '403', '500'].includes(mode)) { response.writeHead(Number(mode)).end('{"error":"fixture-key"}'); return; }
       if (mode === 'timeout') { setTimeout(() => response.end('{}'), 600); return; }
@@ -59,6 +68,25 @@ describe('built MCP bounded dice workflow', () => {
       if (mode === 'unknown-data-field') Object.assign(envelope.data, { unverified: true });
       response.end(mode === 'malformed' ? '{' : JSON.stringify(envelope));
     });
+    // Real CLI bootstrap uses the authenticated Socket.IO session and a world snapshot.
+    sockets = new WebSocketServer({ server, path: '/socket.io/' });
+    sockets.on('connection', socket => {
+      socket.send(`0${JSON.stringify({ sid: 'fixture-session', upgrades: [], pingInterval: 25000, pingTimeout: 20000, maxPayload: 1000000 })}`);
+      socket.on('message', raw => {
+        const packet = raw.toString();
+        if (packet === '40') {
+          socket.send('40{"sid":"fixture-session"}');
+          socket.send(`42${JSON.stringify(['session', { userId }])}`);
+        } else if (packet === '2') socket.send('3');
+        const worldRequest = /^42(\d+)\["world"\]$/.exec(packet);
+        if (worldRequest) socket.send(`43${worldRequest[1]}${JSON.stringify([{
+          userId, release: { version: '14.369' }, world: { id: 'fixture' }, system: { id: 'fixture' },
+          modules: [], demoMode: false, actors: [], scenes: [], items: [], journal: [], messages: [], combats: [],
+          users: [{ _id: userId, name: 'Fixture', role: 4, color: '#ffffff' }], activeUsers: [userId],
+          settings: [], macros: [], playlists: [], tables: [], folders: [], cards: [], packs: [],
+        }])}`);
+      });
+    });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Missing fixture port');
@@ -77,7 +105,7 @@ describe('built MCP bounded dice workflow', () => {
     ]) {
       const transport = new StdioClientTransport({ command: process.execPath,
         args: [fileURLToPath(new URL('../../dist/index.js', import.meta.url))], cwd, stderr: 'pipe', env: {
-          NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: url, FOUNDRY_USERNAME: 'fixture',
+          NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: url, FOUNDRY_USER_ID: userId, FOUNDRY_PASSWORD: '',
           FOUNDRY_TIMEOUT: '200', FOUNDRY_RETRY_ATTEMPTS: '3', ...config,
         } });
       transports.push(transport); transport.stderr?.on('data', () => {});
@@ -90,11 +118,22 @@ describe('built MCP bounded dice workflow', () => {
   });
   afterAll(async () => {
     await Promise.allSettled([...clients.map(client => client.close()), ...transports.map(transport => transport.close())]);
+    if (sockets) {
+      for (const socket of sockets.clients) socket.terminate();
+      await new Promise<void>(resolve => sockets.close(() => resolve()));
+    }
     if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
     if (cwd) await rm(cwd, { recursive: true, force: true });
   });
   async function call(index: number, args: Record<string, unknown>) {
     return CallToolResultSchema.parse(await clients[index]!.callTool({ name: 'roll_dice', arguments: args }));
+  }
+  async function internalFailure(index: number, args: Record<string, unknown>) {
+    const error = await call(index, args).then(() => { throw new Error('Expected tool execution to fail'); }, error => error);
+    expect(error).toMatchObject({ code: ErrorCode.InternalError });
+    expect(String(error)).not.toContain('fixture-key');
+    expect(String(error)).not.toContain('legacy-dice-key');
+    return error;
   }
   it.each(validDiceCases)('supports bounded grammar without a configured transport: %s', async formula => {
     const result = await call(0, { formula, reason: 'workflow provenance' });
@@ -116,23 +155,18 @@ describe('built MCP bounded dice workflow', () => {
   }
   it('fails a required Foundry engine or partial configuration before rolling', async () => {
     for (const [index, args] of [[0, { formula: '1d6', engine: 'foundry' }], [2, { formula: '1d6' }]] as const) {
-      const result = await call(index, args); expect(result.isError).toBe(true);
-      expect(result.structuredContent).toBeUndefined(); expect(attempts).toEqual([]);
+      await internalFailure(index, args); expect(attempts).toEqual([]);
     }
   });
   for (const index of [2, 5, 6, 7, 8, 9]) {
     it.each(['auto', 'foundry'])(`fails partial paired configuration ${index} for engine %s before HTTP`, async engine => {
-      const result = await call(index, { formula: '1d6', engine });
-      expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
-      expect(JSON.stringify(result)).not.toContain('fixture-key');
+      await internalFailure(index, { formula: '1d6', engine });
       expect(attempts).toEqual([]);
     });
   }
   it.each(['auto', 'foundry'])('rejects an unsupported legacy dice transport for engine %s before HTTP', async engine => {
-    const result = await call(3, { formula: '1d6', engine });
-    expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
-    expect(JSON.stringify(result)).toMatch(/legacy|FOUNDRY_REST/i);
-    expect(JSON.stringify(result)).not.toContain('legacy-dice-key');
+    const error = await internalFailure(3, { formula: '1d6', engine });
+    expect(String(error)).toMatch(/legacy|FOUNDRY_REST/i);
     expect(attempts).toEqual([]);
   });
   it('prefers complete paired configuration when a legacy API key is also present', async () => {
@@ -166,10 +200,8 @@ describe('built MCP bounded dice workflow', () => {
       'wrong-envelope-type', 'missing-request-id', 'unknown-envelope-field', 'unknown-data-field',
     ])(`never retries or rolls locally after %s with engine ${engine}`, async failure => {
       mode = failure;
-      const result = await call(1, { formula: '2d6kh1 + 3', engine });
-      expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
+      await internalFailure(1, { formula: '2d6kh1 + 3', engine });
       expect(attempts).toHaveLength(1);
-      expect(JSON.stringify(result)).not.toContain('fixture-key');
       await new Promise(resolve => setTimeout(resolve, 10));
       expect(attempts).toHaveLength(1);
     });

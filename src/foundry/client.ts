@@ -6,6 +6,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
@@ -45,7 +46,12 @@ import {
   RULES_LOOKUP_UNAVAILABLE,
 } from './capabilities.js';
 import { compendiumParamsSchema } from './compendium-contract.js';
-import { evaluateDiceFormula } from './dice-formula.js';
+import { type DiceRollInput, diceRollOutputSchema, parseDiceRollInput } from './dice-contract.js';
+import {
+  evaluateParsedDiceFormula,
+  InvalidDiceFormulaError,
+  parseDiceFormula,
+} from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
 import {
   JOURNAL_DEFAULT_PAGE_LIMIT,
@@ -70,6 +76,7 @@ import {
   itemDocumentSchema,
 } from './read-contract.js';
 import { CompendiumRestAdapter } from './rest-compendium.js';
+import { DiceRestAdapter } from './rest-dice.js';
 import {
   projectSceneSpatial,
   type SceneIdentity,
@@ -187,45 +194,6 @@ function restItem(value: unknown, expectedId?: string): FoundryItem {
 }
 
 /**
- * Characters a dice formula may contain. A cheap sanity gate, not a grammar:
- * it rejects Foundry modifier syntax (`4d6kh3`), attribute references
- * (`1d20+STR`) and arithmetic this server never forwards (`*`, `/`), while
- * still allowing parentheses through to FoundryVTT's own `Roll` engine on the
- * REST transport. See {@link FoundryClient.rollDice}.
- */
-const DICE_FORMULA_ALPHABET = /^[0-9d\s+\-()]+$/;
-
-/** Single-character form of {@link DICE_FORMULA_ALPHABET}, for locating a violation. */
-const DICE_FORMULA_CHARACTER = /[0-9d\s+\-()]/;
-
-/** Upper bound on formula length, common to both transports. */
-const MAX_DICE_FORMULA_LENGTH = 100;
-
-/**
- * Builds the REST-path rejection for a formula outside the dice alphabet.
- *
- * The local parser cannot be borrowed for this: it rejects parentheses, which
- * REST *does* support, so for `(1d20+5)*2` it would name the wrong problem.
- * This scans for the first character the alphabet does not admit and reports
- * it by name and position, so the REST path is as specific about what it
- * refused as the local one (#219).
- */
-function alphabetViolation(formula: string): Error {
-  if (formula === '') {
-    return new Error('Invalid dice formula: the formula is empty.');
-  }
-  const index = [...formula].findIndex((char) => !DICE_FORMULA_CHARACTER.test(char));
-  if (index === -1) {
-    return new Error(`Invalid dice formula: ${formula}`);
-  }
-  return new Error(
-    `Invalid dice formula "${formula}": unexpected "${formula[index]}" at position ${index}. ` +
-      'Supported syntax: dice terms (NdS, or dS for a single die) and whole numbers, joined by ' +
-      '+ or -, optionally grouped in parentheses.',
-  );
-}
-
-/**
  * True when a rejected request carries an HTTP response — FoundryVTT answered,
  * whatever the status. A rejection without one is a transport failure
  * (connection refused or reset, DNS, timeout): the server is not reachable.
@@ -265,21 +233,6 @@ const SORT_INTEGER_DENSITY = 100000;
  */
 const TOKEN_ACTOR_UUID_PATTERN =
   /^(Actor\.[a-zA-Z0-9]{16}|Scene\.[a-zA-Z0-9]{16}\.Token\.[a-zA-Z0-9]{16}\.Actor\.[a-zA-Z0-9]{16})$/;
-
-/**
- * Minimal Zod schema for the `/api/dice/roll` REST response.
- *
- * The REST module is external input, so the body is validated rather than read
- * off an `any`: a 200 whose payload carries no numeric `total` would otherwise
- * produce a `DiceRoll` with `total: undefined` while the type claims `number`,
- * and `roll_dice` would render that straight to the caller. A body that does
- * not match is treated like any other REST failure and falls through to the
- * local roller.
- */
-const RestDiceRollSchema = z.object({
-  total: z.number(),
-  terms: z.array(z.object({ results: z.array(z.number()).optional() })).optional(),
-});
 
 /**
  * Minimal Zod schema for the WorldData Socket.IO payload.
@@ -3111,90 +3064,79 @@ export class FoundryClient {
   // Dice rolling
   // ==========================================================================
 
-  /**
-   * Rolls a dice formula.
-   *
-   * Validation is deliberately **per transport**, because the two transports
-   * are not equally capable (#219):
-   *
-   *  - **REST (`FOUNDRY_API_KEY`)** posts the formula to `/api/dice/roll`,
-   *    where FoundryVTT's own `Roll` engine evaluates it. That engine
-   *    understands more than this module does — parentheses, for one — so only
-   *    the `DICE_FORMULA_ALPHABET` check applies here. Imposing the local
-   *    parser's narrower grammar would take away a capability the transport
-   *    has. What the alphabet does refuse is refused by name and position
-   *    (`unexpected "k" at position 3`, via `alphabetViolation`), so the
-   *    two transports are equally specific about what they would not evaluate.
-   *  - **Socket.IO / no API key** has no remote evaluator: `fallbackDiceRoll`
-   *    is the roller, so the grammar its parser can represent is the grammar
-   *    accepted, and that parser is the *only* gate. No alphabet pre-check runs
-   *    ahead of it, so its specific message (`unexpected "k" at position 3`)
-   *    reaches the caller instead of a generic `Invalid dice formula: 4d6kh3`.
-   *    Nothing is ever dropped from a total in silence.
-   *
-   * The length cap is common to both. A REST roll that cannot reach FoundryVTT
-   * falls through to the local roller, which then applies the strict grammar —
-   * a formula only Foundry could evaluate errors out rather than being
-   * mis-totalled locally.
-   */
-  async rollDice(formula: string, reason?: string): Promise<DiceRoll> {
+  /** Validates the whole bounded formula before choosing exactly one evaluator. */
+  async rollDice(
+    formula: string,
+    reason?: string,
+    engine: DiceRollInput['engine'] = 'auto',
+  ): Promise<DiceRoll> {
     if (this.isDelegatedMode()) {
       throw new CallerAuthorizationError();
     }
-    if (typeof formula !== 'string' || formula.length > MAX_DICE_FORMULA_LENGTH) {
-      throw new Error(`Invalid dice formula: ${formula}`);
-    }
-
-    if (this.config.apiKey) {
-      if (!formula || !DICE_FORMULA_ALPHABET.test(formula)) {
-        throw alphabetViolation(formula);
-      }
-
-      try {
-        const response = await this.http.post('/api/dice/roll', {
-          formula,
-          flavor: reason,
-        });
-
-        const rolled = RestDiceRollSchema.parse(response.data);
-
-        const result: DiceRoll = {
-          formula,
-          total: rolled.total,
-          breakdown: rolled.terms?.map((term) => term.results?.join(', ')).join(' + ') || formula,
-          timestamp: new Date().toISOString(),
-        };
-        if (reason) {
-          result.reason = reason;
-        }
-        return result;
-      } catch {
-        // Fall through to local roll
-      }
-    }
-
-    return this.fallbackDiceRoll(formula, reason);
-  }
-
-  /**
-   * Rolls locally, when FoundryVTT is not doing it for us.
-   *
-   * Delegates the whole formula to {@link evaluateDiceFormula}, which consumes
-   * the input end to end and throws on any leftover it cannot represent (#219).
-   */
-  private fallbackDiceRoll(formula: string, reason?: string): DiceRoll {
-    const { total, breakdown } = evaluateDiceFormula(formula);
-
-    const result: DiceRoll = {
+    const input = parseDiceRollInput({
       formula,
-      total,
-      breakdown,
-      timestamp: new Date().toISOString(),
-    };
-    if (reason) {
-      result.reason = reason;
+      engine,
+      ...(reason === undefined ? {} : { reason }),
+    });
+    let parsed: ReturnType<typeof parseDiceFormula>;
+    try {
+      parsed = parseDiceFormula(input.formula);
+    } catch (error) {
+      if (error instanceof InvalidDiceFormulaError) {
+        throw new McpError(ErrorCode.InvalidParams, error.message);
+      }
+      throw error;
     }
-    return result;
+
+    const { restUrl, restApiKey, restClientId } = this.config;
+    const configured = [restUrl, restApiKey, restClientId];
+    const complete =
+      typeof restUrl === 'string' &&
+      restUrl.trim().length > 0 &&
+      typeof restApiKey === 'string' &&
+      restApiKey.trim().length > 0 &&
+      typeof restClientId === 'string' &&
+      restClientId.trim().length > 0;
+    const partial = configured.some((value) => value !== undefined) && !complete;
+    if (input.engine !== 'local') {
+      if (partial) {
+        throw new Error(
+          'Configure all FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID for dice.',
+        );
+      }
+      if (!complete && this.config.apiKey !== undefined) {
+        throw new Error(
+          'Legacy dice REST transport is unsupported; configure FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID.',
+        );
+      }
+      if (!complete && input.engine === 'foundry') {
+        throw new Error('Foundry dice REST transport is not configured.');
+      }
+    }
+    const native = input.engine !== 'local' && complete;
+    const result = native
+      ? await new DiceRestAdapter({
+          baseUrl: restUrl,
+          apiKey: restApiKey,
+          clientId: restClientId,
+          userId: this.config.userId,
+          timeout: this.config.timeout,
+        }).roll(parsed, input.reason)
+      : { ...evaluateParsedDiceFormula(parsed), timestamp: new Date().toISOString() };
+    return diceRollOutputSchema.parse({
+      schemaVersion: 1,
+      engine: native ? 'foundry' : 'local',
+      normalizedFormula: result.normalizedFormula,
+      dice: result.dice.map((die, termIndex) => ({ ...die, termIndex })),
+      total: result.total,
+      breakdown: result.breakdown,
+      timestamp: result.timestamp,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      fallback:
+        input.engine === 'auto' && !native
+          ? { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' }
+          : null,
+    });
   }
 
   // ==========================================================================

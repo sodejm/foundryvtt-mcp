@@ -25,6 +25,7 @@ import {
   errorDiagnosisInputJsonSchema,
   errorDiagnosisOutputJsonSchema,
 } from '../foundry/diagnosis-contract.js';
+import { diceRollInputJsonSchema, diceRollOutputJsonSchema } from '../foundry/dice-contract.js';
 import {
   lootGenerationInputJsonSchema,
   lootGenerationOutputJsonSchema,
@@ -84,29 +85,15 @@ const CONFIRM_FIRST =
  * *listed*, so a divergence would be invisible.
  */
 export const ROLL_DICE_DESCRIPTION =
-  'Roll dice and return the total with a per-term breakdown. Dice terms and whole numbers joined by + or -, with whitespace allowed anywhere ("1d20+5", "1d20 + 5", "1d20+5+3", "2d6 + 1d4", "3d6"; a count-less "d20" means one die), always work and every term counts towards the total - that is the portable grammar, safe on either transport. Multiplication and Foundry modifier syntax such as "4d6kh3" or "1d20r1" are rejected on both transports, with an error naming the offending character and its position, never dropped from the total in silence. Parentheses are the one difference: with FOUNDRY_API_KEY set the formula goes to FoundryVTT\'s own Roll engine, which evaluates them, while the default Socket.IO transport rolls locally and rejects them by name - and a REST roll that cannot reach the server falls back to that same local roller, so a parenthesised formula can still fail there. Prefer the expanded form when it matters. Use when: the user asks for a check, save, attack, damage, or any random result.';
+  'Roll a bounded formula with dice (NdS or dS), whole numbers, +/-, unary signs, parentheses, and kh/kl/dh/dl keep/drop modifiers. Input is limited to 100 characters, 999 dice per term, 1000 dice overall, 1000000 sides, constants through 1000000000, and 10 parenthesis levels. Other modifiers, references, scripting, multiplication, and division are rejected before rolling. Select engine auto (default), local, or foundry. Auto uses a complete paired Foundry REST configuration or reports local provenance when no transport is configured. Partial or legacy REST configuration fails. Foundry rolls once without creating chat; transport or verification failures never retry or fall back. Results include normalizedFormula, engine, ordered active/inactive die outcomes, verified total, breakdown, timestamp, and explicit fallback metadata.';
 
-/**
- * Dice rolling tool definitions
- */
+/** Dice rolling tool definitions. */
 export const diceTools = [
   {
     name: 'roll_dice',
     description: ROLL_DICE_DESCRIPTION,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        formula: {
-          type: 'string',
-          description: 'Dice formula (e.g., "1d20+5", "3d6")',
-        },
-        reason: {
-          type: 'string',
-          description: 'Optional reason for the roll',
-        },
-      },
-      required: ['formula'],
-    },
+    inputSchema: diceRollInputJsonSchema,
+    outputSchema: diceRollOutputJsonSchema,
   },
 ];
 

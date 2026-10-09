@@ -29,7 +29,7 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 
 | ID | Story | Tools | Coverage |
 |---|---|---|---|
-| GM-1 | As a GM, I want to roll dice with modifiers so I can resolve attacks/saves at the table. | `roll_dice` | ⚠ `RollDiceTool` covered by `registry.test.ts`; legacy handler in `dice.ts:16` and formula-bounds branch (max 100 chars) untested |
+| GM-1 | As a GM, I want to roll dice with modifiers so I can resolve attacks/saves at the table. | `roll_dice` | ✓ Bounded formulas, keep/drop modifiers, engine provenance and one-attempt failures covered by unit, built MCP workflow and native Foundry parity tests; see [issue 12 validation](../validation/issue-12-bounded-dice.md) |
 | GM-2 | As a GM, I want to see the initiative order with HP/AC so I can run combat. | `get_combat_state` | ❌ no handler test (`combat.ts:8`); "no active combat" branch (`combat.ts:15-19`) unverified |
 | GM-3 | As a GM, I want to see the active scene's lighting/dimensions so I can describe the environment. | `get_scene_info` | ⚠ integration covers `getScenes`/`getCurrentScene`; handler default-current branch (`scenes.ts:13`) untested |
 | GM-4 | As a GM, I want to find a creature by name and pull its full stat block. | `search_actors`, `get_actor_details` | ⚠ integration covers `searchActors`; `get_actor_details` handler (`actors.ts:62`) and "not found" McpError branch untested |
@@ -43,7 +43,7 @@ maps to at least one test; gaps in this table become a tracked test backlog.
 
 | ID | Story | Tools | Coverage |
 |---|---|---|---|
-| PL-1 | As a player, I want to roll my own dice through the assistant. | `roll_dice` | ⚠ same as GM-1 |
+| PL-1 | As a player, I want to roll my own dice through the assistant. | `roll_dice` | ⚠ Dice evaluation is verified for the service identity; delegated caller rolling remains denied, with authorization-denial tests. See [dice contract](../guides/dice.md) |
 | PL-2 | As a player, I want to find my character and check my own stats. | `search_actors`, `get_actor_details` | ⚠ partial (see GM-4) |
 | PL-3 | As a player, I want to search items I might own or buy. | `search_items` | ⚠ integration covers `searchItems`; `type`/`rarity`/`limit` filter branches at `items.ts:13` untested |
 | PL-4 | As a player, I want to read campaign notes/journals to recall plot. | `search_journals`, `get_journal` | ❌ no handler test (`journals.ts:9`, `:47`); page HTML stripping and 500-char truncation at `:60` unverified |

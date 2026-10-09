@@ -89,11 +89,13 @@ export class ToolRegistry {
     name: string;
     description: string;
     inputSchema: object;
+    outputSchema?: object;
   }> {
     return Array.from(this.tools.values()).map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
     }));
   }
 

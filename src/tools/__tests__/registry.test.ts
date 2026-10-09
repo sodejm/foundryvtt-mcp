@@ -18,7 +18,20 @@ describe('Tool Registry', () => {
     mockContext = {
       foundryClient: {
         rollDice: vi.fn().mockResolvedValue({
-          formula: '1d20+5',
+          schemaVersion: 1,
+          engine: 'local',
+          normalizedFormula: '1d20 + 5',
+          dice: [
+            {
+              termIndex: 0,
+              formula: '1d20',
+              count: 1,
+              faces: 20,
+              modifier: null,
+              results: [{ result: 10, active: true }],
+            },
+          ],
+          fallback: null,
           total: 15,
           breakdown: '(10) + 5',
           timestamp: '2025-01-01T00:00:00Z',
@@ -39,7 +52,7 @@ describe('Tool Registry', () => {
       const rollDiceDefinition = definitions.find((d) => d.name === 'roll_dice');
 
       expect(rollDiceDefinition).toBeDefined();
-      expect(rollDiceDefinition?.description).toContain('Roll dice');
+      expect(rollDiceDefinition?.description).toContain('Roll a bounded formula');
       expect(rollDiceDefinition?.inputSchema).toBeDefined();
     });
 
@@ -56,6 +69,8 @@ describe('Tool Registry', () => {
 
       expect(listed?.description).toBeDefined();
       expect(registered?.description).toBe(listed?.description);
+      expect(registered?.inputSchema).toEqual(listed?.inputSchema);
+      expect(registered?.outputSchema).toEqual(listed?.outputSchema);
     });
   });
 
@@ -73,9 +88,18 @@ describe('Tool Registry', () => {
       expect(result).toBeDefined();
       expect(result.content).toBeDefined();
       expect(result.content[0].type).toBe('text');
-      expect(result.content[0].text).toContain('Dice Roll Result');
-      expect(result.content[0].text).toContain('1d20+5');
-      expect(result.content[0].text).toContain('15');
+      expect(JSON.parse(result.content[0].text ?? '')).toEqual(result.structuredContent);
+      expect(result.structuredContent).toMatchObject({
+        schemaVersion: 1,
+        engine: 'local',
+        normalizedFormula: '1d20 + 5',
+        total: 15,
+      });
+      expect(mockContext.foundryClient.rollDice).toHaveBeenCalledExactlyOnceWith(
+        '1d20+5',
+        'attack roll',
+        'auto',
+      );
     });
 
     it('should validate parameters and throw error for missing formula', async () => {

@@ -15,7 +15,7 @@ import { assertDice, invalidDiceCases, validDiceCases } from '../helpers/dice-co
 describe('live bounded dice through built MCP and official controlled RNG', () => {
   let cwd: string;
   let controller: string;
-  let fixture: { apiKey: string; clientId: string };
+  let fixture: { diceKey: string; clientId: string };
   let uncertainProxy: Server;
   let uncertainFailure: 'disconnect' | 'timeout' = 'disconnect';
   let remoteAttempts = 0;
@@ -36,7 +36,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     expect(status.modules).toContainEqual({ id: 'foundry-rest-api', version: process.env.FOUNDRY_REST_TEST_VERSION });
     console.info('Live dice versions', JSON.stringify(status));
     fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
-    if (!fixture.apiKey || !fixture.clientId) throw new Error('Invalid private relay fixture');
+    if (!fixture.diceKey || !fixture.clientId) throw new Error('Private relay fixture requires a dedicated roll:execute key');
     uncertainProxy = createServer(async (request, response) => {
       if (request.method !== 'POST' || !request.url?.startsWith('/roll?')) {
         response.writeHead(404).end('{}'); return;
@@ -70,7 +70,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
           FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME!, FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
           FOUNDRY_TIMEOUT: '5000', FOUNDRY_RETRY_ATTEMPTS: '3',
           ...(mode !== 'local' && { FOUNDRY_REST_URL: mode === 'uncertain' ? uncertainUrl : process.env.FOUNDRY_REST_URL!,
-            FOUNDRY_REST_API_KEY: mode === 'denied' ? 'invalid-test-dice-key' : fixture.apiKey,
+            FOUNDRY_REST_API_KEY: mode === 'denied' ? 'invalid-test-dice-key' : fixture.diceKey,
             FOUNDRY_REST_CLIENT_ID: fixture.clientId }),
         } });
       transports.push(transport); transport.stderr?.on('data', () => {});
@@ -96,8 +96,14 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
   }
   async function call(index: number, args: Record<string, unknown>) {
     const result = CallToolResultSchema.parse(await clients[index]!.callTool({ name: 'roll_dice', arguments: args }));
-    expect(JSON.stringify(result)).not.toContain(fixture.apiKey);
+    expect(JSON.stringify(result)).not.toContain(fixture.diceKey);
     return result;
+  }
+  async function internalFailure(index: number, args: Record<string, unknown>) {
+    const error = await call(index, args).then(() => { throw new Error('Expected tool execution to fail'); }, error => error);
+    expect(error).toMatchObject({ code: ErrorCode.InternalError });
+    expect(String(error)).not.toContain(fixture.diceKey);
+    expect(String(error)).not.toContain('invalid-test-dice-key');
   }
   it.each(validDiceCases)('matches official outcomes with identical controlled RNG: %s', async formula => {
     const uniforms = Array.from({ length: 1000 }, (_, index) => [0.9, 0, 0.4, 0.2][index % 4]!);
@@ -140,9 +146,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
   it('preserves local selection and returns a real authorization failure without a fallback', async () => {
     const local = assertDice(await call(2, { formula: '(7 - 3) + 2', engine: 'local' }), 'local');
     expect(local.total).toBe(6); expect(local.fallback).toBeNull();
-    const denied = await call(2, { formula: '1d6', engine: 'auto' });
-    expect(denied.isError).toBe(true); expect(denied.structuredContent).toBeUndefined();
-    expect(JSON.stringify(denied)).not.toContain('invalid-test-dice-key');
+    await internalFailure(2, { formula: '1d6', engine: 'auto' });
     const foundry = assertDice(await call(1, { formula: '(7 - 3) + 2', engine: 'foundry' }), 'foundry');
     expect(foundry.total).toBe(6); expect(foundry.fallback).toBeNull();
   });
@@ -157,8 +161,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     const attemptsBefore = remoteAttempts;
     const completedBefore = completedRemoteRolls;
     const before = await oracleStatus();
-    const result = await call(3, { formula: '4d6kh3 + 2', engine: 'auto' });
-    expect(result.isError).toBe(true); expect(result.structuredContent).toBeUndefined();
+    await internalFailure(3, { formula: '4d6kh3 + 2', engine: 'auto' });
     expect(remoteAttempts - attemptsBefore).toBe(1); expect(completedRemoteRolls - completedBefore).toBe(1);
     const after = await oracleStatus();
     expect(after.chatMessageCount).toBe(before.chatMessageCount);
