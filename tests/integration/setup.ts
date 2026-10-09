@@ -5,9 +5,10 @@
 import { FoundryClient, FoundryClientConfig } from '../../src/foundry/client.js';
 
 const DEFAULT_CONFIG: FoundryClientConfig = {
-  baseUrl: process.env.FOUNDRY_URL || 'http://localhost:30001',
-  username: process.env.FOUNDRY_USERNAME || 'test-user',
-  password: process.env.FOUNDRY_PASSWORD || 'test-password',
+  baseUrl: process.env.FOUNDRY_URL ?? 'http://127.0.0.1:30001',
+  username: process.env.FOUNDRY_USERNAME ?? 'Gamemaster',
+  // An empty password is a valid Foundry credential and must not be replaced.
+  password: process.env.FOUNDRY_PASSWORD ?? '',
   timeout: 15000,
 };
 

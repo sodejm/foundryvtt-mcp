@@ -793,6 +793,17 @@ describe('FoundryClient', () => {
       expect(connected.isConnected()).toBe(true);
     });
 
+    it('authenticates an explicitly empty password for a passwordless Foundry user', async () => {
+      const { authenticateFoundry } = await import('../auth.js');
+      const { client: connected } = await connectWithMockSocket(
+        new FoundryClient({ baseUrl: 'http://localhost:30000', username: 'gm', password: '' }),
+      );
+
+      expect(authenticateFoundry).toHaveBeenCalledWith('http://localhost:30000', 'gm', '');
+      expect(connected.isConnected()).toBe(true);
+      await connected.disconnect();
+    });
+
     it('reports disconnected once the socket drops without disconnect()', async () => {
       const { client: connected, socket, fire } = await connectWithMockSocket();
 

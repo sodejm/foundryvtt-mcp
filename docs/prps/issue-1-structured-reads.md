@@ -1,8 +1,8 @@
 # Issue #1: stable identifiers and structured reads
 
-Status: implementation and local validation complete; live Foundry validation
-is unavailable. Issue #1 remains open and its PR must remain draft until the
-required live checks pass. Do not select #2 before resolving this gate.
+Status: implementation and required issue #1 validation complete. The actual
+MCP stdio workflow passes all 13 live cases against the disposable `test1world`.
+PR #23 is prepared for review; merge and issue closure remain separate actions.
 
 ## Contract and scope
 
@@ -55,8 +55,9 @@ not to all possible behaviors of Foundry or the repository.
 - Fork: `sodejm/foundryvtt-mcp`, default branch `main`.
 - Upstream actor handler rechecked through GitHub: IDs still omitted and
   truthiness fallbacks still present.
-- No live fixture, license or test credentials are configured in this workspace.
-  Live test details have been requested; completion remains gated on their use.
+- The user licensed the local instance and created the disposable `test1world`,
+  authorizing all feature testing on this server. Its endpoint is
+  `http://127.0.0.1:30001`.
 - Shell networking requires the execution tool's network permission; an npm
   registry probe succeeds when that permission is included.
 
@@ -75,16 +76,22 @@ not to all possible behaviors of Foundry or the repository.
   Missing values stay absent, and zero/false/empty values survive mapping.
 - Existing freshness, pagination and game-system filter limits remain subjects
   of their subsequent issues. Retained snapshots may remain readable offline.
+- Live validation required preserving explicitly configured blank passwords at
+  startup and supplying the matching origin on Foundry's login request. These
+  are narrow compatibility fixes for the existing Socket.IO authentication path.
+- Item mapping preserves numeric dnd5e `system.weight.value`, including zero,
+  alongside the existing numeric `system.weight` representation.
 
 ## Recorded local validation
 
 Dependency installation used the canonical frozen `bun.lock` (Bun 1.4.2,
-Node 24.19.0, Vitest and its coverage provider 4.1.9).
+Node 26.11.0 for the MCP tests, Vitest and its coverage provider 4.1.9).
+Foundry runs with its separate Node 24.13.1 runtime.
 
 | Check | Result |
 | --- | --- |
 | `npm run build` | Passed |
-| Full unit suite via `npm run test:reads:coverage` | 646/646 passed in 31 suites; 126 added cases |
+| Full unit suite via `npm run test:reads:coverage` | 654/654 passed in 31 suites |
 | Scoped coverage: `read-contract.ts`, `actors.ts`, `items.ts` | 100% statements (75/75), branches (87/87), functions (14/14), lines (75/75); thresholds enforced |
 | `npm run test:workflow` | 22/22 passed; built CLI, SDK stdio, local HTTP fixture, no production-function mocks |
 | Strict TypeScript check of new workflow/live test files | Passed |
@@ -92,16 +99,38 @@ Node 24.19.0, Vitest and its coverage provider 4.1.9).
 | `npm run docs:check` | Passed; same 3 baseline warnings |
 | Startup, dotenv and pack/install smoke | Passed |
 | Required redacted Gitleaks scans and commit hooks | Passed |
-| Live Foundry integration | Unavailable; no license, credentials, bootstrapped world, or recorded live versions |
+| Issue #1 live MCP integration | 13/13 passed; no skipped cases |
+| Broader existing integration suite | 48 passed, 2 failed, 6 skipped; see limits below |
 
 The case matrix above is implemented by handler/client contract tests, primary
 and registry-router tests, and the 22-case built CLI workflow. Positive and
-negative local cases pass. The live row remains unexecuted; no claim of 100%
-overall acceptance coverage or completion is made. Code coverage above applies
-only to the named contract/handler files, not the whole repository.
+negative local cases pass. Code coverage above applies only to the named
+contract/handler files, not the whole repository.
 
-The prepared live test requires duplicate actor/item fixtures and reports core,
-system and module versions. Additional live removed-document and REST module
-checks remain required by the issue. Skipped or unavailable tests cannot close
-this gap. Preserve this report and branch for continuation once a fixture is
-available.
+## Recorded live validation and limits
+
+The live test starts `src/index.ts` through the MCP SDK stdio transport and
+validates results against the schemas returned by `tools/list`. It verifies
+both duplicate actors and both duplicate items by their returned IDs, details,
+UUIDs and text/structured parity. It checks zero, false and empty values;
+invalid IDs; absent IDs; and previously deleted actor/item IDs. Missing required
+fixtures fail the test instead of becoming skipped passes.
+
+Recorded environment: Foundry core **14.369**, world **test1world**, game system
+**dnd5e 6.0.6**, enabled modules **[]**, Socket.IO transport, Gamemaster user
+with an explicitly configured blank test password. REST mappings pass unit and
+local HTTP workflow tests; no live REST module is installed, so this report
+does not claim live REST-module validation.
+
+The broader existing integration run is not a full pass: `refreshWorldData`
+times out on Foundry 14 in the world-data refresh case and after combat
+creation. The existing combat cleanup still runs. Those refresh failures
+belong to the snapshot/freshness work in #3 and are not hidden by the passing
+read cases. Two combat cases lacked an active combat fixture and four actor
+mutation cases lacked a currency-bearing actor fixture; these six skips count
+as unexecuted cases. Further feature testing must supply those fixtures and
+verify write results by reading them back.
+
+Local validation receipts and full logs are retained outside Git in
+`/private/tmp/foundry-issue-1-validation`. No fixture credentials or private
+runtime data are committed.

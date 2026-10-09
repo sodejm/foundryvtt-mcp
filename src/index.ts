@@ -84,7 +84,7 @@ class FoundryMCPServer {
     if (config.foundry.username) {
       clientConfig.username = config.foundry.username;
     }
-    if (config.foundry.password) {
+    if (config.foundry.password !== undefined) {
       clientConfig.password = config.foundry.password;
     }
     if (config.foundry.userId) {

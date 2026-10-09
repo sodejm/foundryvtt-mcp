@@ -333,7 +333,7 @@ export class FoundryClient {
     }
 
     const user = this.config.userId || this.config.username;
-    if (!user || !this.config.password) {
+    if (!user || this.config.password === undefined) {
       throw new Error(
         'Socket.IO mode requires username/userId and password. ' +
           'Set FOUNDRY_USERNAME + FOUNDRY_PASSWORD or FOUNDRY_USER_ID + FOUNDRY_PASSWORD.',
@@ -1813,7 +1813,10 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
   // Preserve existing common world-item values without normalizing game systems
   // or changing the transport-specific rarity-filter behavior (#13).
   for (const key of ['weight', 'quantity'] as const) {
-    const value = i.system[key];
+    const value =
+      key === 'weight'
+        ? (extractNested(i.system, 'weight', 'value') ?? i.system.weight)
+        : i.system[key];
     if (typeof value === 'number') {
       item[key] = value;
     }

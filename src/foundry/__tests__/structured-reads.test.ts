@@ -246,6 +246,31 @@ describe('Socket.IO value fidelity', () => {
     client.disconnect();
   });
 
+  it.each([
+    0, 1,
+  ])('reads structured D&D 5e item weight %s through search and detail', async (weight) => {
+    const client = createClient();
+    setWorld(client, {
+      items: [
+        { ...worldItem, system: { ...worldItem.system, weight: { value: weight, units: 'lb' } } },
+      ],
+    });
+    expect(await client.getItem(I)).toMatchObject({ weight });
+    expect((await client.searchItems({})).items[0]).toMatchObject({ weight });
+    client.disconnect();
+  });
+
+  it.each([
+    {},
+    { value: '0' },
+    { value: null },
+  ])('omits nonnumeric structured weight %j', async (weight) => {
+    const client = createClient();
+    setWorld(client, { items: [{ ...worldItem, system: { ...worldItem.system, weight } }] });
+    expect(await client.getItem(I)).not.toHaveProperty('weight');
+    client.disconnect();
+  });
+
   it('keeps detail reads scoped to world documents rather than same-ID embedded items', async () => {
     const client = createClient();
     setWorld(client, { actors: [{ ...worldActor, items: [worldItem] }], items: [] });

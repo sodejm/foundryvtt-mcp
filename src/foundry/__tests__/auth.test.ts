@@ -266,6 +266,33 @@ describe('sessionSocketOptions (#206)', () => {
   });
 });
 
+describe('authenticateFoundry — same-origin login request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJoinCookieResponse();
+    mockJoinPostSuccess();
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it.each([
+    'http://127.0.0.1:30001',
+    'https://example.com/foundry',
+  ])('sends the server origin for %s so Foundry 14 accepts the POST', async (baseUrl) => {
+    await authenticateFoundry(baseUrl, 'abc123DEF456ghij', '');
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      `${baseUrl}/join`,
+      expect.objectContaining({ password: '' }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Origin: new URL(baseUrl).origin }),
+      }),
+    );
+  });
+});
+
 describe('authenticateFoundry — rejected /join is reported, not thrown raw (#206)', () => {
   /**
    * FoundryVTT v13+ answers a rejected /join with HTTP 401 and a plain-text
