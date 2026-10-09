@@ -42,7 +42,26 @@ export function assertDice(result: {
   expect(result.content).toHaveLength(1);
   expect(result.content[0]!.type).toBe('text');
   expect(JSON.parse(result.content[0]!.text!)).toEqual(value);
-  for (const die of value.dice as Array<{ count: number; faces: number; results: Array<{ result: number; active: boolean }> }>) {
+  for (const [index, die] of (value.dice as Array<{
+    termIndex: number; formula: string; count: number; faces: number;
+    modifier: { type: 'kh' | 'kl' | 'dh' | 'dl'; count: number } | null;
+    results: Array<{ result: number; active: boolean }>;
+  }>).entries()) {
+    expect(die.termIndex).toBe(index);
+    expect(die.formula).toEqual(expect.any(String));
+    expect(die.formula.length).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(die.count)).toBe(true);
+    expect(Number.isSafeInteger(die.faces)).toBe(true);
+    expect(die.count).toBeGreaterThanOrEqual(0);
+    expect(die.count).toBeLessThanOrEqual(1000);
+    expect(die.faces).toBeGreaterThanOrEqual(1);
+    expect(die.faces).toBeLessThanOrEqual(1000000);
+    if (die.modifier !== null) {
+      expect(['kh', 'kl', 'dh', 'dl']).toContain(die.modifier.type);
+      expect(Number.isSafeInteger(die.modifier.count)).toBe(true);
+      expect(die.modifier.count).toBeGreaterThanOrEqual(1);
+      expect(die.modifier.count).toBeLessThanOrEqual(Math.max(1, die.count));
+    }
     expect(die.results).toHaveLength(die.count);
     for (const outcome of die.results) {
       expect(Number.isInteger(outcome.result)).toBe(true);
