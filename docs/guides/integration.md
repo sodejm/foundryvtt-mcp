@@ -99,3 +99,51 @@ const result = await client.request({
   "limit": 10
 }
 ```
+
+
+### Stable actor/item search-to-detail workflow
+
+Actor/item search and detail tools publish an `outputSchema` and retain text
+alongside version 1 `structuredContent`. For example, a search can return two
+actors with the same name:
+
+```json
+{
+  "schemaVersion": 1,
+  "documentType": "Actor",
+  "records": [
+    {"id": "Actor00000000001", "documentType": "Actor", "name": "Goblin", "type": "npc", "hp": {"value": 0, "max": 7}},
+    {"id": "Actor00000000002", "documentType": "Actor", "name": "Goblin", "type": "npc"}
+  ],
+  "total": 2,
+  "page": 1,
+  "limit": 10
+}
+```
+
+Choose the record by `id` and call `get_actor_details` with
+`{"actorId":"Actor00000000002"}`. The detail response has
+`{"schemaVersion":1,"documentType":"Actor","record":{...}}` and verifies that
+`record.id` equals the requested ID. The item workflow uses `search_items`,
+`documentType: "Item"`, and `get_item_details` with `{"itemId":"..."}`. It
+reads world items only, excluding actor-owned and compendium items. Example IDs
+are placeholders; always use IDs returned by your current search.
+
+Optional fields are omitted when absent. Zero HP or price, false item flags
+and empty descriptions are preserved. Do not substitute truthiness defaults.
+Only the world-cache source establishes UUID scope; ambiguous REST UUIDs are
+omitted. No raw `system` or `data` objects are serialized in this contract.
+
+Detail IDs must be exactly 16 alphanumeric characters. Invalid, empty,
+nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
+Missing/removed documents, unavailable world data/backend, malformed responses
+or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
+world/search returns `records: []`; disconnected cached world data returns an
+error. REST modules must implement `/api/items/:id` for item details; unsupported
+routes produce their backend error. This adds no fallback to owned items or
+compendiums and changes no access permissions.
+
+The text block remains available for existing MCP consumers. Prefer the typed
+`structuredContent` fields and validate against the advertised output schema;
+version 1 retains existing mapped system fields without promising a complete
+actor sheet, inventory or cross-system normalization.

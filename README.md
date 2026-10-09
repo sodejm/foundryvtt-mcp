@@ -140,13 +140,58 @@ Ask your AI assistant things like:
 
 - `search_actors` — find characters, NPCs, monsters
 - `get_actor_details` — detailed character information
-- `search_items` — find equipment, spells, consumables
+- `search_items` — find world equipment, spells, consumables with stable IDs
+- `get_item_details` — read one world item by ID
 - `get_scene_info` — current scene details
 - `search_journals` — search notes and handouts
 - `get_journal` — retrieve a specific journal entry
 - `get_users` — list users, roles, and live online status
 - `get_combat_state` — combat state and initiative order
 - `get_chat_messages` — recent chat history
+
+### Structured actor and item reads
+
+`search_actors`, `get_actor_details`, `search_items` and `get_item_details`
+retain readable `content` text and add typed MCP `structuredContent`, validated
+against the `outputSchema` advertised by `tools/list`. Version 1 search results
+contain `schemaVersion`, `documentType`, `records`, `total`, `page` and `limit`;
+details contain `schemaVersion`, `documentType` and `record`. Every record has
+`id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
+optional values are omitted; zero, false and empty strings remain real values.
+Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
+
+Search first, select by ID even when names repeat, then pass that ID to the
+matching detail tool:
+
+```json
+{"name":"search_actors","arguments":{"query":"Goblin"}}
+{"name":"get_actor_details","arguments":{"actorId":"Actor00000000001"}}
+{"name":"search_items","arguments":{"query":"Potion"}}
+{"name":"get_item_details","arguments":{"itemId":"Item000000000001"}}
+```
+
+Use actual IDs from the search result; the example IDs above are placeholders.
+Only 16-character alphanumeric document IDs are accepted, not names or UUIDs.
+World-cache records have verified `Actor.<id>` / `Item.<id>` UUIDs; REST records
+omit UUIDs because the REST payload does not establish their source scope.
+Item details read only the same world-item collection as `search_items`,
+excluding actor-owned and compendium items. These tools use the existing cache
+or REST view and permissions. Socket.IO rarity filtering remains unchanged.
+This contract preserves currently mapped fields, not a complete game-system
+sheet or an inventory.
+
+Invalid detail IDs return MCP `InvalidParams` (`-32602`) before backend access.
+Missing or removed documents, an unavailable backend, malformed responses and
+response ID mismatches return `InternalError` (`-32603`) with diagnostic text.
+A connected world with no matching documents returns a successful empty
+search; unavailable world data returns an error. REST detail reads use
+`/api/actors/:id` and `/api/items/:id`; a REST module without item-detail support
+returns its backend error rather than silently selecting a same-name item.
+
+Text consumers can continue reading `content[0].text`; summaries now include
+IDs. Structured consumers should use `schemaVersion: 1` and `record.id` /
+`records[].id`, not parse IDs or optional values from Markdown. TypeScript
+contracts are exported from `foundry/types` and `foundry/read-contract`.
 
 ### Write Operations (require `FOUNDRY_WRITE_ENABLED=true`)
 

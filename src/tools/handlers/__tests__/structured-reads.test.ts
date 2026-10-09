@@ -103,6 +103,29 @@ for (const surface of surfaces) {
         expect(ajv.validate(detailSchema, detail.structuredContent)).toBe(true);
       }
       expect(validate({ ...search.structuredContent, schemaVersion: 2 })).toBe(false);
+      expect(validate({ ...search.structuredContent, unexpected: true })).toBe(false);
+      expect(
+        validate({
+          ...search.structuredContent,
+          records: [{ name: 'Missing ID', type: 'npc', documentType: surface.documentType }],
+        }),
+      ).toBe(false);
+      expect(
+        validate({
+          ...search.structuredContent,
+          records: [
+            {
+              ...search.structuredContent.records[0],
+              uuid: `Compendium.pack.${surface.sample._id}`,
+            },
+          ],
+        }),
+      ).toBe(false);
+      expect(validate({ ...search.structuredContent, total: -1 })).toBe(false);
+      expect(search.content[0]?.text).toContain(
+        surface.name === 'actor' ? 'Level 0 - HP: 0/0' : '(loot) -  - 0 ',
+      );
+
       expect(
         validate({
           ...search.structuredContent,
@@ -194,6 +217,29 @@ for (const surface of surfaces) {
         surface.search(
           {},
           clientStub({ [surface.searchMethod]: vi.fn().mockResolvedValue(response) }),
+        ),
+      ).rejects.toThrow(McpError);
+    });
+
+    it('rejects invalid types in optional display values without coercion', async () => {
+      const invalid =
+        surface.name === 'actor'
+          ? { ...surface.sample, hp: { value: '0', max: 0 } }
+          : { ...surface.sample, price: { value: '0', denomination: '' } };
+      await expect(
+        surface.detail(
+          surface.sample._id,
+          clientStub({ [surface.detailMethod]: vi.fn().mockResolvedValue(invalid) }),
+        ),
+      ).rejects.toThrow(McpError);
+      await expect(
+        surface.search(
+          {},
+          clientStub({
+            [surface.searchMethod]: vi
+              .fn()
+              .mockResolvedValue({ [surface.collection]: [invalid], total: 1, page: 1, limit: 10 }),
+          }),
         ),
       ).rejects.toThrow(McpError);
     });

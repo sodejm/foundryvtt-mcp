@@ -10,6 +10,16 @@
  * @see {@link https://foundryvtt.com/api/} FoundryVTT API Documentation
  */
 
+/** Public versioned MCP read envelopes and their allowlisted document records. */
+export type {
+  ActorDetailsEnvelope,
+  ActorReadRecord,
+  ActorSearchEnvelope,
+  ItemDetailsEnvelope,
+  ItemReadRecord,
+  ItemSearchEnvelope,
+} from './read-contract.js';
+
 // FoundryVTT Data Types
 
 /**
@@ -22,7 +32,7 @@
  * @example
  * ```typescript
  * const hero: FoundryActor = {
- *   _id: 'actor-123',
+ *   _id: 'Actor00000000001',
  *   name: 'Aragorn',
  *   type: 'character',
  *   hp: { value: 45, max: 45 },
@@ -83,7 +93,7 @@ export interface FoundryActor {
  * @example
  * ```typescript
  * const sword: FoundryItem = {
- *   _id: 'item-456',
+ *   _id: 'Item000000000001',
  *   name: 'Longsword +1',
  *   type: 'weapon',
  *   rarity: 'uncommon',

@@ -21,7 +21,7 @@ import {
   handleSearchLogs,
 } from './handlers/diagnostics.js';
 import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
-import { handleSearchItems } from './handlers/items.js';
+import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleReadResource } from './handlers/resources.js';
 import { handleGetSceneInfo } from './handlers/scenes.js';
 import { toolRegistry } from './registry.js';
@@ -80,13 +80,18 @@ async function routeLegacyTool(
       return handleSearchActors(args, foundryClient);
     case 'get_actor_details':
       if (!('actorId' in args) || typeof args.actorId !== 'string') {
-        throw new Error('Missing required parameter: actorId');
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
 
     // Item tools
     case 'search_items':
       return handleSearchItems(args, foundryClient);
+    case 'get_item_details':
+      if (!('itemId' in args) || typeof args.itemId !== 'string') {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: itemId');
+      }
+      return handleGetItemDetails(args as { itemId: string }, foundryClient);
 
     // Scene tools
     case 'get_scene_info':

@@ -245,6 +245,25 @@ describe('Socket.IO value fidelity', () => {
     expect(await client.getItem(I)).toEqual({ _id: I, uuid: `Item.${I}`, name: '', type: '' });
     client.disconnect();
   });
+
+  it('keeps detail reads scoped to world documents rather than same-ID embedded items', async () => {
+    const client = createClient();
+    setWorld(client, { actors: [{ ...worldActor, items: [worldItem] }], items: [] });
+    await expect(client.getItem(I)).rejects.toThrow('Item not found');
+    expect((await client.searchItems({})).items).toEqual([]);
+    client.disconnect();
+  });
+  it('validates only selected cached records after filtering and paging', async () => {
+    const client = createClient();
+    const invalidActor = { ...worldActor, _id: 'invalid', name: 'Other' };
+    const invalidItem = { ...worldItem, _id: 'invalid', name: 'Other' };
+    setWorld(client, { actors: [worldActor, invalidActor], items: [worldItem, invalidItem] });
+    expect((await client.searchActors({ query: 'Twin' })).actors).toHaveLength(1);
+    expect((await client.searchItems({ query: 'Twin' })).items).toHaveLength(1);
+    expect((await client.searchActors({ limit: 1 })).actors).toHaveLength(1);
+    expect((await client.searchItems({ limit: 1 })).items).toHaveLength(1);
+    client.disconnect();
+  });
   it('rejects malformed cached document identities and shapes', async () => {
     const client = createClient();
     Reflect.set(client, 'worldData', {
