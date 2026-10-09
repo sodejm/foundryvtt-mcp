@@ -17,6 +17,6 @@ export * from './handlers/resources.js';
 export * from './handlers/scenes.js';
 export * from './handlers/users.js';
 export * from './handlers/world.js';
-export { getAllResources } from './resources.js';
+export { getAllResources, getAllResourceTemplates } from './resources.js';
 // Export routing functions
 export { routeResourceRequest, routeToolRequest } from './router.js';

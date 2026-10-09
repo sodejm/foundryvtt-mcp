@@ -95,7 +95,7 @@ export function sortCollectionRecords(records: readonly CollectionRecord[]): Col
     (left, right) =>
       compareText(left.name, right.name) ||
       compareText(left.documentType, right.documentType) ||
-      compareText(left.id, right.id),
+      (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
 }
 

@@ -1,8 +1,10 @@
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsClient } from '../../../diagnostics/client.js';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { WorldCombat } from '../../../foundry/types.js';
 import { handleReadResource } from '../resources.js';
+import { paginationMetadata } from './pagination-fixture.js';
 
 const COMBAT_ID = 'cccccccccccccccc';
 
@@ -41,6 +43,113 @@ const readJson = async (uri: string, client: Partial<FoundryClient>) => {
   const text = result.contents[0]?.text ?? '';
   return JSON.parse(text) as Record<string, unknown>;
 };
+
+describe('bounded collection resources', () => {
+  const collections = [
+    ['actors', 'Actor', 'searchActors'],
+    ['items', 'Item', 'searchItems'],
+    ['scenes', 'Scene', 'getCollectionPage'],
+    ['journals', 'JournalEntry', 'getCollectionPage'],
+    ['users', 'User', 'getCollectionPage'],
+  ] as const;
+  it.each(
+    collections,
+  )('returns a default bounded %s page with stable IDs', async (collection, documentType, method) => {
+    const record = { _id: 'Document00000001', name: 'Twin', type: 'npc' };
+    const fetch = vi.fn().mockResolvedValue({
+      ...(method === 'getCollectionPage'
+        ? { records: [{ id: record._id, name: record.name, documentType }] }
+        : { [collection]: [record] }),
+      ...paginationMetadata(1, 1, 100),
+    });
+    const payload = await readJson(`foundry://${collection}`, { [method]: fetch });
+    expect(payload).toMatchObject({
+      schemaVersion: 2,
+      collection,
+      records: [{ id: record._id, documentType }],
+      total: 1,
+      limit: 100,
+      returnedCount: 1,
+      complete: true,
+      nextCursor: null,
+      nextUri: null,
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      ...(method === 'getCollectionPage' ? [collection, { limit: 100 }] : [{ limit: 100 }]),
+    );
+  });
+  it('preserves and encodes the continuation context in nextUri', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue({ records: [], ...paginationMetadata(0, 2, 1), nextCursor: 'a+/=&?' });
+    const first = await readJson('foundry://scenes?limit=1', { getCollectionPage: fetch });
+    expect(first.nextUri).toBe('foundry://scenes?limit=1&cursor=a%2B%2F%3D%26%3F');
+    await readJson(first.nextUri as string, { getCollectionPage: fetch });
+    expect(fetch).toHaveBeenLastCalledWith('scenes', { limit: 1, cursor: 'a+/=&?' });
+  });
+  it('allows a cursor without an explicit limit for client-side context validation', async () => {
+    const fetch = vi.fn().mockResolvedValue({ records: [], ...paginationMetadata(0) });
+    await readJson('foundry://scenes?cursor=abc', { getCollectionPage: fetch });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('scenes', { cursor: 'abc' });
+  });
+  it.each([
+    'invalid URI',
+    'https://actors',
+    'foundry://unknown',
+    'foundry://actors/',
+    'foundry://actors#fragment',
+    'foundry://user:password@actors',
+    'foundry://actors:1234',
+    'foundry://actors?limit=0',
+    'foundry://actors?limit=101',
+    'foundry://actors?limit=1.5',
+    'foundry://actors?limit=01',
+    'foundry://actors?limit=-1',
+    'foundry://actors?limit=NaN',
+    'foundry://actors?limit=1&limit=2',
+    'foundry://actors?cursor=a&cursor=b',
+    'foundry://actors?page=2',
+    'foundry://actors?cursor=',
+    `foundry://actors?cursor=${'a'.repeat(1025)}`,
+  ])('rejects invalid collection URI before reading: %s', async (uri) => {
+    const fetch = vi.fn();
+    await expect(
+      readJson(uri, { searchActors: fetch, getCollectionPage: fetch }),
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('rejects malformed metadata and record identity', async () => {
+    for (const page of [
+      { records: [], ...paginationMetadata(0), total: -1 },
+      { records: [{ id: 'short', name: 'bad', documentType: 'Scene' }], ...paginationMetadata(1) },
+    ]) {
+      await expect(
+        readJson('foundry://scenes', { getCollectionPage: vi.fn().mockResolvedValue(page) }),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+    }
+  });
+  it('reports backend and size failures without a partial collection', async () => {
+    await expect(
+      readJson('foundry://scenes', {
+        getCollectionPage: vi.fn().mockRejectedValue(new Error('backend unavailable')),
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining('backend unavailable'),
+    });
+    await expect(
+      readJson('foundry://scenes', {
+        getCollectionPage: vi.fn().mockResolvedValue({
+          records: [{ id: 'Document00000001', name: 'é'.repeat(70_000), documentType: 'Scene' }],
+          ...paginationMetadata(1),
+        }),
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining('request a smaller limit'),
+    });
+  });
+});
 
 // --------------------------------------------------------------------------
 // #214 follow-up: `foundry://combat` is the id-bearing companion to

@@ -5,6 +5,16 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../../diagnostics/client.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import type { PaginationParams } from '../../foundry/pagination.js';
+import {
+  actorReadRecord,
+  boundedReadResponse,
+  collectionRecordSchema,
+  itemReadRecord,
+  paginationSchema,
+  parseReadInput,
+  resourcePageInputSchema,
+} from '../../foundry/read-contract.js';
 import { logger } from '../../utils/logger.js';
 import { getTurnOrder } from './combat-order.js';
 import { withToolError } from './utils.js';
@@ -15,27 +25,16 @@ export async function handleReadResource(
   diagnosticsClient: DiagnosticsClient,
 ) {
   return withToolError('read resource', async () => {
+    const collection = parseCollectionUri(uri);
+    if (collection) {
+      return getCollectionResource(uri, collection.name, collection.params, foundryClient);
+    }
     switch (uri) {
-      case 'foundry://actors':
-        return await getActorsResource(foundryClient);
-
-      case 'foundry://items':
-        return await getItemsResource(foundryClient);
-
-      case 'foundry://scenes':
-        return await getScenesResource(foundryClient);
-
       case 'foundry://scenes/current':
         return await getCurrentSceneResource(foundryClient);
 
       case 'foundry://world/settings':
         return await getWorldSettingsResource(foundryClient);
-
-      case 'foundry://journals':
-        return await getJournalsResource(foundryClient);
-
-      case 'foundry://users':
-        return await getUsersResource(foundryClient);
 
       case 'foundry://combat':
         return await getCombatResource(foundryClient);
@@ -49,59 +48,77 @@ export async function handleReadResource(
   });
 }
 
-async function getActorsResource(foundryClient: FoundryClient) {
-  const result = await foundryClient.searchActors({ limit: 100 });
+type CollectionName = 'actors' | 'items' | 'scenes' | 'journals' | 'users';
+const collectionNames = new Set<string>(['actors', 'items', 'scenes', 'journals', 'users']);
+function parseCollectionUri(
+  uri: string,
+): { name: CollectionName; params: PaginationParams } | undefined {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
+  }
+  if (url.protocol !== 'foundry:' || !collectionNames.has(url.hostname) || url.pathname !== '') {
+    return undefined;
+  }
+  if (url.hash || url.username || url.password || url.port) {
+    throw new McpError(ErrorCode.InvalidParams, 'Invalid collection resource URI');
+  }
+  const params: Record<string, unknown> = {};
+  for (const [key, value] of url.searchParams) {
+    if ((key !== 'limit' && key !== 'cursor') || key in params) {
+      throw new McpError(ErrorCode.InvalidParams, 'Unknown or duplicate pagination parameter');
+    }
+    if (key === 'limit') {
+      if (!/^[1-9][0-9]*$/.test(value)) {
+        throw new McpError(ErrorCode.InvalidParams, 'limit must be an integer between 1 and 100');
+      }
+      params.limit = Number(value);
+    } else {
+      params.cursor = value;
+    }
+  }
+  const parsed = parseReadInput(resourcePageInputSchema, params);
   return {
-    contents: [
-      {
-        uri: 'foundry://actors',
-        mimeType: 'application/json',
-        text: JSON.stringify(
-          { actors: result.actors, total: result.total, lastUpdated: new Date().toISOString() },
-          null,
-          2,
-        ),
-      },
-    ],
+    name: url.hostname as CollectionName,
+    params: {
+      ...(parsed.limit !== undefined && { limit: parsed.limit }),
+      ...(parsed.cursor !== undefined && { cursor: parsed.cursor }),
+    },
   };
 }
-
-async function getItemsResource(foundryClient: FoundryClient) {
-  const result = await foundryClient.searchItems({ limit: 100 });
-  return {
-    contents: [
-      {
-        uri: 'foundry://items',
-        mimeType: 'application/json',
-        text: JSON.stringify(
-          { items: result.items, total: result.total, lastUpdated: new Date().toISOString() },
-          null,
-          2,
-        ),
-      },
-    ],
+async function getCollectionResource(
+  uri: string,
+  collection: CollectionName,
+  params: PaginationParams,
+  client: FoundryClient,
+) {
+  let records: unknown[];
+  let metadata: ReturnType<typeof paginationSchema.parse>;
+  const paging = {
+    ...params,
+    ...(params.cursor === undefined && params.limit === undefined && { limit: 100 }),
   };
-}
-
-async function getScenesResource(foundryClient: FoundryClient) {
-  const scenes = foundryClient.getScenes();
-  return {
-    contents: [
-      {
-        uri: 'foundry://scenes',
-        mimeType: 'application/json',
-        text: JSON.stringify(
-          {
-            scenes: scenes.map((s) => ({ _id: s._id, name: s.name, active: s.active })),
-            total: scenes.length,
-            lastUpdated: new Date().toISOString(),
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-  };
+  if (collection === 'actors') {
+    const page = await client.searchActors(paging);
+    records = page.actors.map(actorReadRecord);
+    metadata = paginationSchema.parse(page);
+  } else if (collection === 'items') {
+    const page = await client.searchItems(paging);
+    records = page.items.map(itemReadRecord);
+    metadata = paginationSchema.parse(page);
+  } else {
+    const page = await client.getCollectionPage(collection, paging);
+    records = page.records.map((record) => collectionRecordSchema.parse(record));
+    metadata = paginationSchema.parse(page);
+  }
+  const nextUri =
+    metadata.nextCursor === null
+      ? null
+      : `foundry://${collection}?limit=${metadata.limit}&cursor=${encodeURIComponent(metadata.nextCursor)}`;
+  const text = JSON.stringify({ schemaVersion: 2, collection, records, ...metadata, nextUri });
+  return boundedReadResponse({ contents: [{ uri, mimeType: 'application/json', text }] });
 }
 
 async function getCurrentSceneResource(foundryClient: FoundryClient) {
@@ -150,48 +167,6 @@ async function getWorldSettingsResource(foundryClient: FoundryClient) {
         uri: 'foundry://world/settings',
         mimeType: 'application/json',
         text: JSON.stringify({ world, lastUpdated: new Date().toISOString() }, null, 2),
-      },
-    ],
-  };
-}
-
-async function getJournalsResource(foundryClient: FoundryClient) {
-  const journals = foundryClient.getJournals();
-  return {
-    contents: [
-      {
-        uri: 'foundry://journals',
-        mimeType: 'application/json',
-        text: JSON.stringify(
-          {
-            journals: journals.map((j) => ({
-              _id: j._id,
-              name: j.name,
-              pages: j.pages?.length || 0,
-            })),
-            total: journals.length,
-            lastUpdated: new Date().toISOString(),
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-  };
-}
-
-async function getUsersResource(foundryClient: FoundryClient) {
-  const { users, activeUsers } = foundryClient.getUsers();
-  return {
-    contents: [
-      {
-        uri: 'foundry://users',
-        mimeType: 'application/json',
-        text: JSON.stringify(
-          { users, activeUsers, lastUpdated: new Date().toISOString() },
-          null,
-          2,
-        ),
       },
     ],
   };

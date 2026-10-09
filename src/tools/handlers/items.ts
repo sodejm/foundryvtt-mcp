@@ -2,38 +2,38 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import {
+  boundedReadResponse,
   documentIdSchema,
   itemDetailsSchema,
   itemReadRecord,
   itemSearchDocumentSchema,
+  itemSearchInputSchema,
   itemSearchSchema,
+  paginationSchema,
+  paginationText,
+  parseReadInput,
 } from '../../foundry/read-contract.js';
 import { withToolError } from './utils.js';
 
 export async function handleSearchItems(
-  args: { query?: string; type?: string; rarity?: string; limit?: number },
+  args: { query?: string; type?: string; rarity?: string; limit?: number; cursor?: string },
   foundryClient: FoundryClient,
 ) {
-  const { query, type, rarity, limit = 10 } = args;
+  const { query, type, rarity, limit, cursor } = parseReadInput(itemSearchInputSchema, args);
   return withToolError('search items', async () => {
-    const searchParams: { query: string; type?: string; rarity?: string; limit: number } = {
-      query: query || '',
-      limit,
+    const searchParams = {
+      query: query ?? '',
+      ...(limit !== undefined && { limit }),
+      ...(cursor !== undefined && { cursor }),
+      ...(type !== undefined && { type }),
+      ...(rarity !== undefined && { rarity }),
     };
-    if (type) {
-      searchParams.type = type;
-    }
-    if (rarity) {
-      searchParams.rarity = rarity;
-    }
     const result = itemSearchDocumentSchema.parse(await foundryClient.searchItems(searchParams));
     const structuredContent = itemSearchSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'Item',
       records: result.items.map(itemReadRecord),
-      total: result.total,
-      page: result.page,
-      limit: result.limit,
+      ...paginationSchema.parse(result),
     });
     const itemList = structuredContent.records
       .map((item) => {
@@ -43,7 +43,7 @@ export async function handleSearchItems(
         return `- **${item.name}** (${item.type}) - ${item.rarity ?? 'Unknown rarity'} - ${price} - ID: ${item.id}`;
       })
       .join('\n');
-    return {
+    return boundedReadResponse({
       structuredContent,
       content: [
         {
@@ -56,10 +56,10 @@ export async function handleSearchItems(
 
 ${itemList || 'No items found matching the criteria.'}
 
-**Page:** ${structuredContent.page} | **Limit:** ${structuredContent.limit}`,
+${paginationText(structuredContent)}`,
         },
       ],
-    };
+    });
   });
 }
 

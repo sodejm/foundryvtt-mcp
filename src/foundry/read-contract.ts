@@ -1,4 +1,5 @@
-/** Version 1 world-document read contracts shared by runtime validation and MCP schemas. */
+/** World-document read contracts shared by runtime validation and MCP schemas. */
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 /** Matches the existing Foundry document-ID boundary; UUIDs are not accepted as IDs. */
@@ -116,30 +117,103 @@ export const itemDocumentSchema = z
     ...itemFields,
   })
   .passthrough();
-const pagination = {
+export const paginationShape = {
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
-  limit: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(100),
+  returnedCount: z.number().int().min(0).max(100),
+  nextCursor: z.string().max(1024).nullable(),
+  complete: z.boolean(),
+  snapshotId: z.string(),
+  expiresAt: z.iso.datetime(),
+  consistency: z.literal('snapshot'),
 };
+export const paginationSchema = z.object(paginationShape);
+const searchInput = {
+  query: z.string().max(1024).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+};
+export const worldSearchInputSchema = z.strictObject(searchInput);
+export const actorSearchInputSchema = z.strictObject({
+  ...searchInput,
+  type: z.string().max(128).optional(),
+});
+export const itemSearchInputSchema = z.strictObject({
+  ...actorSearchInputSchema.shape,
+  rarity: z.string().max(128).optional(),
+});
+export const resourcePageInputSchema = z.strictObject({
+  limit: searchInput.limit,
+  cursor: searchInput.cursor,
+});
+export const actorSearchInputJsonSchema = z.toJSONSchema(actorSearchInputSchema, {
+  target: 'draft-7',
+});
+export const itemSearchInputJsonSchema = z.toJSONSchema(itemSearchInputSchema, {
+  target: 'draft-7',
+});
+export const worldSearchInputJsonSchema = z.toJSONSchema(worldSearchInputSchema, {
+  target: 'draft-7',
+});
+export function boundedReadResponse<T>(response: T): T {
+  if (Buffer.byteLength(JSON.stringify(response), 'utf8') > 128 * 1024) {
+    throw new Error(
+      'Read response exceeds the maximum size of 131072 bytes; request a smaller limit',
+    );
+  }
+  return response;
+}
+export function parseReadInput<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Invalid pagination parameters: ${result.error.message}`,
+    );
+  }
+  return result.data;
+}
+export function paginationText(page: z.infer<typeof paginationSchema>): string {
+  return `**Page:** ${page.page} | **Limit:** ${page.limit} | **Returned:** ${page.returnedCount}/${page.total} | **Complete:** ${page.complete}\n**Next cursor:** ${page.nextCursor ?? 'none'}\n**Snapshot expires:** ${page.expiresAt}`;
+}
 export const actorSearchDocumentSchema = z.object({
   actors: z.array(actorDocumentSchema),
-  ...pagination,
+  ...paginationShape,
 });
 export const itemSearchDocumentSchema = z.object({
   items: z.array(itemDocumentSchema),
-  ...pagination,
+  ...paginationShape,
 });
 export const actorSearchSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('Actor'),
   records: z.array(actorRecordSchema),
-  ...pagination,
+  ...paginationShape,
 });
 export const itemSearchSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   documentType: z.literal('Item'),
   records: z.array(itemRecordSchema),
-  ...pagination,
+  ...paginationShape,
+});
+export const collectionRecordSchema = z.strictObject({
+  id: documentIdSchema,
+  name: z.string(),
+  documentType: z.enum(['Actor', 'Item', 'Scene', 'JournalEntry', 'User']),
+  type: z.string().optional(),
+  active: z.boolean().optional(),
+  pageCount: z.number().int().nonnegative().optional(),
+  role: z.number().optional(),
+});
+export const collectionSearchSchema = z.strictObject({
+  schemaVersion: z.literal(2),
+  scope: z.enum(['journals', 'world']),
+  records: z.array(collectionRecordSchema),
+  ...paginationShape,
+});
+export const collectionSearchOutputSchema = z.toJSONSchema(collectionSearchSchema, {
+  target: 'draft-7',
 });
 export const actorDetailsSchema = z.strictObject({
   schemaVersion: z.literal(1),

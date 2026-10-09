@@ -5,32 +5,34 @@ import {
   actorDetailsSchema,
   actorReadRecord,
   actorSearchDocumentSchema,
+  actorSearchInputSchema,
   actorSearchSchema,
+  boundedReadResponse,
   documentIdSchema,
+  paginationSchema,
+  paginationText,
+  parseReadInput,
 } from '../../foundry/read-contract.js';
 import { withToolError } from './utils.js';
 
 export async function handleSearchActors(
-  args: { query?: string; type?: string; limit?: number },
+  args: { query?: string; type?: string; limit?: number; cursor?: string },
   foundryClient: FoundryClient,
 ) {
-  const { query, type, limit = 10 } = args;
+  const { query, type, limit, cursor } = parseReadInput(actorSearchInputSchema, args);
   return withToolError('search actors', async () => {
-    const searchParams: { query: string; type?: string; limit: number } = {
-      query: query || '',
-      limit,
+    const searchParams = {
+      query: query ?? '',
+      ...(limit !== undefined && { limit }),
+      ...(cursor !== undefined && { cursor }),
+      ...(type !== undefined && { type }),
     };
-    if (type) {
-      searchParams.type = type;
-    }
     const result = actorSearchDocumentSchema.parse(await foundryClient.searchActors(searchParams));
     const structuredContent = actorSearchSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentType: 'Actor',
       records: result.actors.map(actorReadRecord),
-      total: result.total,
-      page: result.page,
-      limit: result.limit,
+      ...paginationSchema.parse(result),
     });
     const actorList = structuredContent.records
       .map(
@@ -38,7 +40,7 @@ export async function handleSearchActors(
           `- **${actor.name}** (${actor.type}) - Level ${actor.level ?? 'Unknown'} - HP: ${actor.hp?.value ?? 'Unknown'}/${actor.hp?.max ?? 'Unknown'} - ID: ${actor.id}`,
       )
       .join('\n');
-    return {
+    return boundedReadResponse({
       structuredContent,
       content: [
         {
@@ -50,10 +52,10 @@ export async function handleSearchActors(
 
 ${actorList || 'No actors found matching the criteria.'}
 
-**Page:** ${structuredContent.page} | **Limit:** ${structuredContent.limit}`,
+${paginationText(structuredContent)}`,
         },
       ],
-    };
+    });
   });
 }
 

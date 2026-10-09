@@ -104,12 +104,12 @@ const result = await client.request({
 ### Stable actor/item search-to-detail workflow
 
 Actor/item search and detail tools publish an `outputSchema` and retain text
-alongside version 1 `structuredContent`. For example, a search can return two
+alongside version 2 search `structuredContent`. For example, a search can return two
 actors with the same name:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "documentType": "Actor",
   "records": [
     {"id": "Actor00000000001", "documentType": "Actor", "name": "Goblin", "type": "npc", "hp": {"value": 0, "max": 7}},
@@ -117,7 +117,13 @@ actors with the same name:
   ],
   "total": 2,
   "page": 1,
-  "limit": 10
+  "limit": 10,
+  "returnedCount": 2,
+  "nextCursor": null,
+  "complete": true,
+  "snapshotId": "opaque-snapshot-id",
+  "expiresAt": "2026-10-09T03:00:00.000Z",
+  "consistency": "snapshot"
 }
 ```
 
@@ -139,16 +145,53 @@ nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
 Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
 world/search returns `records: []`; an unavailable world snapshot returns an
-error. A retained snapshot may remain readable after transport loss; this
-contract does not guarantee freshness. REST modules must implement
+error. Detail reads may retain cached data after transport loss; pagination
+cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
-error. This adds no fallback to owned items or
-compendiums and changes no access permissions.
+error. This adds no fallback to owned items or compendiums. Socket pagination
+requires a GM session until player visibility filtering is supported. REST
+pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
-version 1 retains existing mapped system fields without promising a complete
+detail version 1 retains existing mapped system fields without promising a complete
 actor sheet, inventory or cross-system normalization.
+
+### Traversing bounded searches and resources
+
+All four world searches (`search_actors`, `search_items`, `search_journals`,
+`search_world`) return a version 2 page. Start with a query and optional limit,
+then pass `nextCursor` back to the same tool with the same query, filters and
+limit. Stop at `nextCursor: null` / `complete: true`. Search limits default to
+10 and cannot exceed 100. Numeric page input and unknown parameters are rejected
+with `InvalidParams`. Query/cursor strings allow at most 1024 characters and
+type/rarity selectors 128; empty cursors are invalid.
+
+The server sorts by NFKC-normalized, lowercased name, document type and finally
+case-sensitive document ID. Pages share an immutable snapshot with an exact
+`total`, `snapshotId` and five-minute `expiresAt`. Writes during a traversal do
+not change its records. Start without a cursor to read the latest cache.
+Corrupt, expired, evicted or context-mismatched cursors fail; start a new
+traversal after reconnecting or changing worlds, callers, queries or filters.
+The server retains at most 32 snapshots per client within an aggregate 8 MiB
+cache budget. Each snapshot is capped at 10,000 records and 8 MiB. It never
+silently truncates an oversized snapshot.
+
+Collection resources (`foundry://actors`, `items`, `scenes`, `journals`, `users`)
+now return `{schemaVersion: 2, collection, records, ...pagination, nextUri}`.
+Start at, for example, `foundry://actors?limit=25` and follow `nextUri` until null.
+The five `resources/templates/list` entries advertise `{?limit,cursor}`.
+Resource limits default to 100, with the same maximum of 100. Old consumers
+must switch from unbounded arrays to `records` and continuation links. Singleton
+resources, such as `foundry://scenes/current`, retain their previous formats.
+Journal/world searches and non-actor/item resources contain metadata and stable
+IDs rather than full document bodies.
+
+The final MCP response, including text and JSON, cannot exceed 128 KiB. If a
+page is too large, reduce the limit; no partial page is returned. REST actor/item
+adapters fetch every backend page and reject repeated/non-progressing pages or
+inconsistent totals. REST journal/world searches and scene/journal/user pages
+remain unsupported and fail explicitly.
 
 Run `npm run test:reads:coverage` for the full unit suite with 100% statement,
 branch, function and line coverage enforced for the shared read contract and
@@ -161,3 +204,9 @@ bootstrapped world containing exactly two actors with a shared name and exactly
 two world items with a shared name. The live test records core/system/module
 version evidence. Missing connection or fixture prerequisites fail; they do not
 skip. Use the existing integration setup and keep credentials outside source.
+
+`tests/integration/pagination.integration.test.ts` additionally requires the
+disposable world ID `test1world`. It creates uniquely named fixtures (251 actors,
+251 items, journals and scenes), exercises the built MCP CLI, and deletes only
+its own fixtures afterward. It verifies exact traversals, duplicate names,
+snapshot consistency under writes, all five resources and invalid inputs.

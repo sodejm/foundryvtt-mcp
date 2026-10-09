@@ -21,7 +21,7 @@ const fixtureRecord = z.object({
   uuid: z.string().optional(),
 }).passthrough();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   records: z.array(fixtureRecord),
 }).passthrough();
 const detailEnvelope = z.object({

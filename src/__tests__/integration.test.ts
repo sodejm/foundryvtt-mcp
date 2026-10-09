@@ -93,7 +93,7 @@ describe('Integration Tests', () => {
             actors: [{ _id: 'Actor00000000001', name: 'Test Actor', type: 'character' }],
             total: 1,
             page: 1,
-            limit: 10,
+            limit: 100,
           },
         });
 
@@ -148,7 +148,7 @@ describe('Integration Tests', () => {
         ],
         total: 1,
         page: 1,
-        limit: 10,
+        limit: 100,
       };
 
       mockAxiosInstance.get
@@ -162,7 +162,7 @@ describe('Integration Tests', () => {
 
       await client.connect();
 
-      const searchParams = { query: 'Gandalf', type: 'npc', limit: 10 };
+      const searchParams = { query: 'Gandalf', type: 'npc', limit: 100 };
       const result = await client.searchActors(searchParams);
 
       expect(result.actors).toHaveLength(1);
@@ -190,7 +190,7 @@ describe('Integration Tests', () => {
         ],
         total: 1,
         page: 1,
-        limit: 10,
+        limit: 100,
       };
 
       mockAxiosInstance.get
@@ -204,7 +204,7 @@ describe('Integration Tests', () => {
 
       await client.connect();
 
-      const searchParams = { query: 'Flame', type: 'weapon', rarity: 'rare', limit: 10 };
+      const searchParams = { query: 'Flame', type: 'weapon', rarity: 'rare', limit: 100 };
       const result = await client.searchItems(searchParams);
 
       expect(result.items).toHaveLength(1);
@@ -235,8 +235,8 @@ describe('Integration Tests', () => {
       mockAxiosInstance.get
         .mockResolvedValueOnce({ data: { status: 'connected' } })
         .mockRejectedValueOnce(new Error('Temporary failure'))
-        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } })
-        .mockResolvedValueOnce({ data: { items: [], total: 0, page: 1, limit: 10 } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 100 } })
+        .mockResolvedValueOnce({ data: { items: [], total: 0, page: 1, limit: 100 } });
 
       client = new FoundryClient({
         baseUrl: 'http://localhost:30000',

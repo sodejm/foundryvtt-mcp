@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleGetJournal, handleSearchJournals } from '../journals.js';
+import { paginationMetadata } from './pagination-fixture.js';
 
 interface MockJournal {
   _id: string;
@@ -21,76 +22,54 @@ function getText(result: { content: Array<{ type: string; text: string }> }): st
   return result.content[0]?.text ?? '';
 }
 
-function makeJournal(id: string, name: string, pageCount: number): MockJournal {
-  return {
-    _id: id,
-    name,
-    pages: Array.from({ length: pageCount }, (_, i) => ({
-      _id: `${id}-page-${i}`,
-      name: `Page ${i + 1}`,
-      type: 'text',
-      text: { content: `<p>Page ${i + 1} content for ${name}.</p>`, format: 1 },
-    })),
-  };
-}
-
 describe('handleSearchJournals', () => {
-  describe('happy path', () => {
-    it('formats matching journals with page count and ID', async () => {
-      const journals: MockJournal[] = [
-        makeJournal('jrnl-1', 'Adventure Log', 5),
-        makeJournal('jrnl-2', 'Lore Compendium', 1),
-        makeJournal('jrnl-3', 'Empty Journal', 0),
-      ];
-      const client = {
-        searchJournals: vi.fn((_q: string) => journals),
-      } as unknown as FoundryClient;
-
-      const result = await handleSearchJournals({ query: 'adventure' }, client);
-      const text = getText(result);
-
-      expect(text).toContain('Journal Search');
-      expect(text).toContain('"adventure"');
-      expect(text).toContain('(3 results)');
-      expect(text).toContain('**Adventure Log** (5 pages)');
-      expect(text).toContain('**Lore Compendium** (1 page)');
-      expect(text).toContain('**Empty Journal** (0 pages)');
-      expect(text).toContain('ID: jrnl-1');
-      expect(text).toContain('ID: jrnl-2');
-      expect(client.searchJournals).toHaveBeenCalledWith('adventure');
+  it('returns metadata, stable IDs and a bounded page', async () => {
+    const records = [
+      { id: 'Journal000000001', name: 'Adventure Log', documentType: 'JournalEntry', pageCount: 5 },
+    ];
+    const searchJournalsPage = vi.fn().mockResolvedValue({ records, ...paginationMetadata(1) });
+    const result = await handleSearchJournals({ query: 'adventure' }, {
+      searchJournalsPage,
+    } as unknown as FoundryClient);
+    expect(result.structuredContent).toMatchObject({
+      schemaVersion: 2,
+      scope: 'journals',
+      records,
+      total: 1,
+      complete: true,
     });
-
-    it('honors a caller-supplied limit', async () => {
-      const journals: MockJournal[] = Array.from({ length: 25 }, (_, i) =>
-        makeJournal(`jrnl-${i}`, `Journal ${i}`, 1),
-      );
-      const client = {
-        searchJournals: vi.fn(() => journals),
-      } as unknown as FoundryClient;
-
-      const result = await handleSearchJournals({ query: 'j', limit: 5 }, client);
-      const text = getText(result);
-
-      // Total count still reflects the full result set
-      expect(text).toContain('(25 results)');
-      // But only the first 5 entries are listed
-      expect(text).toContain('**Journal 0**');
-      expect(text).toContain('**Journal 4**');
-      expect(text).not.toContain('**Journal 5**');
-    });
+    expect(getText(result)).toContain('ID: Journal000000001');
+    expect(getText(result)).toContain('**Returned:** 1/1');
+    expect(searchJournalsPage).toHaveBeenCalledWith({ query: 'adventure' });
   });
-
-  describe('edge cases', () => {
-    it('returns "No journals found" placeholder when search returns empty', async () => {
-      const client = {
-        searchJournals: vi.fn(() => []),
-      } as unknown as FoundryClient;
-
-      const result = await handleSearchJournals({ query: 'xyzzy' }, client);
-      const text = getText(result);
-
-      expect(text).toContain('No journals found matching "xyzzy".');
+  it('forwards limit and cursor and reports continuation', async () => {
+    const searchJournalsPage = vi
+      .fn()
+      .mockResolvedValue({ records: [], ...paginationMetadata(0, 25, 5) });
+    const result = await handleSearchJournals({ limit: 5, cursor: 'fixture-cursor' }, {
+      searchJournalsPage,
+    } as unknown as FoundryClient);
+    expect(searchJournalsPage).toHaveBeenCalledWith({ limit: 5, cursor: 'fixture-cursor' });
+    expect(result.structuredContent).toMatchObject({
+      total: 25,
+      complete: false,
+      nextCursor: 'fixture-cursor',
     });
+    expect(getText(result)).toContain('**Next cursor:** fixture-cursor');
+  });
+  it('returns an explicit complete empty page', async () => {
+    const result = await handleSearchJournals({}, {
+      searchJournalsPage: vi.fn().mockResolvedValue({ records: [], ...paginationMetadata(0) }),
+    } as unknown as FoundryClient);
+    expect(getText(result)).toContain('No results found.');
+    expect(result.structuredContent.complete).toBe(true);
+  });
+  it('wraps backend errors', async () => {
+    await expect(
+      handleSearchJournals({}, {
+        searchJournalsPage: vi.fn().mockRejectedValue(new Error('offline')),
+      } as unknown as FoundryClient),
+    ).rejects.toThrow('offline');
   });
 });
 

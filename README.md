@@ -153,9 +153,11 @@ Ask your AI assistant things like:
 
 `search_actors`, `get_actor_details`, `search_items` and `get_item_details`
 retain readable `content` text and add typed MCP `structuredContent`, validated
-against the `outputSchema` advertised by `tools/list`. Version 1 search results
-contain `schemaVersion`, `documentType`, `records`, `total`, `page` and `limit`;
-details contain `schemaVersion`, `documentType` and `record`. Every record has
+against the `outputSchema` advertised by `tools/list`. Version 2 search results
+contain `schemaVersion`, `documentType`, `records`, `total`, `page`, `limit`,
+`returnedCount`, `nextCursor`, `complete`, `snapshotId`, `expiresAt` and
+`consistency: "snapshot"`. Details remain version 1 and contain `schemaVersion`,
+`documentType` and `record`. Every actor/item record has
 `id`, `documentType`, `name` and `type`, plus available mapped fields. Missing
 optional values are omitted; zero, false and empty strings remain real values.
 Unknown rarity now displays as `Unknown rarity` instead of an invented `Common`.
@@ -175,8 +177,8 @@ Only 16-character alphanumeric document IDs are accepted, not names or UUIDs.
 World-cache records have verified `Actor.<id>` / `Item.<id>` UUIDs; REST records
 omit UUIDs because the REST payload does not establish their source scope.
 Item details read only the same world-item collection as `search_items`,
-excluding actor-owned and compendium items. These tools use the existing cache
-or REST view and permissions. Socket.IO rarity filtering remains unchanged.
+excluding actor-owned and compendium items. Item search applies both type and
+rarity filters to the current world-item view.
 This contract preserves currently mapped fields, not a complete game-system
 sheet or an inventory.
 
@@ -189,9 +191,36 @@ search; unavailable world data returns an error. REST detail reads use
 returns its backend error rather than silently selecting a same-name item.
 
 Text consumers can continue reading `content[0].text`; summaries now include
-IDs. Structured consumers should use `schemaVersion: 1` and `record.id` /
+IDs. Structured consumers should check `schemaVersion` and use `record.id` /
 `records[].id`, not parse IDs or optional values from Markdown. TypeScript
 contracts are exported from `foundry/types` and `foundry/read-contract`.
+
+### Bounded world searches
+
+`search_actors`, `search_items`, `search_journals` and `search_world` accept
+`limit` (default 10, maximum 100) and an opaque `cursor`. Keep the original query,
+filters and limit on each continuation call; stop when `nextCursor` is null and
+`complete` is true. Numeric `page` input is no longer supported. Query and cursor
+strings are limited to 1024 characters; type and rarity selectors to 128.
+
+Each traversal captures an immutable snapshot sorted by normalized name,
+document type and case-sensitive ID. Creates, updates and deletes do not alter
+that traversal. A new first-page call reads the current cache. Cursors expire
+after five minutes and are bound to the world, caller/session, filters and page
+size. Corrupt, expired or mismatched cursors fail explicitly; reconnecting also
+invalidates cursors. Restart from the first page to obtain a new snapshot.
+
+Responses are limited to 128 KiB, including MCP text and structured content.
+Oversized pages fail with an instruction to request a smaller limit. Snapshots
+are capped at 10,000 records and 8 MiB, with at most 32 retained per client
+within an aggregate 8 MiB cache budget;
+evicted snapshots require a new first-page call.
+
+Socket.IO pagination currently requires a GM session while player visibility
+filtering is developed. REST actor/item pagination uses the authenticated
+backend's visible collection and requires working backend pagination; it rejects
+ignored pages, repeated IDs and inconsistent totals. REST journal/world searches
+and scene/journal/user collection pages are unsupported and return errors.
 
 ### Write Operations (require `FOUNDRY_WRITE_ENABLED=true`)
 
@@ -247,16 +276,24 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 
 ## Available Resources
 
-- `foundry://actors` — all actors in the world
-- `foundry://items` — all items in the world
-- `foundry://scenes` — all scenes
+- `foundry://actors` — a page of world actors
+- `foundry://items` — a page of world items
+- `foundry://scenes` — a page of scene metadata
 - `foundry://scenes/current` — current active scene
-- `foundry://journals` — all journal entries
-- `foundry://users` — online users
+- `foundry://journals` — a page of journal metadata
+- `foundry://users` — a page of world-user metadata, including inactive users
 - `foundry://combat` — active combat state; `combatants` are in initiative order, so
   `combat.turn` indexes them directly
 - `foundry://world/settings` — world and campaign settings
 - `foundry://system/diagnostics` — system diagnostics (requires REST API module)
+
+The five collection resources return version 2 envelopes with `records`, the
+same snapshot metadata as searches, and `nextUri` (null on the last page).
+Their default page size is 100. Follow `nextUri` or use the advertised resource
+template `foundry://actors{?limit,cursor}` (and its item/scene/journal/user
+equivalents). For example, start at `foundry://actors?limit=25`. Consumers of the
+former unbounded arrays must migrate to `records` and follow every page. The
+singleton resources keep their existing response formats.
 
 ## Troubleshooting
 

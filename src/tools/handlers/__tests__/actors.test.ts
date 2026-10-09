@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { ActorSearchResult, FoundryActor } from '../../../foundry/types.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
+import { paginationMetadata } from './pagination-fixture.js';
 
 function getText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -46,7 +47,7 @@ describe('handleSearchActors', () => {
         hp: { value: 7, max: 7 },
       }),
     ];
-    const searchResult: ActorSearchResult = { actors, total: 2, page: 1, limit: 10 };
+    const searchResult: ActorSearchResult = { actors, ...paginationMetadata(2) };
     const client = {
       searchActors: vi.fn().mockResolvedValue(searchResult),
     } as unknown as FoundryClient;
@@ -54,7 +55,7 @@ describe('handleSearchActors', () => {
     const result = await handleSearchActors({ query: 'a' }, client);
     const text = getText(result);
 
-    expect(client.searchActors).toHaveBeenCalledWith({ query: 'a', limit: 10 });
+    expect(client.searchActors).toHaveBeenCalledWith({ query: 'a' });
     expect(text).toContain('Aragorn');
     expect(text).toContain('Goblin');
     expect(text).toContain('Level 5');
@@ -63,7 +64,7 @@ describe('handleSearchActors', () => {
   });
 
   it('passes through type filter when supplied', async () => {
-    const searchResult: ActorSearchResult = { actors: [], total: 0, page: 1, limit: 5 };
+    const searchResult: ActorSearchResult = { actors: [], ...paginationMetadata(0, 0, 5) };
     const client = {
       searchActors: vi.fn().mockResolvedValue(searchResult),
     } as unknown as FoundryClient;
@@ -74,7 +75,7 @@ describe('handleSearchActors', () => {
   });
 
   it('shows "No actors found" placeholder on empty result', async () => {
-    const searchResult: ActorSearchResult = { actors: [], total: 0, page: 1, limit: 10 };
+    const searchResult: ActorSearchResult = { actors: [], ...paginationMetadata(0) };
     const client = {
       searchActors: vi.fn().mockResolvedValue(searchResult),
     } as unknown as FoundryClient;
@@ -87,7 +88,7 @@ describe('handleSearchActors', () => {
   });
 
   it('shows "All actors" when no query provided', async () => {
-    const searchResult: ActorSearchResult = { actors: [], total: 0, page: 1, limit: 10 };
+    const searchResult: ActorSearchResult = { actors: [], ...paginationMetadata(0) };
     const client = {
       searchActors: vi.fn().mockResolvedValue(searchResult),
     } as unknown as FoundryClient;
@@ -96,14 +97,14 @@ describe('handleSearchActors', () => {
     const text = getText(result);
 
     expect(text).toContain('**Query:** All actors');
-    expect(client.searchActors).toHaveBeenCalledWith({ query: '', limit: 10 });
+    expect(client.searchActors).toHaveBeenCalledWith({ query: '' });
   });
 
   it('falls back to "Unknown" when level and hp are missing', async () => {
     const actors: FoundryActor[] = [
       buildActor({ name: 'Mystery', level: undefined, hp: undefined }),
     ];
-    const searchResult: ActorSearchResult = { actors, total: 1, page: 1, limit: 10 };
+    const searchResult: ActorSearchResult = { actors, ...paginationMetadata(1) };
     const client = {
       searchActors: vi.fn().mockResolvedValue(searchResult),
     } as unknown as FoundryClient;

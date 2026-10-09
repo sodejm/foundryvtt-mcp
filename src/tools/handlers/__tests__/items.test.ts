@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleSearchItems } from '../items.js';
+import { paginationMetadata } from './pagination-fixture.js';
 
 interface MockItem {
   _id: string;
@@ -18,7 +19,7 @@ interface MockSearchParams {
   query: string;
   type?: string;
   rarity?: string;
-  limit: number;
+  limit?: number;
 }
 
 function mockFoundryClient(result: {
@@ -31,7 +32,7 @@ function mockFoundryClient(result: {
   const client = {
     searchItems: vi.fn(async (params: MockSearchParams) => {
       calls.params.push(params);
-      return result;
+      return { ...result, ...paginationMetadata(result.items.length, result.total, result.limit) };
     }),
   } as unknown as FoundryClient;
   return { client, calls };
@@ -87,7 +88,6 @@ describe('handleSearchItems', () => {
         query: 'sword',
         type: 'weapon',
         rarity: 'Common',
-        limit: 10,
       });
     });
 
@@ -106,7 +106,7 @@ describe('handleSearchItems', () => {
       expect(text).toContain('**Type Filter:** All types');
       expect(text).toContain('**Rarity Filter:** All rarities');
       // Filters should not be passed when undefined
-      expect(calls.params[0]).toEqual({ query: '', limit: 10 });
+      expect(calls.params[0]).toEqual({ query: '' });
     });
   });
 

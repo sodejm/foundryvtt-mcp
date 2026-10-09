@@ -238,6 +238,17 @@ describe('SnapshotPaginator', () => {
 });
 
 describe('collection sorting', () => {
+  it('uses case-sensitive opaque IDs to break otherwise identical record ties', () => {
+    const upper: CollectionRecord = { id: 'A', name: 'same', documentType: 'Actor' };
+    const lower: CollectionRecord = { id: 'a', name: 'same', documentType: 'Actor' };
+    for (const records of [
+      [lower, upper, upper],
+      [upper, lower, upper],
+    ]) {
+      expect(sortCollectionRecords(records).map((record) => record.id)).toEqual(['A', 'A', 'a']);
+    }
+  });
+
   it('sorts normalized names and resolves case-only ties by document type then id', () => {
     const records: CollectionRecord[] = [
       { id: 'z', name: 'A', documentType: 'Item' },

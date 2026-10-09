@@ -6,19 +6,22 @@ export const resourceDefinitions = [
   {
     uri: 'foundry://actors',
     name: 'All Actors',
-    description: 'List of all actors in the current world',
+    description:
+      'First bounded page of world actors; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://items',
     name: 'All Items',
-    description: 'List of all items in the current world',
+    description:
+      'First bounded page of world items; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://scenes',
     name: 'All Scenes',
-    description: 'List of all scenes in the current world',
+    description:
+      'First bounded page of world scenes; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
@@ -30,13 +33,15 @@ export const resourceDefinitions = [
   {
     uri: 'foundry://journals',
     name: 'All Journals',
-    description: 'List of all journal entries in the current world',
+    description:
+      'First bounded page of world journals; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://users',
     name: 'Users',
-    description: 'List of users and their online status',
+    description:
+      'First bounded page of user metadata; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
@@ -61,4 +66,14 @@ export const resourceDefinitions = [
 
 export function getAllResources() {
   return resourceDefinitions;
+}
+
+export function getAllResourceTemplates() {
+  return ['actors', 'items', 'scenes', 'journals', 'users'].map((collection) => ({
+    uriTemplate: `foundry://${collection}{?limit,cursor}`,
+    name: `${collection} pages`,
+    description:
+      'Version 2 snapshot pages with stable IDs, total, returnedCount, complete, nextCursor and nextUri. Limit 1–100; cursors expire after five minutes. Socket requires a GM; REST supports actors/items only.',
+    mimeType: 'application/json',
+  }));
 }

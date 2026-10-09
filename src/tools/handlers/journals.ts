@@ -4,43 +4,39 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import {
+  boundedReadResponse,
+  collectionSearchSchema,
+  paginationText,
+  parseReadInput,
+  worldSearchInputSchema,
+} from '../../foundry/read-contract.js';
 import { withToolError } from './utils.js';
 
 export async function handleSearchJournals(
-  args: { query: string; limit?: number },
+  args: { query?: string; limit?: number; cursor?: string },
   foundryClient: FoundryClient,
 ) {
+  const params = parseReadInput(worldSearchInputSchema, args);
   return withToolError('search journals', async () => {
-    const results = foundryClient.searchJournals(args.query);
-    const limit = args.limit || 10;
-    const limited = results.slice(0, limit);
-
-    if (limited.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `No journals found matching "${args.query}".`,
-          },
-        ],
-      };
-    }
-
-    const formatted = limited
-      .map((j) => {
-        const pageCount = j.pages?.length || 0;
-        return `- **${j.name}** (${pageCount} page${pageCount !== 1 ? 's' : ''}) — ID: ${j._id}`;
-      })
+    const page = await foundryClient.searchJournalsPage(params);
+    const structuredContent = collectionSearchSchema.parse({
+      schemaVersion: 2,
+      scope: 'journals',
+      ...page,
+    });
+    const formatted = structuredContent.records
+      .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
       .join('\n');
-
-    return {
+    return boundedReadResponse({
+      structuredContent,
       content: [
         {
-          type: 'text',
-          text: `**Journal Search** — "${args.query}" (${results.length} results)\n\n${formatted}`,
+          type: 'text' as const,
+          text: `**Journal Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
         },
       ],
-    };
+    });
   });
 }
 

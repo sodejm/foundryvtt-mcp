@@ -247,10 +247,10 @@ export async function routeToolRequest(
 
     // Journal tools
     case 'search_journals':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleSearchJournals(args as { query: string; limit?: number }, foundryClient);
+      return handleSearchJournals(
+        args as { query?: string; limit?: number; cursor?: string },
+        foundryClient,
+      );
     case 'get_journal':
       if (!('journalId' in args) || typeof args.journalId !== 'string') {
         throw new Error('Missing required parameter: journalId');
@@ -278,10 +278,10 @@ export async function routeToolRequest(
 
     // World tools
     case 'search_world':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleSearchWorld(args as { query: string; limit?: number }, foundryClient);
+      return handleSearchWorld(
+        args as { query?: string; limit?: number; cursor?: string },
+        foundryClient,
+      );
     case 'get_world_summary':
       return handleGetWorldSummary(args, foundryClient);
     case 'refresh_world_data':

@@ -2092,8 +2092,8 @@ function compareFoundryRecords(
   if (leftName > rightName) {
     return 1;
   }
-  const leftId = left._id.normalize('NFKC').toLowerCase();
-  const rightId = right._id.normalize('NFKC').toLowerCase();
+  const leftId = left._id;
+  const rightId = right._id;
   return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }
 

@@ -25,6 +25,7 @@ import {
   type CallToolResult,
   ErrorCode,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   McpError,
   ReadResourceRequestSchema,
@@ -34,6 +35,7 @@ import { DiagnosticsClient } from './diagnostics/client.js';
 import { FoundryClient, type FoundryClientConfig } from './foundry/client.js';
 import {
   getAllResources,
+  getAllResourceTemplates,
   getAllTools,
   routeResourceRequest,
   routeToolRequest,
@@ -121,6 +123,10 @@ class FoundryMCPServer {
         resources: getAllResources(),
       };
     });
+
+    this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+      resourceTemplates: getAllResourceTemplates(),
+    }));
 
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {

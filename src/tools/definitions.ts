@@ -7,9 +7,13 @@
 
 import {
   actorDetailsOutputSchema,
+  actorSearchInputJsonSchema,
   actorSearchOutputSchema,
+  collectionSearchOutputSchema,
   itemDetailsOutputSchema,
+  itemSearchInputJsonSchema,
   itemSearchOutputSchema,
+  worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
 
 /**
@@ -72,25 +76,8 @@ export const actorTools = [
     name: 'search_actors',
     outputSchema: actorSearchOutputSchema,
     description:
-      'Search world actors by name, optionally filtered by type. Returns version 1 structuredContent with stable id, documentType, name and available mapped stats, plus a readable summary with each ID. Duplicate names remain distinct; pass the chosen id to get_actor_details. Missing stats are omitted and displayed as Unknown; zero is preserved. UUIDs appear only for a verified world source. Uses the existing backend/cache view and does not list embedded items.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for actor names',
-        },
-        type: {
-          type: 'string',
-          description: 'Actor type filter (character, npc, etc.)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results to return',
-          default: 10,
-        },
-      },
-    },
+      'Search world actors by name and type. Returns version 2 structuredContent with stable IDs, mapped stats and bounded snapshot pagination. Follow nextCursor with the same query/type/limit until complete. Default limit 10; maximum 100. Snapshots expire after five minutes; start a new search after expiry. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_actor_details. Missing stats are omitted; zero is preserved.',
+    inputSchema: actorSearchInputJsonSchema,
   },
   {
     name: 'get_actor_details',
@@ -153,30 +140,8 @@ export const itemTools = [
     name: 'search_items',
     outputSchema: itemSearchOutputSchema,
     description:
-      'Search world items by name, optionally filtered by type. Returns version 1 structuredContent with stable id, documentType, name and available mapped fields, plus a readable summary with IDs, rarity and price. Pass the chosen id to get_item_details to distinguish same-name items. Missing values are omitted and displayed as Unknown; zero, false and empty strings are preserved. Rarity filtering is applied only in REST API mode; Socket.IO behavior is unchanged. Excludes actor-owned and compendium items.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for item names',
-        },
-        type: {
-          type: 'string',
-          description: 'Item type filter (weapon, armor, consumable, etc.)',
-        },
-        rarity: {
-          type: 'string',
-          description:
-            'Item rarity filter (common, uncommon, rare, etc.). Applied only in REST API mode (FOUNDRY_API_KEY); ignored on the default Socket.IO path.',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results to return',
-          default: 10,
-        },
-      },
-    },
+      'Search world items by name, type and rarity. Returns version 2 structuredContent with stable IDs, mapped fields and bounded snapshot pagination. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
+    inputSchema: itemSearchInputJsonSchema,
   },
   {
     name: 'get_item_details',
@@ -744,23 +709,10 @@ export const userTools = [
 export const journalTools = [
   {
     name: 'search_journals',
+    outputSchema: collectionSearchOutputSchema,
     description:
-      'Search journal entries by name and page content. Use when: looking for notes, lore, or handouts by keyword. Do not use when: you already have the journalId - use get_journal.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for journal names and content',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results',
-          default: 10,
-        },
-      },
-      required: ['query'],
-    },
+      'Search journal names and page content. Returns version 2 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page text.',
+    inputSchema: worldSearchInputJsonSchema,
   },
   {
     name: 'get_journal',
@@ -836,23 +788,10 @@ export const journalMutationTools = [
 export const worldTools = [
   {
     name: 'search_world',
+    outputSchema: collectionSearchOutputSchema,
     description:
-      'Search across all collections (actors, items, scenes, journals) by name, grouped by collection. Use when: you do not know which collection holds what you are looking for. Do not use when: you already know the collection - use search_actors, search_items, or search_journals. These collection-specific searches return document IDs for detail lookup; actor/item searches also return versioned structuredContent.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query to match against entity names',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum results per collection (default 5)',
-          default: 5,
-        },
-      },
-      required: ['query'],
-    },
+      'Search actor, item, scene and journal names in one ordered stream. Returns version 2 metadata records with stable IDs and bounded snapshot pagination. Omit query to enumerate; limit applies to the whole page. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported.',
+    inputSchema: worldSearchInputJsonSchema,
   },
   {
     name: 'get_world_summary',

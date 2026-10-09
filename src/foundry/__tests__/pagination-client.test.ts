@@ -78,6 +78,32 @@ beforeEach(() => {
 });
 
 describe('socket snapshot pagination', () => {
+  it('orders duplicate names by case-sensitive opaque actor and item IDs', async () => {
+    const { client, world } = socketClient();
+    const upper = 'AAAAAAAAAAAAAAAA';
+    const lower = 'aAAAAAAAAAAAAAAA';
+    for (const collection of [world.actors, world.items]) {
+      const record = collection[0];
+      if (!record) {
+        throw new Error('Expected a seeded collection record');
+      }
+      collection.splice(
+        0,
+        collection.length,
+        { ...record, _id: lower, name: 'Twin' },
+        { ...record, _id: upper, name: 'Twin' },
+      );
+    }
+    expect((await client.searchActors({})).actors.map((record) => record._id)).toEqual([
+      upper,
+      lower,
+    ]);
+    expect((await client.searchItems({})).items.map((record) => record._id)).toEqual([
+      upper,
+      lower,
+    ]);
+  });
+
   it('returns 101 actor IDs exactly once across immutable pages', async () => {
     const { client, world } = socketClient();
     const ids: string[] = [];
