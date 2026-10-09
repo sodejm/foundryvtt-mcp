@@ -29,6 +29,9 @@ jobs:
         FOUNDRY_URL: http://localhost:30000
         LOG_LEVEL: error
 
+    - name: Built CLI MCP workflow
+      run: bun run test:workflow
+
     - name: Startup smoke test
       run: bun run smoke
 
