@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance } from 'axios';
+import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
 import type { Capability, CapabilityStatus } from './capabilities.js';
 import type { CompendiumSearchParams } from './client.js';
 import type { CompendiumSearchEntry } from './types.js';
@@ -6,7 +6,7 @@ import type { CompendiumSearchEntry } from './types.js';
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const SEARCH_RESULT_LIMIT = 500;
-const GET_CONCURRENCY = 8;
+const relayRequestQueues = new Map<string, Promise<void>>();
 
 export interface CompendiumRestAdapterOptions {
   baseUrl?: string | undefined;
@@ -75,14 +75,12 @@ export class CompendiumRestAdapter {
     }
 
     try {
-      const response = await this.http.get<unknown>('/search', {
-        params: {
-          clientId: this.config.clientId,
-          query: '',
-          filter: 'resultType:CompendiumEntity',
-          limit: 1,
-          minified: false,
-        },
+      const response = await this.get('/search', {
+        clientId: this.config.clientId,
+        query: '',
+        filter: 'resultType:CompendiumEntity',
+        limit: 1,
+        minified: false,
       });
       if (!isSearchEnvelope(response.data) || response.data.results.length > 1) {
         return incompatible('The Foundry REST relay returned an incompatible search response.');
@@ -137,14 +135,12 @@ export class CompendiumRestAdapter {
 
     let rows: SearchRow[];
     try {
-      const response = await this.http.get<unknown>('/search', {
-        params: {
-          clientId: this.config.clientId,
-          query: params.query ?? '',
-          filter: filters.join(','),
-          limit: SEARCH_RESULT_LIMIT,
-          minified: false,
-        },
+      const response = await this.get('/search', {
+        clientId: this.config.clientId,
+        query: params.query ?? '',
+        filter: filters.join(','),
+        limit: SEARCH_RESULT_LIMIT,
+        minified: false,
       });
       if (!isSearchEnvelope(response.data)) {
         return {
@@ -194,23 +190,32 @@ export class CompendiumRestAdapter {
       }
     }
 
-    const hydrated = await mapWithConcurrency(uniqueRows, GET_CONCURRENCY, (row) =>
-      this.hydrate(row),
-    );
-    for (const result of hydrated) {
+    const entries: CompendiumSearchEntry[] = [];
+    for (const row of uniqueRows) {
+      const result = await this.hydrate(row);
       if (result.capability !== undefined) {
         return { capability: result.capability };
       }
+      if (result.entry !== undefined && matchesLocalFilters(result.entry, params)) {
+        entries.push(result.entry);
+      }
     }
-
-    const entries = hydrated
-      .map((result) => result.entry)
-      .filter((entry): entry is CompendiumSearchEntry => entry !== undefined)
-      .filter((entry) => matchesLocalFilters(entry, params));
     return {
       capability: capability('available', 'Compendium search was verified.', null),
       entries,
     };
+  }
+
+  private async get(
+    path: string,
+    params: Record<string, string | number | boolean>,
+  ): Promise<AxiosResponse<unknown>> {
+    const config = this.config;
+    const http = this.http;
+    if (config === null || http === null) {
+      throw new Error('Compendium REST transport is not configured.');
+    }
+    return serializeRelayRequest(config.baseUrl, () => http.get<unknown>(path, { params }));
   }
 
   private async hydrate(row: SearchRow): Promise<HydrationResult> {
@@ -225,8 +230,9 @@ export class CompendiumRestAdapter {
     }
 
     try {
-      const response = await this.http.get<unknown>('/get', {
-        params: { clientId: this.config.clientId, uuid: row.uuid },
+      const response = await this.get('/get', {
+        clientId: this.config.clientId,
+        uuid: row.uuid,
       });
       const data = parseEntityEnvelope(response.data, row);
       if (data === null) {
@@ -336,6 +342,13 @@ function classifyFailure(error: unknown): Capability {
       'Verify the API key and its search and entity-read scopes.',
     );
   }
+  if (status === 429) {
+    return capability(
+      'unavailable',
+      'The Foundry REST relay rate limit was reached.',
+      'Wait for the relay request quota to reset, then retry.',
+    );
+  }
   if (status === 404 || status === 502 || status === 503) {
     return capability(
       'unavailable',
@@ -343,7 +356,12 @@ function classifyFailure(error: unknown): Capability {
       'Connect the configured Foundry client and verify that the REST module is enabled.',
     );
   }
-  if (status === 408 || status === 504) {
+  if (
+    status === 408 ||
+    status === 504 ||
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT'
+  ) {
     return capability(
       'unreachable',
       'The Foundry REST relay timed out.',
@@ -490,25 +508,28 @@ function matchesLocalFilters(
   return true;
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  async function worker(): Promise<void> {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const value = values[index];
-      if (value !== undefined) {
-        results[index] = await mapper(value);
-      }
+async function serializeRelayRequest<T>(baseUrl: string, request: () => Promise<T>): Promise<T> {
+  const origin = new URL(baseUrl).origin;
+  const prior = relayRequestQueues.get(origin) ?? Promise.resolve();
+  const result = prior.then(async () => {
+    try {
+      return await request();
+    } finally {
+      // Relay 3.4.1 uses type + millisecond HTTP request IDs. Avoid collisions
+      // across adapters on the same relay, including immediately completed calls.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    }
+  });
+  const settled = result.then(
+    () => {},
+    () => {},
+  );
+  relayRequestQueues.set(origin, settled);
+  try {
+    return await result;
+  } finally {
+    if (relayRequestQueues.get(origin) === settled) {
+      relayRequestQueues.delete(origin);
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => worker()),
-  );
-  return results;
 }

@@ -136,6 +136,7 @@ describe('CompendiumRestAdapter', () => {
     [401, 'unauthorized'],
     [403, 'unauthorized'],
     [404, 'unavailable'],
+    [429, 'unavailable'],
     [503, 'unavailable'],
     [408, 'unreachable'],
     [504, 'unreachable'],
@@ -153,6 +154,19 @@ describe('CompendiumRestAdapter', () => {
     expect(JSON.stringify(result)).not.toContain(raw);
     expect(JSON.stringify(result)).not.toContain('api-secret');
     expect(result).not.toHaveProperty('entries');
+  });
+
+  it.each([
+    'ECONNABORTED',
+    'ETIMEDOUT',
+  ])('identifies transport timeout %s without leaking details', async (code) => {
+    axiosMocks.get.mockRejectedValue({ ...axiosError(undefined, 'api-secret'), code });
+    const result = await adapter().probe();
+    expect(result).toMatchObject({
+      status: 'unreachable',
+      reason: 'The Foundry REST relay timed out.',
+    });
+    expect(JSON.stringify(result)).not.toContain('api-secret');
   });
 
   it('rejects malformed success and module error envelopes', async () => {
@@ -337,7 +351,7 @@ describe('CompendiumRestAdapter', () => {
     });
   });
 
-  it('bounds entity hydration concurrency', async () => {
+  it('serializes entity hydration to avoid relay HTTP request ID collisions', async () => {
     const rows = Array.from({ length: 20 }, (_, index) => searchRow(index));
     let active = 0;
     let peak = 0;
@@ -359,7 +373,52 @@ describe('CompendiumRestAdapter', () => {
     const result = await adapter().search({});
     expect(result.capability.status).toBe('available');
     expect(result.entries).toHaveLength(20);
-    expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThanOrEqual(8);
+    expect(peak).toBe(1);
+  });
+
+  it('serializes concurrent probes and searches across adapters at the same relay origin', async () => {
+    const row = searchRow(1);
+    let active = 0;
+    let peak = 0;
+    axiosMocks.get.mockImplementation(async (path: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return path === '/search' ? searchEnvelope([row]) : entityEnvelope(row);
+    });
+    const subject = adapter();
+    const other = adapter({ baseUrl: 'https://relay.example.test/other', clientId: 'world-2' });
+    const [probe, search, otherProbe] = await Promise.all([
+      subject.probe(),
+      subject.search({}),
+      other.probe(),
+    ]);
+    expect(probe.status).toBe('available');
+    expect(search.entries).toHaveLength(1);
+    expect(otherProbe.status).toBe('available');
+    expect(peak).toBe(1);
+  });
+
+  it('continues queued requests after a rejected request', async () => {
+    const row = searchRow(1);
+    axiosMocks.get
+      .mockRejectedValueOnce(axiosError(403))
+      .mockResolvedValueOnce(searchEnvelope([row]))
+      .mockResolvedValueOnce(entityEnvelope(row));
+    const subject = adapter();
+    const [failed, recovered] = await Promise.all([subject.probe(), subject.probe()]);
+    expect(failed.status).toBe('unauthorized');
+    expect(recovered.status).toBe('available');
+  });
+
+  it('stops hydration after authorization fails instead of continuing remaining reads', async () => {
+    axiosMocks.get
+      .mockResolvedValueOnce(searchEnvelope([searchRow(1), searchRow(2), searchRow(3)]))
+      .mockRejectedValueOnce(axiosError(403));
+    const result = await adapter().search({});
+    expect(result.capability.status).toBe('unauthorized');
+    expect(result).not.toHaveProperty('entries');
+    expect(axiosMocks.get).toHaveBeenCalledTimes(2);
   });
 });

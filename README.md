@@ -10,11 +10,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 - **Dice Rolling** — standard RPG notation with any formula
 - **Data Querying** — search and inspect actors, items, scenes, journals
 - **Game State** — combat tracking, chat messages, user presence
-- **Content Generation** — NPCs, loot tables, rule lookups
+- **Optional Capabilities** — verified compendium search with typed availability states
 - **World Search** — full-text search across all game entities
 - **Live Connection** — Socket.IO loads complete world state on connect
 - **MCP Resources** — `foundry://` URIs for direct data access
-- **Diagnostics** — optional server health monitoring (requires REST API module)
+- **World Health** — snapshot freshness and connection health; optional Foundry diagnostics remain unavailable
 
 ## Quick Start
 
@@ -119,7 +119,10 @@ To configure manually, see the [Configuration Guide](docs/guides/configuration.m
 | `FOUNDRY_USERNAME` | Yes | FoundryVTT user account |
 | `FOUNDRY_PASSWORD` | Yes | FoundryVTT user password |
 | `FOUNDRY_USER_ID` | No | Bypass username-to-ID resolution |
-| `FOUNDRY_API_KEY` | No | REST API module key (enables diagnostics tools) |
+| `FOUNDRY_API_KEY` | No | Legacy core REST key; does not establish verified optional support |
+| `FOUNDRY_REST_URL` | No | Separate Foundry REST API relay URL |
+| `FOUNDRY_REST_CLIENT_ID` | No | Paired module client ID |
+| `FOUNDRY_REST_API_KEY` | No | Relay key with search and entity-read permissions |
 | `FOUNDRY_AUTHORIZATION_MODE` | No | `service-identity` (default) or `delegated`; delegated reads require an authenticated host resolver |
 | `FOUNDRY_WRITE_ENABLED` | No | Enable game-state mutations — `true` required for the write tools (default: `false`) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, or `error` (default: `info`) |
@@ -312,20 +315,34 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
   `FOUNDRY_API_KEY` is set, the local roller rejects them otherwise
 - `lookup_rule` — **stub**: returns a templated placeholder, consults no rules source
 
+### Optional Foundry Capabilities
+
+- `get_capabilities` — actively verify compendium support and report versioned
+  `available`, `unavailable`, `unauthorized`, `unreachable` or `incompatible` states
+- `search_compendium` — authenticated compendium search with filters, immutable
+  pagination and matching text/structured results; unavailable searches return
+  null results and total, while a verified search with no matches returns `[]`
+
+Configure all three `FOUNDRY_REST_*` values and pair the module with its relay.
+See the [optional capability guide](docs/guides/optional-capabilities.md) for
+supported versions, permissions, bounds and live validation. These tools remain
+disabled in delegated mode.
+
 ### Content Generation
 
-- `generate_npc` — generate NPC text (not written to the world)
-- `generate_loot` — generate treasure text for a level (not written to the world)
+- `generate_npc` — template text; no verified Foundry-backed generation
+- `generate_loot` — template text; no verified Foundry-backed generation
 
-### Diagnostics (requires REST API module)
+`get_capabilities` reports generation and rules lookup as unavailable.
 
-- `get_recent_logs` — retrieve filtered FoundryVTT logs
-- `search_logs` — search logs by pattern, listing the matching entries
-- `get_system_health` — server health status with versions, user/module counts, memory
-  and log error counts (no CPU or disk metrics)
-- `diagnose_errors` — **stub**: returns a fixed "no errors detected" summary
-- `get_health_status` — comprehensive health diagnostics; flags the world snapshot when
-  the cache has stopped following live changes
+### Diagnostics
+
+- `get_health_status` — connection and world snapshot health, including stale cache state
+- `get_recent_logs`, `search_logs`, `get_system_health`, `diagnose_errors` — legacy
+  utilities without a verified Foundry diagnostics adapter; registration or a
+  configured key does not prove access to Foundry server logs or metrics
+
+`get_capabilities` reports optional Foundry diagnostics as unavailable.
 
 ## Available Resources
 
@@ -338,7 +355,7 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 - `foundry://combat` — active combat state; `combatants` are in initiative order, so
   `combat.turn` indexes them directly
 - `foundry://world/settings` — world and campaign settings
-- `foundry://system/diagnostics` — system diagnostics (requires REST API module)
+- `foundry://system/diagnostics` — legacy utility output; does not establish verified Foundry diagnostics
 
 The five collection resources return version 3 envelopes with `records`, the
 same snapshot metadata as searches, and `nextUri` (null on the last page).

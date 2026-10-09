@@ -1751,7 +1751,7 @@ export class FoundryClient {
       sessionId: this.readSessionId,
       snapshotId: null,
       revision: 0,
-      capturedAt: now,
+      capturedAt: null,
       observedAt: now,
       respondedAt: now,
     };

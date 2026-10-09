@@ -20,13 +20,19 @@ Add to your Claude Desktop MCP settings:
 }
 ```
 
-To enable optional diagnostics tools, add `FOUNDRY_API_KEY` to the `env` block:
+For optional compendium search, add the paired relay configuration to the `env` block:
 
 ```json
 {
-  "FOUNDRY_API_KEY": "your_api_key_here"
+  "FOUNDRY_REST_URL": "http://127.0.0.1:3010",
+  "FOUNDRY_REST_CLIENT_ID": "your_relay_client_id",
+  "FOUNDRY_REST_API_KEY": "your_scoped_relay_key"
 }
 ```
+
+Call `get_capabilities` before relying on optional support. See the
+[optional capability guide](optional-capabilities.md) for module setup, key scopes
+and unavailable results.
 
 ## Custom MCP Client
 
@@ -274,3 +280,11 @@ revocation, forged identities, denied reads/writes, reconnects and membership
 loss. It fails on missing prerequisites and cleans up its owned fixtures.
 The built MCP resolver workflow also covers absent/throwing host resolvers,
 concurrent callers and generic error redaction without trusting request metadata.
+
+`tests/integration/compendium.integration.test.ts` additionally requires a paired
+local REST relay, the enabled REST module, an active GM browser controller and
+disposable scoped keys. Its 13 cases exercise verified capability reports, wrong
+and insufficient-scope keys, socket-only and plain Foundry configurations, actual
+empty searches, filters, 1/100/101/251-entry traversals, authorization revocation,
+module removal and recovery. Missing prerequisites fail instead of skipping. See
+[optional capability configuration and test prerequisites](optional-capabilities.md).

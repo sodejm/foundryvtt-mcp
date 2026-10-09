@@ -399,6 +399,9 @@ describe('verified compendium client boundary', () => {
     if (!page.restAvailable) {
       throw new Error('Expected success');
     }
+    expect(page.readMetadata).toMatchObject({ source: 'rest', capturedAt: null, snapshotId: null });
+    const observedAt = page.readMetadata.observedAt;
+    expect(observedAt).toEqual(expect.any(String));
     fixture[100].name = 'Mutated after snapshot';
     const names: string[] = [];
     const ids: string[] = [];
@@ -412,6 +415,8 @@ describe('verified compendium client boundary', () => {
       if (!next.restAvailable) {
         throw new Error('Expected success');
       }
+      expect(next.readMetadata.observedAt).toBe(observedAt);
+      expect(next.readMetadata.capturedAt).toBeNull();
       page = next;
     }
     expect(ids).toHaveLength(251);

@@ -311,7 +311,7 @@ describe('live delegated caller permissions', () => {
     expect(JSON.stringify(await mcp!.callTool({ name: 'search_actors', arguments: { query: prefix }, _meta: { userId: gm, role: 4 } }))).not.toContain(`${prefix} Secret`);
     for (const principal of ['a', 'gm']) {
       token = principal;
-      for (const name of ['get_scene_info', 'get_token_details', 'get_combat_state', 'search_compendium', 'get_rules', 'get_system_diagnostics', 'create_actor', 'add_item_to_actor', 'refresh_world_data']) {
+      for (const name of ['get_scene_info', 'get_token_details', 'get_combat_state', 'search_compendium', 'get_capabilities', 'get_rules', 'get_system_diagnostics', 'create_actor', 'add_item_to_actor', 'refresh_world_data']) {
         await expect(call(name, { sceneId })).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
       }
       await expect(resource('foundry://world/settings')).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });

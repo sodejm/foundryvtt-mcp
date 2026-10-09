@@ -21,7 +21,10 @@ cp .env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FOUNDRY_USER_ID` | — | 16-char document `_id` (bypasses username resolution) |
-| `FOUNDRY_API_KEY` | — | REST API module key (enables 5 diagnostics tools) |
+| `FOUNDRY_API_KEY` | — | Legacy core REST key; does not verify optional diagnostics |
+| `FOUNDRY_REST_URL` | — | Separate paired Foundry REST API relay URL |
+| `FOUNDRY_REST_CLIENT_ID` | — | Module client ID registered with that relay |
+| `FOUNDRY_REST_API_KEY` | — | Relay key permitting search and entity reads |
 | `FOUNDRY_AUTHORIZATION_MODE` | `service-identity` | Backend-account access, or `delegated` with a trusted host caller resolver |
 | `LOG_LEVEL` | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 | `NODE_ENV` | `development` | Environment mode |
@@ -112,7 +115,7 @@ surfaces need their own complete visibility/write contracts before enabling them
 
 ## FoundryVTT Authentication
 
-The MCP server connects to FoundryVTT via Socket.IO using a standard user account. No custom modules are required for full game data access.
+The MCP server connects to FoundryVTT via Socket.IO using a standard user account. Core world reads require no custom module. Optional compendium reads use a separate authenticated module and relay.
 
 ### Setup
 
@@ -137,14 +140,22 @@ Your FoundryVTT user needs:
 - Access compendium data
 - Use dice rolling API
 
-### Optional: Diagnostics Tools
+### Optional: Verified Compendium Search
 
-Installing the **Foundry Local REST API** module adds 5 server monitoring tools (`get_recent_logs`, `search_logs`, `get_system_health`, `diagnose_errors`, `get_health_status`):
+Configure the separate relay alongside the existing Socket.IO connection:
 
-1. In FoundryVTT: **Setup** > **Add-on Modules** > **Install Module**
-2. Paste: `https://github.com/laurigates/foundryvtt-mcp/releases/latest/download/module.json`
-3. Enable the module in your world and copy the generated API key
-4. Add to `.env`:
-   ```env
-   FOUNDRY_API_KEY=your_api_key_here
-   ```
+```env
+FOUNDRY_REST_URL=http://127.0.0.1:3010
+FOUNDRY_REST_CLIENT_ID=your_relay_client_id
+FOUNDRY_REST_API_KEY=your_scoped_relay_key
+```
+
+The module must be enabled in the active world, paired with that relay, and
+connected through an active GM browser. The relay key needs search and entity-read
+permissions. Call `get_capabilities` to verify actual authenticated search and
+entity responses. A configured key or public status response cannot prove support.
+See [optional capabilities](optional-capabilities.md) for tested versions and limits.
+
+The legacy `FOUNDRY_API_KEY` setting does not enable verified Foundry diagnostics.
+Rules lookup, Foundry-backed generation and optional diagnostics are reported as
+unavailable until compatible adapters are implemented and verified.
