@@ -3,6 +3,7 @@ import { expect } from 'vitest';
 export const validDiceCases = [
   '1d20+5', 'd6', 'D6', '2D6KH1', '2d6-3', '4d6kh3', '4d6kl2', '4d6dh1', '4d6dl1',
   '2d6kh', '2d6kl', '2d6dh', '2d6dl', '0d6', '0d6kh', '2d1kh1',
+  '1d6dh', '1d6dh1', '1d6dl', '1d6dl1', '2d6dh2', '2d6dl2', '4d6dh4', '4d6dl4',
   '(2d6 + 3) - (1d4 - 2)', '-(2d6kh1 + 3) + (1d4 - 2)',
   '+1d6', '1d6 - -2', '((7 - 3) + 2)', '999d1', '500d1+500d1', '1d1000000',
   '1000000000', `${'('.repeat(10)}1${')'.repeat(10)}`,

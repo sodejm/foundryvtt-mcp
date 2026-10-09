@@ -24,6 +24,8 @@ The input is a strict object with `formula`, optional `reason` and optional
 Only one of `kh`, `kl`, `dh` or `dl` may follow a dice term. Explicit modifier
 counts must be positive and cannot exceed a positive dice count. `0d6kh` remains
 an empty roll. Dice and modifier letters are case-insensitive (`D6`, `2D6KH1`).
+When a drop count equals the dice count, all results remain active, matching
+Foundry 14.369 (`1d6dh`, `2d6dl2`).
 Short aliases such as `k` and `d`, chained modifiers, rerolls,
 explosions, pools, fractions, variables and JavaScript are not accepted.
 
