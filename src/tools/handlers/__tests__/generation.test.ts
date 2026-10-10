@@ -1,143 +1,110 @@
-/**
- * @fileoverview Unit tests for content generation handlers
- *
- * Covers handleGenerateNPC, handleGenerateLoot, and handleLookupRule.
- * Math.random is stubbed for determinism.
- */
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { handleGenerateLoot, handleGenerateNPC } from '../generation.js';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FoundryClient } from '../../../foundry/client.js';
-import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from '../generation.js';
-
-// The handlers do not call any FoundryClient methods, so an empty stub suffices.
-const stubClient = {} as unknown as FoundryClient;
-
-function getText(result: { content: Array<{ type: string; text: string }> }): string {
-  return result.content[0]?.text ?? '';
+function parsedText(result: Awaited<ReturnType<typeof handleGenerateNPC>>) {
+  const content = result.content[0];
+  if (content?.type !== 'text') {
+    throw new Error('Expected one text content item.');
+  }
+  return JSON.parse(content.text);
 }
 
-describe('handleGenerateNPC', () => {
-  beforeEach(() => {
-    // Math.random returns 0.5 → middle-of-array picks, deterministic ability scores
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-  });
+describe('creative generation handlers', () => {
+  afterEach(() => vi.restoreAllMocks());
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  it('creates a deterministic NPC preview with explicit defaults and matching text', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const first = await handleGenerateNPC({});
+    const second = await handleGenerateNPC({}, () => 0);
 
-  describe('happy path', () => {
-    it('returns a formatted NPC with default level when no args given', async () => {
-      const result = await handleGenerateNPC({}, stubClient);
-      const text = getText(result);
-
-      expect(text).toContain('Generated NPC');
-      expect(text).toContain('**Level:** 1');
-      expect(text).toContain('**Name:**');
-      expect(text).toContain('**Race:**');
-      expect(text).toContain('**Class:**');
-      expect(text).toContain('**Hit Points:**');
-      expect(text).toContain('**STR:**');
-      expect(text).toContain('**DEX:**');
-      expect(text).toContain('**CON:**');
-      expect(text).toContain('**INT:**');
-      expect(text).toContain('**WIS:**');
-      expect(text).toContain('**CHA:**');
-      expect(text).toContain('**Background:**');
+    expect(first.structuredContent).toEqual(second.structuredContent);
+    expect(parsedText(first)).toEqual(first.structuredContent);
+    expect(first.structuredContent).toMatchObject({
+      preview: {
+        mode: 'creative-preview',
+        persisted: false,
+        rulesVerified: false,
+        system: null,
+        systemVersion: null,
+      },
+      npc: {
+        name: 'Aven Ashfield',
+        level: 1,
+        race: 'Riverfolk',
+        class: 'Wayfinder',
+        narrativeScale: 'local',
+      },
+      defaultsApplied: ['level', 'race', 'class'],
     });
   });
 
-  describe('edge cases', () => {
-    it('honors caller-supplied race, class, and level', async () => {
-      const result = await handleGenerateNPC(
-        { level: 5, race: 'Dwarf', class: 'Wizard' },
-        stubClient,
-      );
-      const text = getText(result);
-
-      expect(text).toContain('**Level:** 5');
-      expect(text).toContain('**Race:** Dwarf');
-      expect(text).toContain('**Class:** Wizard');
-    });
-  });
-});
-
-describe('handleGenerateLoot', () => {
-  beforeEach(() => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe('happy path', () => {
-    it('returns formatted loot with default CR=1 and treasureType=individual', async () => {
-      const result = await handleGenerateLoot({}, stubClient);
-      const text = getText(result);
-
-      expect(text).toContain('Generated Loot');
-      expect(text).toContain('**Challenge Rating:** 1');
-      expect(text).toContain('**Treasure Type:** individual');
-      expect(text).toContain('**Currency:**');
-      expect(text).toContain('**Items:**');
-      expect(text).toContain('**Total Estimated Value:**');
-      expect(text).toContain('gp');
+  it.each([
+    [4, 'local'],
+    [5, 'notable'],
+    [11, 'formidable'],
+    [17, 'legendary'],
+  ] as const)('honors every NPC option and maps level %s to %s scale', async (level, scale) => {
+    const result = await handleGenerateNPC(
+      { level, race: 'Sky Weaver', class: 'Memory Keeper' },
+      () => 0.999999,
+    );
+    expect(result.structuredContent).toMatchObject({
+      npc: {
+        level,
+        race: 'Sky Weaver',
+        class: 'Memory Keeper',
+        narrativeScale: scale,
+      },
+      defaultsApplied: [],
     });
   });
 
-  describe('edge cases', () => {
-    it('honors caller-supplied challengeRating and treasureType', async () => {
-      const result = await handleGenerateLoot(
-        { challengeRating: 10, treasureType: 'hoard' },
-        stubClient,
-      );
-      const text = getText(result);
-
-      expect(text).toContain('**Challenge Rating:** 10');
-      expect(text).toContain('**Treasure Type:** hoard');
-    });
-  });
-});
-
-describe('handleLookupRule', () => {
-  describe('happy path', () => {
-    it('returns formatted rule with default system D&D 5e', async () => {
-      const result = await handleLookupRule({ query: 'Grapple' }, stubClient);
-      const text = getText(result);
-
-      expect(text).toContain('Rule Lookup: Grapple');
-      expect(text).toContain('**System:** D&D 5e');
-      expect(text).toContain('**Rule:** Grapple Rule');
-      expect(text).toContain('**Description:**');
-      expect(text).toContain('**Mechanics:**');
-      expect(text).toContain('**Source:** D&D 5e Core Rulebook');
-    });
-
-    it('honors caller-supplied system', async () => {
-      const result = await handleLookupRule(
-        { query: 'Sanity', system: 'Call of Cthulhu' },
-        stubClient,
-      );
-      const text = getText(result);
-
-      expect(text).toContain('**System:** Call of Cthulhu');
-      expect(text).toContain('**Source:** Call of Cthulhu Core Rulebook');
+  it('rejects invalid NPC input on direct handler calls', async () => {
+    await expect(handleGenerateNPC({ level: 0 })).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
     });
   });
 
-  describe('edge cases', () => {
-    it('throws McpError when query is empty string', async () => {
-      await expect(
-        handleLookupRule({ query: '' } as { query: string }, stubClient),
-      ).rejects.toThrow(/Query is required/);
+  it('creates traceable individual loot with explicit defaults and matching text', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = await handleGenerateLoot({});
+    expect(parsedText(result)).toEqual(result.structuredContent);
+    expect(result.structuredContent).toMatchObject({
+      loot: {
+        challengeRating: 1,
+        treasureType: 'individual',
+        denominations: [
+          { code: 'glint', amount: 8, unitValue: 1 },
+          { code: 'crown', amount: 2, unitValue: 10 },
+        ],
+        knownCurrencySubtotal: { amount: 28, unit: 'glints' },
+        overallValue: { status: 'unknown' },
+      },
+      defaultsApplied: ['challengeRating', 'treasureType'],
     });
+  });
 
-    it('throws McpError when query is not a string', async () => {
-      await expect(
-        // Intentionally passing wrong type to exercise runtime guard
-        handleLookupRule({ query: 42 } as unknown as { query: string }, stubClient),
-      ).rejects.toThrow(/Query is required/);
+  it('honors hoard and challenge scale while keeping item and total values unknown', async () => {
+    const result = await handleGenerateLoot(
+      { challengeRating: 2.5, treasureType: 'hoard' },
+      () => 0.5,
+    );
+    const loot = result.structuredContent.loot;
+    expect(loot.challengeRating).toBe(2.5);
+    expect(loot.treasureType).toBe('hoard');
+    expect(loot.items).toHaveLength(3);
+    expect(loot.items.every((item) => item.valuation.status === 'unknown')).toBe(true);
+    expect(loot.knownCurrencySubtotal.amount).toBe(
+      loot.denominations.reduce((sum, entry) => sum + entry.amount * entry.unitValue, 0),
+    );
+    expect(loot.overallValue.status).toBe('unknown');
+    expect(result.structuredContent.defaultsApplied).toEqual([]);
+  });
+
+  it('rejects invalid loot input on direct handler calls', async () => {
+    await expect(handleGenerateLoot({ treasureType: 'cache' })).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
     });
   });
 });

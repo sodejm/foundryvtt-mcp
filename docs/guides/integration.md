@@ -20,13 +20,19 @@ Add to your Claude Desktop MCP settings:
 }
 ```
 
-To enable optional diagnostics tools, add `FOUNDRY_API_KEY` to the `env` block:
+For optional compendium search, add the paired relay configuration to the `env` block:
 
 ```json
 {
-  "FOUNDRY_API_KEY": "your_api_key_here"
+  "FOUNDRY_REST_URL": "http://127.0.0.1:3010",
+  "FOUNDRY_REST_CLIENT_ID": "your_relay_client_id",
+  "FOUNDRY_REST_API_KEY": "your_scoped_relay_key"
 }
 ```
+
+Call `get_capabilities` before relying on optional support. See the
+[optional capability guide](optional-capabilities.md) for module setup, key scopes
+and unavailable results.
 
 ## Custom MCP Client
 
@@ -71,9 +77,13 @@ const result = await client.request({
 ```json
 {
   "formula": "1d20+5",
-  "reason": "Attack roll against goblin"
+  "reason": "Attack roll against goblin",
+  "engine": "auto"
 }
 ```
+
+See the [dice contract](dice.md) for the supported grammar, bounds and actual
+engine provenance returned by `roll_dice`.
 
 ### search_world
 
@@ -104,12 +114,12 @@ const result = await client.request({
 ### Stable actor/item search-to-detail workflow
 
 Actor/item search and detail tools publish an `outputSchema` and retain text
-alongside version 1 `structuredContent`. For example, a search can return two
+alongside version 3 search `structuredContent`. For example, a search can return two
 actors with the same name:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "documentType": "Actor",
   "records": [
     {"id": "Actor00000000001", "documentType": "Actor", "name": "Goblin", "type": "npc", "hp": {"value": 0, "max": 7}},
@@ -117,38 +127,431 @@ actors with the same name:
   ],
   "total": 2,
   "page": 1,
-  "limit": 10
+  "limit": 10,
+  "returnedCount": 2,
+  "nextCursor": null,
+  "complete": true,
+  "snapshotId": "opaque-snapshot-id",
+  "expiresAt": "2026-10-09T03:00:00.000Z",
+  "consistency": "snapshot",
+  "readMetadata": {
+    "source": "socket",
+    "freshness": "current",
+    "worldId": "example-world",
+    "sessionId": "opaque-session-id",
+    "snapshotId": "opaque-source-snapshot-id",
+    "revision": 1,
+    "capturedAt": "2026-10-09T02:55:00.000Z",
+    "observedAt": "2026-10-09T02:55:00.000Z",
+    "respondedAt": "2026-10-09T02:55:01.000Z"
+  }
 }
 ```
 
 Choose the record by `id` and call `get_actor_details` with
 `{"actorId":"Actor00000000002"}`. The detail response has
-`{"schemaVersion":1,"documentType":"Actor","record":{...}}` and verifies that
+`{"schemaVersion":2,"documentType":"Actor","record":{...},"readMetadata":{...}}` and verifies that
 `record.id` equals the requested ID. The item workflow uses `search_items`,
 `documentType: "Item"`, and `get_item_details` with `{"itemId":"..."}`. It
+uses search schema version 4 and detail version 3 with typed `economy`, and
 reads world items only, excluding actor-owned and compendium items. Example IDs
 are placeholders; always use IDs returned by your current search.
 
 Optional fields are omitted when absent. Zero HP or price, false item flags
 and empty descriptions are preserved. Do not substitute truthiness defaults.
 Only the world-cache source establishes UUID scope; ambiguous REST UUIDs are
-omitted. No raw `system` or `data` objects are serialized in this contract.
+omitted. No raw `system` or `data` objects are serialized in this contract. Item economy
+contains only bounded allowlisted candidates in `source`, plus normalized
+price currencies, purchase quantity and rarity values with explicit statuses.
+Legacy aliases are conditional; consumers should read `economy` directly.
+See the [exact version matrix and provenance](../item-economy-fixtures.md).
 
 Detail IDs must be exactly 16 alphanumeric characters. Invalid, empty,
 nonstring or path-like IDs fail with MCP `InvalidParams` (`-32602`) before I/O.
 Missing/removed documents, unavailable world data/backend, malformed responses
 or mismatched returned IDs fail with `InternalError` (`-32603`). An actual empty
 world/search returns `records: []`; an unavailable world snapshot returns an
-error. A retained snapshot may remain readable after transport loss; this
-contract does not guarantee freshness. REST modules must implement
+error. Service-identity reads may retain cached data after transport loss with `freshness: "stale"`; pagination
+cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
-error. This adds no fallback to owned items or
-compendiums and changes no access permissions.
+error. `/api/world` must identify the system/version for normalization; a 404
+yields unsupported economy and rejects rarity filtering. The live REST module
+3.4.1 lacks both item and world endpoints, so these endpoint contracts are
+validated with synthetic REST fixtures. This adds no fallback to owned items
+or compendiums. Socket pagination
+requires a GM session in service-identity mode. Delegated socket reads instead
+require trusted caller context and a fresh permission-filtered view. REST
+pagination uses only the authenticated backend's visible collection.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
-version 1 retains existing mapped system fields without promising a complete
-actor sheet, inventory or cross-system normalization.
+actor detail version 2 retains existing mapped system fields without promising
+a complete actor sheet. Item detail version 3 uses the documented exact-version
+economy adapters; unknown versions remain explicit.
+
+### Traversing bounded searches and resources
+
+All four world searches (`search_actors`, `search_items`, `search_journals`,
+`search_world`) return bounded pages: item search version 4, the other searches
+version 3. Item query, type and canonical rarity filters run locally before
+pagination on both transports; unsupported or invalid rarity filters return
+`InvalidParams`. Start with a query and optional limit,
+then pass `nextCursor` back to the same tool with the same query, filters and
+limit. Stop at `nextCursor: null` / `complete: true`. Search limits default to
+10 and cannot exceed 100. Numeric page input and unknown parameters are rejected
+with `InvalidParams`. Query/cursor strings allow at most 1024 characters and
+type/rarity selectors 128; empty cursors are invalid.
+
+The server sorts by NFKC-normalized, lowercased name, document type and finally
+case-sensitive document ID. Pages share an immutable snapshot with an exact
+`total`, `snapshotId` and five-minute `expiresAt`. In service-identity mode, writes
+during a traversal do not change its records. Delegated reads revalidate the
+authorized view on every continuation and invalidate the cursor when it changes.
+Start without a cursor to read the latest view.
+Corrupt, expired, evicted or context-mismatched cursors fail; start a new
+traversal after reconnecting or changing worlds, callers, queries or filters.
+The server retains at most 32 snapshots per client within an aggregate 8 MiB
+cache budget. Each snapshot is capped at 10,000 records and 8 MiB. It never
+silently truncates an oversized snapshot.
+
+Collection resources (`foundry://actors`, `items`, `scenes`, `journals`, `users`)
+now return `{schemaVersion: 3, collection, records, ...pagination, nextUri}`.
+Start at, for example, `foundry://actors?limit=25` and follow `nextUri` until null.
+The five `resources/templates/list` entries advertise `{?limit,cursor}`.
+Delegated discovery includes only actors, items, journals and users, with four
+templates; other resources are denied even if requested directly.
+Resource limits default to 100, with the same maximum of 100. Old consumers
+must switch from unbounded arrays to `records` and continuation links. Singleton
+resources, such as `foundry://scenes/current`, retain existing fields and add
+`readMetadata`.
+Journal/world searches and non-actor/item resources contain metadata and stable
+IDs rather than full document bodies.
+
+The final MCP response, including text and JSON, cannot exceed 128 KiB. If a
+page is too large, reduce the limit; no partial page is returned. REST actor/item
+adapters fetch every backend page and reject repeated/non-progressing pages or
+inconsistent totals. REST journal/world searches and scene/journal/user pages
+remain unsupported and fail explicitly.
+
+### Bounded actor sheets and owned items
+
+`get_actor_sheet` and `get_actor_section` return schema version 1;
+`list_actor_items` and `get_actor_item` return version 2 with typed item economy
+shared with world items. All advertise output schemas and matching JSON in
+`content[0].text` and `structuredContent`. Import the corresponding
+`actorSheetOutputSchema`, `actorSectionOutputSchema`, `actorItemListOutputSchema`
+and `actorItemOutputSchema` from `foundry/actor-sheet-contract`.
+The existing version 2 `get_actor_details` summary remains compatible.
+
+`get_actor_sheet` takes `actorId` and returns actor identity, `system` ID/version
+and profile, visible `itemCount`, and descriptors for seven sections:
+`attributes`, `abilities`, `skills`, `details`, `currency`, `resources` and
+`system`. Each descriptor reports `supported` and `fieldCount`.
+`get_actor_section` takes that actor ID and a section name. A field has `key`,
+`label`, `source: "normalized" | "system-path"`, optional source `path`,
+`present`, optional scalar `value` and optional `truncated`. Missing values have
+`present: false` with no invented default; zero, false, null and empty text can
+be real values. Unsupported sections explicitly return `supported: false` and
+an empty field list.
+
+DND5e profiles map HP/AC, abilities, skills, details, currency and resources;
+PF2e profiles map their distinct paths for modifiers, ancestry/class details,
+hero points and conditions. Both expose six normalized sections and leave the
+generic `system` section unsupported. Synthetic unit/workflow fixtures carry
+DND5e 6.0.6 and PF2e 6.2.0 version metadata and exercise different level paths
+(`details.level` and `details.level.value`). Live validation uses DND5e 6.0.6;
+PF2e has not been validated against a running system. The synthetic fixtures
+establish field mappings and version propagation, not release compatibility.
+For unknown systems, service-identity mode provides only a
+bounded primitive system-path section and bounded owned-item identity.
+Delegated unknown-system reads are rejected.
+
+Sections and item details contain at most 64 fields. A text field allows at
+most 4,096 UTF-16 code units and all field text shares an 8,192-unit budget.
+Names are clipped to 512 units. Clipping preserves Unicode surrogate pairs;
+field truncation is explicit. Generic traversal visits at most 256 nodes at
+depth four and omits arrays, nested document bodies and sensitive paths such
+as credentials, ownership, flags and tokens. Delegated known-system reads
+check actor/embedded-document permissions first and omit rich descriptions
+and biographies because those fields lack a verified field-visibility contract.
+All combined MCP responses retain the 128 KiB limit.
+
+`list_actor_items` takes `actorId`, optional `query`, `type`, `limit` and
+`cursor`. Limits default to 10 and allow 1–100; queries/cursors allow at most
+1,024 characters and types 128. IDs must be 16 alphanumeric characters.
+The response includes parent actor context, item records with stable IDs and
+verified embedded UUIDs, and shared pagination/freshness fields. Select by ID
+even when names repeat, then fetch detail with both parent and item IDs:
+
+```ts
+const ownedItems = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'list_actor_items',
+    arguments: { actorId, limit: 10, ...(cursor ? { cursor } : {}) },
+  });
+  const page = actorItemListOutputSchema.parse(result.structuredContent);
+  ownedItems.push(...page.records);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+const selected = ownedItems[0];
+if (selected) {
+  const result = await client.callTool({
+    name: 'get_actor_item',
+    arguments: { actorId, itemId: selected.id },
+  });
+  const detail = actorItemOutputSchema.parse(result.structuredContent);
+  console.log(detail.item.parentActorId, detail.item.fields);
+}
+```
+
+An item ID from another actor cannot resolve under the requested parent.
+Empty inventory returns a successful complete page. Keep actor, query, type
+and limit unchanged on continuation. Cursors expire after five minutes, bind
+to world/caller/session, and invalidate after inventory content, order or
+visibility changes in both modes. Restart from the first page after edits,
+deletions, reconnects or permission changes. Native Socket.IO is required;
+REST explicitly reports unsupported reads.
+
+`tests/integration/actor-sheet.integration.test.ts` exercises the built MCP
+stdio server against disposable DND5e `test1world`. Start
+`node scripts/actor-test-control.mjs` with explicit `FOUNDRY_URL`,
+`FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` outside source. The controller binds
+to `127.0.0.1:3013`, requires that world/system and a GM browser, and creates,
+updates or removes only actors named with the prefix `MCP Actor Issue 7`.
+Set `FOUNDRY_ACTOR_TEST_CONTROL_URL=http://127.0.0.1:3013`, then run:
+
+```sh
+npm run build
+npm run test:integration -- tests/integration/actor-sheet.integration.test.ts
+```
+
+The suite covers empty/251-item inventories, duplicate and Unicode names,
+zero values, missing fields, long descriptions, exact ID composition,
+schema/response bounds, filter/cursor isolation, and post-edit/sort/delete
+reads. Caller-permission integration separately verifies observer grants,
+hidden parents/items, redaction and immediate revocation using Foundry's
+native permission oracle. Missing prerequisites fail instead of skipping.
+
+### Structured scene and token reads
+
+`get_scene_spatial`, `list_scene_tokens` and `get_scene_token` return schema
+version 1 with advertised output schemas and matching JSON text and
+`structuredContent`. Import `sceneSpatialOutputSchema`,
+`sceneTokenListOutputSchema` and `sceneTokenOutputSchema` from
+`foundry/scene-spatial-contract`. These contracts require native Socket.IO;
+REST returns an explicit unsupported error. Existing `get_scene_info`, legacy
+token reads and mutation tools remain compatible.
+
+All three tools accept optional `sceneId`; omission selects the active scene.
+`get_scene_token` also requires `tokenId`. IDs must be 16 alphanumeric characters,
+and a token from another scene cannot resolve under the requested parent.
+The scene record separates `source` dimensions/padding/shifts from derived
+`dimensions`, including origin, rows and columns. The grid type is one of
+`gridless`, `square`, `hex-odd-r`, `hex-even-r`, `hex-odd-q` or `hex-even-q`.
+Native Foundry dimensions are reproduced for each type; arbitrary coordinate,
+range and distance conversions are outside this contract.
+
+| Field | Unit or meaning |
+| --- | --- |
+| `source.widthPixels`, `source.heightPixels`, shifts | Pixels |
+| `source.paddingRatio` | Ratio |
+| `dimensions` width, height and origin | Pixels |
+| `grid.sizePixels` | Pixels |
+| `grid.distance`, `grid.distanceUnits` | Optional scene distance and unit label |
+| Token `xPixels`, `yPixels` | Pixels, including negative coordinates |
+| Token `widthGridSpaces`, `heightGridSpaces` | Footprint in grid spaces |
+| Token `rotationDegrees` | Degrees |
+| Optional token `elevation` | Scene distance |
+| Optional detail `texture.scaleX`, `texture.scaleY` | Art scale, independent of footprint |
+
+List records include stable IDs, embedded UUIDs, parent scene identity, token
+name, position, footprint, rotation, hidden state, optional elevation and
+observable actor references. Detail includes the same fields plus optional
+texture source/scaling. Lists omit texture metadata to keep ordinary 100-token
+pages bounded. Missing optional values are absent; zero and empty unit labels
+are retained when present. Ownership, flags, actor deltas and raw system data
+are never returned by these tools.
+
+`list_scene_tokens` accepts optional `query`, `limit` and `cursor`. Limits default
+to 10 and allow 1–100; query and cursor strings are bounded to 1,024 characters.
+Use stable IDs when names repeat, and keep scene selection, query and limit
+unchanged during traversal:
+
+```ts
+const tokens = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'list_scene_tokens',
+    arguments: { sceneId, limit: 100, ...(cursor ? { cursor } : {}) },
+  });
+  const page = sceneTokenListOutputSchema.parse(result.structuredContent);
+  tokens.push(...page.records);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+if (tokens[0]) {
+  const result = await client.callTool({
+    name: 'get_scene_token',
+    arguments: { sceneId, tokenId: tokens[0].id },
+  });
+  const detail = sceneTokenOutputSchema.parse(result.structuredContent);
+  console.log(detail.token.xPixels, detail.token.widthGridSpaces, detail.token.texture);
+}
+```
+
+Empty scenes return complete empty pages. Cursors expire after five minutes and
+bind to the world, caller, session, scene selection, query and limit. Token edits,
+hiding, deletion, scene dimensions, permission changes and active-scene changes
+invalidate affected continuations in both modes. Restart from the first page
+after invalidation. Responses preserve freshness metadata and the combined
+128 KiB text/structured limit; oversized pages fail and require a smaller limit.
+Source capacity is bounded to 10,000 scenes, actors and tokens per scene.
+
+Delegated reads require scene OBSERVER permission and evaluate token and actor
+visibility before counts, pagination or serialization. Players cannot retrieve
+hidden tokens or tokens whose linked/synthetic actors are
+inaccessible. Actorless visible tokens are supported. Synthetic actor deltas
+inherit nullable name/type/ownership fields and merge explicit ownership with
+the base actor. Hidden and missing IDs share generic errors. Raw scene/token
+resources and legacy scene/token reads remain unavailable in delegated mode.
+
+`tests/integration/scene-spatial.integration.test.ts` uses the built MCP stdio
+server and delegated callers against disposable DND5e `test1world`. Start
+`node scripts/scene-test-control.mjs` with explicit `FOUNDRY_URL`,
+`FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` outside source. The controller binds
+to `127.0.0.1:3014`, requires that world/system and a GM browser, and manages only
+scenes, actors and users prefixed `MCP Scene Issue 8`. It restores the original
+active scene during cleanup. Set
+`FOUNDRY_SCENE_TEST_CONTROL_URL=http://127.0.0.1:3014`, then run:
+
+```sh
+npm run build
+npm run test:integration -- tests/integration/scene-spatial.integration.test.ts
+```
+
+Fixtures cover thirteen scenes, all six grid types, padded gridless and
+zero-padding hex geometry, 258 tokens, duplicate/Unicode names, negative
+coordinates, zero elevation, independent art scaling, linked/synthetic actors
+and two player callers. Native dimensions and permission oracles verify MCP
+output. Tests also exercise edits, hiding, deletion, active-scene changes,
+revocation, cursor isolation, strict inputs and serialization bounds. Missing
+prerequisites fail instead of skipping acceptance cases.
+
+### Complete journal pages
+
+Journal summaries and page content have separate contracts. `get_journal`
+returns schema version 3 with `pages` and the shared pagination fields; existing
+consumers must follow `nextCursor` to list every page. Previews are limited to
+500 Unicode code points and carry `contentTruncated`. Page IDs and verified
+UUIDs, type, sort, source format, title and available asset metadata identify the
+source document. Summary totals count only visible pages.
+
+`get_journal_page` accepts `journalId`, `pageId`, optional `format: "text" |
+"source"`, `limit` and `cursor`. Both tools require 16-character alphanumeric
+IDs and reject UUIDs, unknown arguments and empty cursors. Limits default to 4
+and allow 1–8; the summary limit counts pages and the content limit counts chunks.
+The content response uses schema version 1 and `documentType: "JournalEntryPage"`.
+It includes page metadata, the selected format, code-point `contentLength`,
+`chunks`, `contentTruncated` and `paginationPage` alongside the shared pagination
+and `readMetadata` fields. Each chunk has a zero-based `index` and code-point
+`start`/exclusive `end`, with at most 1,024 code points of `content`.
+
+For example, a structured consumer can collect complete text as follows:
+
+```ts
+const parts: string[] = [];
+let cursor: string | undefined;
+do {
+  const result = await client.callTool({
+    name: 'get_journal_page',
+    arguments: { journalId, pageId, format: 'text', limit: 4, ...(cursor ? { cursor } : {}) },
+  });
+  const page = journalPageContentSchema.parse(result.structuredContent);
+  parts.push(...page.chunks.map(chunk => chunk.content));
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+const completeText = parts.join('');
+```
+
+Import `journalPageContentSchema` from `foundry/journal-contract`. The default
+`text` format parses HTML inertly, retains headings/paragraph/list breaks and
+decodes entities; Markdown is returned literally. `source` preserves the original
+HTML/Markdown string after removing secret sections for non-GM delegated callers.
+Redaction precedes previews, content searches and text conversion. Returning source never executes it; consumers must handle
+it as untrusted content. Empty text returns one empty chunk. Non-text pages
+return zero chunks and typed metadata, including visible image/video references.
+
+Content/page-order/ownership changes invalidate cursors for the whole visible
+journal in both service-identity and delegated modes. Continuations bind to the
+tool, IDs, format, limit, world, caller and session. Their five-minute expiry,
+reconnect and permission checks require restarting from the first page after
+invalidation. Hidden and absent journal/page IDs yield the same `InvalidParams`
+error. Native Socket.IO supports these reads; REST fails explicitly.
+
+Preparation rejects text sources exceeding 4 MiB, HTML trees exceeding 100,000
+nodes or 4,096 open elements, or journal snapshots exceeding 10,000 records/8 MiB. The final combined
+MCP text/structured response remains limited to 128 KiB. Capacity failures are
+explicit and never return silently shortened content.
+
+`tests/integration/journals.integration.test.ts` uses disposable `test1world`
+through the built MCP stdio process and compares results with actual source
+documents. After `npm run build`, start `node scripts/journal-test-control.mjs`
+with explicit `FOUNDRY_URL`, `FOUNDRY_USERNAME` and `FOUNDRY_PASSWORD` in a separate
+terminal. The controller binds to `127.0.0.1:3012`, requires `test1world`, and only
+creates, changes or removes journals whose names begin `MCP Journal Issue 6`.
+Set `FOUNDRY_JOURNAL_TEST_CONTROL_URL=http://127.0.0.1:3012` in the integration
+environment, then run:
+
+```sh
+npm run test:integration -- tests/integration/journals.integration.test.ts
+```
+
+The suite covers 0/499/500/501/10,000+ characters, HTML entities and nesting,
+Unicode, Markdown, empty/image/video pages, exact chunk reassembly, summary
+ordering, edits/reordering/deletion, cursor isolation, invalid IDs and advertised
+output schemas. Caller-permission tests separately compare inherited/explicit
+page visibility, content and asset redaction, and revocation with Foundry's
+OBSERVER oracle. Missing prerequisites fail; tests do not skip acceptance cases.
+
+### Consuming freshness metadata
+
+Successful service-identity world reads include `readMetadata` with `freshness: "current"` or
+`"stale"`. Without a validated source snapshot they return an error. Presence,
+chat, combat, scene and summary reads follow the same policy as document reads.
+Use `get_health_status` to inspect unavailable cache state; a successful REST
+health request does not mark socket data current.
+
+`worldId`, `sessionId`, source `snapshotId` and `revision` identify the data view.
+`capturedAt` is source capture time; `observedAt` is local source receipt time;
+`respondedAt` is response time. Reading retained data does not refresh its source
+clocks. REST responses without a source capture time use null `capturedAt` and
+`snapshotId`. Pagination has a separate top-level `snapshotId`: its records and
+source metadata remain immutable, and later pages report stale when that source
+has advanced.
+
+After a socket outage the client automatically attempts bounded snapshot recovery.
+`refresh_world_data` explicitly retries the same recovery mechanism. Concurrent
+requests coalesce; retained data stays stale until a complete, validated response
+replaces it. Timeouts, malformed responses and obsolete session responses cannot
+make stale data current. Consumers should discard cached pages and restart
+traversal after world/session changes or invalidated cursor errors.
+
+The default recovery budget is four attempts (one initial attempt plus three
+retries), each with a 10-second acknowledgment timeout and a 1-second retry
+delay. Configure `timeout`, `retryAttempts` and `retryDelay` on
+`FoundryClientConfig` to change this budget. The refresh event buffer is capped
+at 1,000 events; overflow fails recovery without publishing a partial snapshot.
+
+Delegated reads require a fresh authoritative socket response for each MCP
+request. They never serve retained stale data or use REST to authorize access.
+Every continuation rechecks the caller, membership, ownership and source session;
+revocation or a changed authorized view invalidates the cursor. See
+[delegated caller configuration](configuration.md#delegated-callers) for the host
+resolver, supported surfaces and conservative visibility restrictions.
 
 Run `npm run test:reads:coverage` for the full unit suite with 100% statement,
 branch, function and line coverage enforced for the shared read contract and
@@ -157,7 +560,51 @@ stdio against a local REST fixture. That fixture proves the process/protocol
 workflow; supported Foundry compatibility still requires live integration.
 
 `tests/integration/structured-reads.integration.test.ts` requires a licensed,
-bootstrapped world containing exactly two actors with a shared name and exactly
-two world items with a shared name. The live test records core/system/module
-version evidence. Missing connection or fixture prerequisites fail; they do not
-skip. Use the existing integration setup and keep credentials outside source.
+launched disposable dnd5e world (`test1world` by default; set
+`FOUNDRY_TEST_WORLD_ID` to select another disposable world). It creates its own
+same-name actor/item pairs with zero, false and empty-string values and its own
+deleted-document fixtures. It removes only documents it created and reports
+cleanup failures. Existing world documents are never needed as fixtures. The
+live test records core/system/module version evidence; missing connection or
+world prerequisites fail instead of skipping. Keep credentials outside source.
+
+A healthy Docker container alone does not provide these prerequisites: install
+dnd5e, create the disposable world and launch it before running the live suite.
+The Docker helper does not bootstrap a licensed world. The local Foundry server
+is the validated live target for this PR stack.
+
+`tests/integration/pagination.integration.test.ts` additionally requires the
+disposable world ID `test1world`. It creates uniquely named fixtures (251 actors,
+251 items, journals and scenes), exercises the built MCP CLI, and deletes only
+its own fixtures afterward. It verifies exact traversals, duplicate names,
+snapshot consistency under writes, all five resources and invalid inputs.
+
+`tests/integration/caller-permissions.integration.test.ts` creates two temporary
+player users and owned documents in disposable `test1world`. It compares GM and
+player reads with Foundry's actual OBSERVER checks and each player's chat
+`isContentVisible` result through authenticated browser sessions. Its cases
+exercise visible/hidden IDs, explicit/default/inherited grants, embedded items,
+journal pages, counts, filtering before pagination, cursor isolation, immediate
+revocation, forged identities, denied reads/writes, reconnects and membership
+loss. It fails on missing prerequisites and cleans up its owned fixtures.
+The built MCP resolver workflow also covers absent/throwing host resolvers,
+concurrent callers and generic error redaction without trusting request metadata.
+
+`tests/integration/compendium.integration.test.ts` additionally requires a paired
+local REST relay, the enabled REST module, an active GM browser controller and
+disposable scoped keys. Its 13 cases exercise verified capability reports, wrong
+and insufficient-scope keys, socket-only and plain Foundry configurations, actual
+empty searches, filters, 1/100/101/251-entry traversals, authorization revocation,
+module removal and recovery. Missing prerequisites fail instead of skipping. See
+[optional capability configuration and test prerequisites](optional-capabilities.md).
+
+### GitHub Actions live endpoint
+
+The integration workflow requires a prepared disposable `test1world` with dnd5e, the REST module, a paired REST relay and all fixture controllers reachable from the runner. Configure these repository secrets:
+
+- `FOUNDRY_TEST_URL`, `FOUNDRY_TEST_USERNAME`, and optionally `FOUNDRY_TEST_PASSWORD` for the world login.
+- `FOUNDRY_REST_URL` for the paired REST relay.
+- `FOUNDRY_REST_TEST_CONTROL_URL`, `FOUNDRY_JOURNAL_TEST_CONTROL_URL`, `FOUNDRY_ACTOR_TEST_CONTROL_URL`, `FOUNDRY_SCENE_TEST_CONTROL_URL`, `FOUNDRY_DICE_TEST_CONTROL_URL`, and `FOUNDRY_ITEM_TEST_CONTROL_URL` for the fixture controllers.
+- `FOUNDRY_REST_TEST_FIXTURES_JSON` for the scoped-key fixture JSON described in the optional-capability test prerequisites. CI writes it to a private temporary file and removes it afterward. The workflow expects REST module version `3.4.1`.
+
+World login credentials are separate from the account used to download Foundry. The local relay and controller scripts bind to loopback; a hosted runner cannot reach them without a separately prepared secure connection. Pull requests skip this optional live tier when configuration is incomplete; manually dispatched runs fail. The required unit, workflow, package, documentation, and security gates run independently. This workflow does not download, license or launch Foundry, or provision the controllers.

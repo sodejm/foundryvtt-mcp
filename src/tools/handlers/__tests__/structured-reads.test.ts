@@ -2,9 +2,11 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
+import { normalizeItemEconomy } from '../../../foundry/item-normalization.js';
 import { getAllTools } from '../../definitions.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
 import { handleGetItemDetails, handleSearchItems } from '../items.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 const A = 'Actor00000000001';
 const B = 'Actor00000000002';
@@ -23,15 +25,18 @@ const item = {
   name: 'Twin',
   type: 'loot',
   description: '',
-  rarity: '',
-  price: { value: 0, denomination: '' },
+  price: { value: 0, denomination: 'gp' },
+  economy: normalizeItemEconomy(
+    { type: 'loot', system: { price: { value: 0, denomination: 'gp' }, rarities: [] } },
+    { id: 'dnd5e', version: '6.0.6' },
+  ),
   weight: 0,
   quantity: 0,
   equipped: false,
   identified: false,
 };
 function clientStub(data: Record<string, unknown>): FoundryClient {
-  return data as unknown as FoundryClient;
+  return { getReadMetadata: () => readMetadata(), ...data } as unknown as FoundryClient;
 }
 const surfaces = [
   {
@@ -70,14 +75,14 @@ for (const surface of surfaces) {
       const client = clientStub({
         [surface.searchMethod]: vi
           .fn()
-          .mockResolvedValue({ [surface.collection]: records, total: 2, page: 1, limit: 10 }),
+          .mockResolvedValue({ [surface.collection]: records, ...paginationMetadata(2) }),
         [surface.detailMethod]: vi.fn((id: string) =>
           Promise.resolve(records.find((r) => r._id === id)),
         ),
       });
       const search = await surface.search({}, client);
       expect(search.structuredContent).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: surface.name === 'actor' ? 3 : 4,
         documentType: surface.documentType,
         records: [{ id: surface.sample._id }, { id: surface.second }],
       });
@@ -102,7 +107,7 @@ for (const surface of surfaces) {
         }
         expect(ajv.validate(detailSchema, detail.structuredContent)).toBe(true);
       }
-      expect(validate({ ...search.structuredContent, schemaVersion: 2 })).toBe(false);
+      expect(validate({ ...search.structuredContent, schemaVersion: 1 })).toBe(false);
       expect(validate({ ...search.structuredContent, unexpected: true })).toBe(false);
       expect(
         validate({
@@ -123,7 +128,7 @@ for (const surface of surfaces) {
       ).toBe(false);
       expect(validate({ ...search.structuredContent, total: -1 })).toBe(false);
       expect(search.content[0]?.text).toContain(
-        surface.name === 'actor' ? 'Level 0 - HP: 0/0' : '(loot) -  - 0 ',
+        surface.name === 'actor' ? 'Level 0 - HP: 0/0' : '(loot) - No rarity - 0 gp',
       );
 
       expect(
@@ -139,11 +144,72 @@ for (const surface of surfaces) {
         clientStub({
           [surface.searchMethod]: vi
             .fn()
-            .mockResolvedValue({ [surface.collection]: [], total: 0, page: 1, limit: 10 }),
+            .mockResolvedValue({ [surface.collection]: [], ...paginationMetadata(0) }),
         }),
       );
       expect(result.structuredContent.records).toEqual([]);
       expect(result.content[0]?.text).toContain(`No ${surface.collection} found`);
+    });
+    it('forwards the complete continuation context and exposes its next cursor in text', async () => {
+      const args = {
+        query: 'Twin',
+        type: 'loot',
+        limit: 1,
+        cursor: 'previous-cursor',
+        ...(surface.name === 'item' && { rarity: 'rare' }),
+      };
+      const fetch = vi.fn().mockResolvedValue({
+        [surface.collection]: [surface.sample],
+        ...paginationMetadata(1, 2, 1),
+      });
+      const result = await surface.search(args, clientStub({ [surface.searchMethod]: fetch }));
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(args);
+      expect(result.structuredContent).toMatchObject({
+        complete: false,
+        nextCursor: 'fixture-cursor',
+      });
+      expect(result.content[0]?.text).toContain('fixture-cursor');
+    });
+    it.each([
+      { limit: 0 },
+      { limit: 101 },
+      { limit: 1.5 },
+      { limit: '10' },
+      { cursor: '' },
+      { cursor: 'c'.repeat(1025) },
+      { cursor: 1 },
+      { query: 'q'.repeat(1025) },
+      { query: null },
+      { type: 't'.repeat(129) },
+      { type: 1 },
+      { page: 2 },
+      { unknown: true },
+      ...(surface.name === 'item'
+        ? [{ rarity: 'r'.repeat(129) }, { rarity: false }]
+        : [{ rarity: 'rare' }]),
+    ])('rejects invalid search input before backend access: %j', async (args) => {
+      const fetch = vi.fn();
+      await expect(
+        surface.search(
+          args as Parameters<typeof surface.search>[0],
+          clientStub({
+            [surface.searchMethod]: fetch,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+    it('rejects an oversized final MCP response instead of truncating it', async () => {
+      const fetch = vi.fn().mockResolvedValue({
+        [surface.collection]: [{ ...surface.sample, name: 'é'.repeat(70_000) }],
+        ...paginationMetadata(1),
+      });
+      await expect(
+        surface.search({}, clientStub({ [surface.searchMethod]: fetch })),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining('request a smaller limit'),
+      });
     });
     it('omits missing optional values rather than inventing them', async () => {
       const result = await surface.detail(
@@ -159,6 +225,9 @@ for (const surface of surfaces) {
         documentType: surface.documentType,
         name: '',
         type: '',
+        ...(surface.name === 'item'
+          ? { economy: normalizeItemEconomy({ type: '' }, { id: 'unknown' }) }
+          : {}),
       });
     });
     it.each([
@@ -225,7 +294,13 @@ for (const surface of surfaces) {
       const invalid =
         surface.name === 'actor'
           ? { ...surface.sample, hp: { value: '0', max: 0 } }
-          : { ...surface.sample, price: { value: '0', denomination: '' } };
+          : {
+              ...surface.sample,
+              economy: {
+                ...item.economy,
+                price: { ...item.economy.price, currencies: [{ value: '0', denomination: 'gp' }] },
+              },
+            };
       await expect(
         surface.detail(
           surface.sample._id,
@@ -326,14 +401,14 @@ describe('zero, false and empty display values', () => {
     );
     expect(result.structuredContent.record).toMatchObject({
       description: '',
-      rarity: '',
-      price: { value: 0, denomination: '' },
+      price: { value: 0, denomination: 'gp' },
+      economy: { rarity: { status: 'known', values: [] } },
       weight: 0,
       quantity: 0,
       equipped: false,
       identified: false,
     });
-    expect(result.content[0]?.text).toContain('**Price:** 0 ');
+    expect(result.content[0]?.text).toContain('**Price:** 0 gp');
     expect(result.content[0]?.text).toContain('**Weight:** 0');
     expect(result.content[0]?.text).toContain('**Quantity:** 0');
     expect(result.content[0]?.text).toContain('**Equipped:** false');

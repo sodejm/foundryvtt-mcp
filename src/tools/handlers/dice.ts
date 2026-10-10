@@ -1,69 +1,48 @@
-/**
- * @fileoverview Dice rolling tool handlers
- *
- * Handles dice rolling operations using FoundryVTT's dice system
- * or fallback mechanisms when the API is unavailable.
- */
-
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
-import { logger } from '../../utils/logger.js';
-// import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import {
+  diceRollInputJsonSchema,
+  diceRollOutputJsonSchema,
+  diceRollOutputSchema,
+  parseDiceRollInput,
+} from '../../foundry/dice-contract.js';
+import { InvalidDiceFormulaError, parseDiceFormula } from '../../foundry/dice-formula.js';
 import { BaseTool, type ToolContext, type ToolResult } from '../base.js';
 import { ROLL_DICE_DESCRIPTION } from '../definitions.js';
 
-/**
- * Dice rolling tool implementation
- */
 export class RollDiceTool extends BaseTool {
   readonly name = 'roll_dice';
   readonly description = ROLL_DICE_DESCRIPTION;
-  readonly inputSchema = {
-    type: 'object',
-    properties: {
-      formula: {
-        type: 'string',
-        description: 'Dice formula (e.g., "1d20+5", "3d6")',
-      },
-      reason: {
-        type: 'string',
-        description: 'Optional reason for the roll',
-      },
-    },
-    required: ['formula'],
-  };
+  readonly inputSchema = diceRollInputJsonSchema;
+  readonly outputSchema = diceRollOutputJsonSchema;
 
   protected async executeValidated(
     args: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolResult> {
-    const { formula, reason } = args as { formula: string; reason?: string };
-
-    logger.info(`Rolling dice: ${formula}${reason ? ` (${reason})` : ''}`);
-    const result = await context.foundryClient.rollDice(formula, reason);
-
-    return this.createTextResponse(`🎲 **Dice Roll Result**
-**Formula:** ${result.formula}
-**Total:** ${result.total}
-**Breakdown:** ${result.breakdown}
-${result.reason ? `**Reason:** ${result.reason}` : ''}
-**Timestamp:** ${result.timestamp}`);
+    const input = parseDiceRollInput(args);
+    try {
+      parseDiceFormula(input.formula);
+    } catch (error) {
+      if (error instanceof InvalidDiceFormulaError) {
+        throw new McpError(ErrorCode.InvalidParams, error.message);
+      }
+      throw error;
+    }
+    const result = diceRollOutputSchema.parse(
+      await context.foundryClient.rollDice(input.formula, input.reason, input.engine),
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result) }],
+      structuredContent: result,
+    };
   }
 }
 
-/**
- * Legacy function for backward compatibility
- * @deprecated Use RollDiceTool class instead
- */
+/** Legacy router entry point uses the same strict contract as the registry. */
 export async function handleRollDice(
-  args: {
-    formula: string;
-    reason?: string;
-  },
+  args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ): Promise<ToolResult> {
-  const tool = new RollDiceTool();
-  const context: ToolContext = {
-    foundryClient,
-  };
-  return tool.execute(args, context);
+  return new RollDiceTool().execute(args, { foundryClient });
 }

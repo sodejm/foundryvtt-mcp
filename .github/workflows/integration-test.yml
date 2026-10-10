@@ -1,88 +1,53 @@
 name: Integration Tests
 
-# ----------------------------------------------------------------------------
-# CI GATE (issue #140): this workflow needs FoundryVTT credentials that are not
-# currently configured on the repo:
-#
-#   - FOUNDRY_LICENSE_KEY
-#   - FOUNDRY_USERNAME
-#   - FOUNDRY_PASSWORD
-#
-# Without these the felddy/foundryvtt container tries to log in to
-# foundryvtt.com with the placeholder values in docker-compose.test.yml
-# (test-user/test-password), gets rejected, and never installs Foundry — so the
-# healthcheck never becomes healthy. Evidence (from the run-25735243106
-# container.log artifact):
-#
-#   Authenticate | [error] Unable to log in as test-user, verify your credentials...
-#   Entrypoint   | [warn]  Authentication failed with exit code 255.
-#   Entrypoint   | [error] Unable to install Foundry Virtual Tabletop!
-#
-# Bumping the healthcheck timeout would not help; the container cannot start
-# without valid credentials.
-#
-# The `preflight` job below detects the missing secrets and *skips* the
-# integration job rather than failing it. Previously it exited 1, which painted
-# every pull request red for a precondition no PR author can satisfy — the
-# signal was pure noise and trained reviewers to ignore a red check. A skipped
-# job still shows the gate in the checks list, but only a genuine integration
-# failure now reports as a failure.
-#
-# `workflow_dispatch` is the exception: an explicit manual run means someone
-# expects the tier to execute, so missing secrets fail loudly there.
-#
-# Once the repo owner adds the three secrets, both jobs run end-to-end with no
-# further changes to this file.
-# ----------------------------------------------------------------------------
-
+# Live tests require an externally reachable, licensed, launched disposable
+# test1world with dnd5e, the REST relay and all fixture controllers prepared.
+# Credentials for downloading Foundry alone do not create or launch that world.
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   preflight:
-    name: Check FoundryVTT credentials
+    name: Check prepared FoundryVTT endpoint
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
-      - name: Verify FoundryVTT credentials are configured
-        id: check
+      - id: check
         env:
-          FOUNDRY_LICENSE_KEY: ${{ secrets.FOUNDRY_LICENSE_KEY }}
-          FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_USERNAME }}
-          FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_PASSWORD }}
+          FOUNDRY_TEST_URL: ${{ secrets.FOUNDRY_TEST_URL }}
+          FOUNDRY_TEST_USERNAME: ${{ secrets.FOUNDRY_TEST_USERNAME }}
+          FOUNDRY_REST_URL: ${{ secrets.FOUNDRY_REST_URL }}
+          FOUNDRY_REST_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_REST_TEST_CONTROL_URL }}
+          FOUNDRY_JOURNAL_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_JOURNAL_TEST_CONTROL_URL }}
+          FOUNDRY_ACTOR_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ACTOR_TEST_CONTROL_URL }}
+          FOUNDRY_SCENE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_SCENE_TEST_CONTROL_URL }}
+          FOUNDRY_DICE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_DICE_TEST_CONTROL_URL }}
+          FOUNDRY_ITEM_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ITEM_TEST_CONTROL_URL }}
+          FOUNDRY_REST_TEST_FIXTURES_JSON: ${{ secrets.FOUNDRY_REST_TEST_FIXTURES_JSON }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          missing=()
-          [ -z "${FOUNDRY_LICENSE_KEY}" ] && missing+=("FOUNDRY_LICENSE_KEY")
-          [ -z "${FOUNDRY_USERNAME}" ] && missing+=("FOUNDRY_USERNAME")
-          [ -z "${FOUNDRY_PASSWORD}" ] && missing+=("FOUNDRY_PASSWORD")
-
-          if [ ${#missing[@]} -eq 0 ]; then
-            echo "All required FoundryVTT secrets are present."
+          missing=false
+          for required in FOUNDRY_TEST_URL FOUNDRY_TEST_USERNAME FOUNDRY_REST_URL FOUNDRY_REST_TEST_CONTROL_URL FOUNDRY_JOURNAL_TEST_CONTROL_URL FOUNDRY_ACTOR_TEST_CONTROL_URL FOUNDRY_SCENE_TEST_CONTROL_URL FOUNDRY_DICE_TEST_CONTROL_URL FOUNDRY_ITEM_TEST_CONTROL_URL FOUNDRY_REST_TEST_FIXTURES_JSON; do
+            if [ -z "${!required}" ]; then
+              echo "Missing live-test configuration: $required" >> "$GITHUB_STEP_SUMMARY"
+              missing=true
+            fi
+          done
+          if [ "$missing" = false ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "See the integration guide for the prepared disposable world, relay, controllers and scoped-key fixtures. FOUNDRY_TEST_PASSWORD may be empty." >> "$GITHUB_STEP_SUMMARY"
+            if [ "$EVENT_NAME" = workflow_dispatch ]; then
+              echo "::error::The prepared live-test endpoint is not configured."
+              exit 1
+            fi
           fi
-
-          echo "configured=false" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Integration tests skipped"
-            echo
-            echo "The following repository secrets are not configured: ${missing[*]}"
-            echo
-            echo "See issue #140 — without these the felddy/foundryvtt container"
-            echo "cannot authenticate to foundryvtt.com and never becomes healthy."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "::error title=Missing FoundryVTT secrets::This run was dispatched manually, so the missing secrets are a failure: ${missing[*]}"
-            exit 1
-          fi
-
-          echo "::warning title=Integration tests skipped::Missing FoundryVTT secrets (${missing[*]}); see issue #140."
 
   integration:
     name: Integration tests
@@ -90,52 +55,38 @@ jobs:
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
+    concurrency:
+      group: foundryvtt-shared-test-world
+      cancel-in-progress: false
+    env:
+      FOUNDRY_URL: ${{ secrets.FOUNDRY_TEST_URL }}
+      FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_TEST_USERNAME }}
+      FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_TEST_PASSWORD }}
+      FOUNDRY_TEST_WORLD_ID: test1world
+      FOUNDRY_REST_URL: ${{ secrets.FOUNDRY_REST_URL }}
+      FOUNDRY_REST_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_REST_TEST_CONTROL_URL }}
+      FOUNDRY_JOURNAL_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_JOURNAL_TEST_CONTROL_URL }}
+      FOUNDRY_ACTOR_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ACTOR_TEST_CONTROL_URL }}
+      FOUNDRY_SCENE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_SCENE_TEST_CONTROL_URL }}
+      FOUNDRY_DICE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_DICE_TEST_CONTROL_URL }}
+      FOUNDRY_ITEM_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ITEM_TEST_CONTROL_URL }}
+      FOUNDRY_REST_TEST_VERSION: 3.4.1
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: oven-sh/setup-bun@v2
+      - name: Configure fixture path
+        run: echo "FOUNDRY_REST_TEST_FIXTURES=$RUNNER_TEMP/foundry-rest-fixtures.json" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Create .env.integration
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun x playwright install --with-deps chromium
+      - name: Write scoped-key fixtures
+        env:
+          FOUNDRY_REST_TEST_FIXTURES_JSON: ${{ secrets.FOUNDRY_REST_TEST_FIXTURES_JSON }}
         run: |
-          cat > .env.integration <<EOF
-          FOUNDRY_LICENSE_KEY=${{ secrets.FOUNDRY_LICENSE_KEY }}
-          FOUNDRY_USERNAME=${{ secrets.FOUNDRY_USERNAME }}
-          FOUNDRY_PASSWORD=${{ secrets.FOUNDRY_PASSWORD }}
-          FOUNDRY_URL=http://localhost:30001
-          EOF
-
-      - name: Start FoundryVTT container
-        run: docker compose -f docker-compose.test.yml up -d
-
-      - name: Wait for container health
-        run: |
-          echo "Waiting for FoundryVTT to be healthy..."
-          timeout 120 bash -c 'until docker compose -f docker-compose.test.yml ps | grep -q "healthy"; do sleep 5; done'
-          echo "FoundryVTT is healthy"
-
-      - name: Run integration tests
-        run: bun run test:integration
-
-      - name: Collect container logs
+          bun -e 'import { writeFileSync } from "node:fs"; JSON.parse(process.env.FOUNDRY_REST_TEST_FIXTURES_JSON); writeFileSync(process.env.FOUNDRY_REST_TEST_FIXTURES, process.env.FOUNDRY_REST_TEST_FIXTURES_JSON, { mode: 0o600 });'
+      - run: bun run build
+      - run: bun run test:integration
+      - name: Remove scoped-key fixtures
         if: always()
-        run: |
-          mkdir -p tests/integration/logs
-          docker compose -f docker-compose.test.yml logs --no-color > tests/integration/logs/container.log 2>&1 || true
-
-      - name: Upload container logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: integration-logs
-          path: tests/integration/logs/
-          retention-days: 7
-
-      - name: Stop containers
-        if: always()
-        run: docker compose -f docker-compose.test.yml down -v || true
+        run: rm -f -- "$FOUNDRY_REST_TEST_FIXTURES"

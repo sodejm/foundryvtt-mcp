@@ -10,8 +10,9 @@ import Ajv from 'ajv';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FoundryClient } from '../../src/foundry/client.js';
+import { worldReadMetadataSchema } from '../../src/foundry/freshness.js';
 import type { WorldActor, WorldItem } from '../../src/foundry/types.js';
-import { createConnectedClient } from './setup.js';
+import { WorldFixture } from './world-fixture.js';
 
 const fixtureRecord = z.object({
   id: z.string(),
@@ -21,12 +22,14 @@ const fixtureRecord = z.object({
   uuid: z.string().optional(),
 }).passthrough();
 const searchEnvelope = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(3), z.literal(4)]),
   records: z.array(fixtureRecord),
+  readMetadata: worldReadMetadataSchema,
 }).passthrough();
 const detailEnvelope = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(2), z.literal(3)]),
   record: fixtureRecord,
+  readMetadata: worldReadMetadataSchema,
 }).passthrough();
 const foundryId = /^[A-Za-z0-9]{16}$/;
 
@@ -35,6 +38,10 @@ type FixturePair = readonly [FixtureDocument, FixtureDocument];
 
 describe('live structured actor/item reads through MCP stdio', () => {
   let foundry: FoundryClient | undefined;
+  let fixture: WorldFixture | undefined;
+  let worldId: string;
+  let deletedActorId: string;
+  let deletedItemId: string;
   let mcp: Client | undefined;
   let transport: StdioClientTransport | undefined;
   let actorPair: FixturePair;
@@ -45,20 +52,31 @@ describe('live structured actor/item reads through MCP stdio', () => {
   const ajv = new Ajv({ allErrors: true, strict: false });
 
   beforeAll(async () => {
-    foundry = await createConnectedClient();
+    fixture = await WorldFixture.connect();
+    foundry = fixture.client;
+    const actorData = {
+      name: `${fixture.prefix} Duplicate Actor`, type: 'npc',
+      system: { attributes: { hp: { value: 0, max: 0, temp: 0 } }, details: { biography: { value: '' } } },
+    };
+    const itemData = {
+      name: `${fixture.prefix} Duplicate Item`, type: 'weapon',
+      system: { description: { value: '' }, price: { value: 0, denomination: 'gp' },
+        weight: { value: 0 }, quantity: 0, identified: false },
+    };
+    const actorIds = [(await fixture.create('Actor', actorData))._id,
+      (await fixture.create('Actor', actorData))._id];
+    const itemIds = [(await fixture.create('Item', itemData))._id,
+      (await fixture.create('Item', itemData))._id];
+    deletedActorId = (await fixture.create('Actor', { ...actorData, name: `${fixture.prefix} Deleted Actor` }))._id;
+    deletedItemId = (await fixture.create('Item', { ...itemData, name: `${fixture.prefix} Deleted Item` }))._id;
+    await fixture.delete('Actor', deletedActorId);
+    await fixture.delete('Item', deletedItemId);
+    await foundry.refreshWorldData();
     const world = foundry.getWorldData();
     if (!world) throw new Error('A bootstrapped Socket.IO world is required');
-
-    actorPair = selectFixturePair(
-      world.actors, 'actor',
-      process.env.FOUNDRY_TEST_ACTOR_NAME,
-      process.env.FOUNDRY_TEST_ACTOR_IDS,
-    );
-    itemPair = selectFixturePair(
-      world.items, 'item',
-      process.env.FOUNDRY_TEST_ITEM_NAME,
-      process.env.FOUNDRY_TEST_ITEM_IDS,
-    );
+    worldId = world.world.id;
+    actorPair = ownedPair(world.actors, actorIds);
+    itemPair = ownedPair(world.items, itemIds);
     missingId = selectMissingId(world.actors, world.items, process.env.FOUNDRY_TEST_MISSING_ID);
 
     // Record only runtime identity/version evidence, never world documents.
@@ -101,7 +119,9 @@ describe('live structured actor/item reads through MCP stdio', () => {
   });
 
   afterAll(async () => {
-    await Promise.allSettled([mcp?.close(), transport?.close(), foundry?.disconnect()]);
+    const results = await Promise.allSettled([mcp?.close(), transport?.close(), fixture?.close()]);
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length > 0) throw new AggregateError(errors, 'Structured-read fixture cleanup failed');
   });
 
   function connectedMcp(): Client {
@@ -121,6 +141,12 @@ describe('live structured actor/item reads through MCP stdio', () => {
     ).toBe(true);
     const text = result.content.flatMap(block =>
       block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('\n');
+    const metadata = worldReadMetadataSchema.parse(result.structuredContent?.readMetadata);
+    expect(metadata).toMatchObject({ source: 'socket', freshness: 'current', worldId });
+    expect(metadata.snapshotId).not.toBeNull();
+    expect(metadata.capturedAt).not.toBeNull();
+    expect(metadata.observedAt).not.toBeNull();
+    expect(text).toContain(metadata.sessionId);
     return { structured: result.structuredContent, text };
   }
 
@@ -205,65 +231,20 @@ describe('live structured actor/item reads through MCP stdio', () => {
     })).rejects.toThrow();
   });
 
-  for (const fixture of deletedFixtures()) {
-    it(`reports the explicitly deleted ${fixture.documentType} fixture as missing`, async () => {
-      await expect(connectedMcp().callTool({
-        name: fixture.tool,
-        arguments: { [fixture.argument]: fixture.id },
-      })).rejects.toThrow();
-    });
-  }
+  it.each([
+    ['actor', 'get_actor_details', 'actorId', () => deletedActorId],
+    ['item', 'get_item_details', 'itemId', () => deletedItemId],
+  ] as const)('reports the deleted owned %s fixture as missing', async (_, tool, argument, id) => {
+    await expect(connectedMcp().callTool({ name: tool, arguments: { [argument]: id() } })).rejects.toThrow();
+  });
 });
 
-function selectFixturePair<T extends FixtureDocument>(
-  records: T[],
-  kind: string,
-  expectedName: string | undefined,
-  explicitIds: string | undefined,
-): readonly [T, T] {
-  const ids = parseIds(explicitIds, `${kind} fixture IDs`);
-  if (ids) {
-    if (ids.length !== 2) throw new Error(`${kind} fixture IDs must contain exactly two IDs`);
-    const selected = ids.map(id => records.find(record => record._id === id));
-    if (selected.some(record => !record)) {
-      throw new Error(`${kind} fixture IDs were not all present in the live world`);
-    }
-    const pair = selected as [T, T];
-    if (pair[0].name !== pair[1].name) {
-      throw new Error(`Explicit ${kind} fixtures must have the same name`);
-    }
-    if (expectedName !== undefined && pair.some(record => record.name !== expectedName)) {
-      throw new Error(`Explicit ${kind} fixtures do not match FOUNDRY_TEST_${kind.toUpperCase()}_NAME`);
-    }
-    return pair;
+function ownedPair<T extends FixtureDocument>(records: T[], ids: string[]): readonly [T, T] {
+  const pair = ids.map(id => records.find(record => record._id === id));
+  if (pair.length !== 2 || pair.some(record => !record)) {
+    throw new Error('Owned duplicate-name fixtures were not present in the live world');
   }
-
-  if (expectedName !== undefined) {
-    const matches = records.filter(record => record.name === expectedName);
-    if (matches.length !== 2) {
-      throw new Error(`Expected exactly two ${kind} fixtures named ${JSON.stringify(expectedName)}, found ${matches.length}`);
-    }
-    return matches as [T, T];
-  }
-
-  const groups = new Map<string, T[]>();
-  for (const record of records) {
-    const group = groups.get(record.name) ?? [];
-    group.push(record);
-    groups.set(record.name, group);
-  }
-  const pair = [...groups.values()].find(group => group.length === 2);
-  if (!pair) throw new Error(`Live fixture requires exactly two same-name ${kind} documents`);
   return pair as [T, T];
-}
-
-function parseIds(value: string | undefined, label: string): string[] | undefined {
-  if (value === undefined) return undefined;
-  const ids = value.split(/[\s,]+/).filter(Boolean);
-  if (ids.some(id => !foundryId.test(id))) {
-    throw new Error(`${label} must be 16-character alphanumeric Foundry IDs`);
-  }
-  return ids;
 }
 
 function selectMissingId(
@@ -316,23 +297,4 @@ function redactConfiguredSecrets(value: string): string {
     const secret = process.env[name];
     return secret ? redacted.replaceAll(secret, '[REDACTED]') : redacted;
   }, value);
-}
-
-function deletedFixtures(): Array<{
-  documentType: 'actor' | 'item';
-  tool: 'get_actor_details' | 'get_item_details';
-  argument: 'actorId' | 'itemId';
-  id: string;
-}> {
-  const configured = [
-    ['actor', 'get_actor_details', 'actorId', process.env.FOUNDRY_TEST_DELETED_ACTOR_ID],
-    ['item', 'get_item_details', 'itemId', process.env.FOUNDRY_TEST_DELETED_ITEM_ID],
-  ] as const;
-  return configured.flatMap(([documentType, tool, argument, id]) => {
-    if (id === undefined) return [];
-    if (!foundryId.test(id)) {
-      throw new Error(`FOUNDRY_TEST_DELETED_${documentType.toUpperCase()}_ID must be a 16-character alphanumeric Foundry ID`);
-    }
-    return [{ documentType, tool, argument, id }];
-  });
 }

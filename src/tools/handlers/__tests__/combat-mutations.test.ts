@@ -11,6 +11,7 @@ import {
   handleStartCombat,
 } from '../combat-mutations.js';
 import { getTurnOrder } from '../combat-order.js';
+import { readMetadata } from './pagination-fixture.js';
 
 const COMBAT_ID = 'cccccccccccccccc'; // 16 alphanumeric chars
 const COMBATANT_ID = 'dddddddddddddddd';
@@ -534,6 +535,7 @@ describe('initiative-ordered turn semantics (#214)', () => {
 
   const readCurrentName = async (combat: WorldCombat): Promise<string> => {
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -621,6 +623,7 @@ describe('initiative-ordered turn semantics (#214)', () => {
     const combat = makeUnsortedCombat({ turn: 0 });
     const updateCombat = vi.fn();
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       updateCombat,
     } as unknown as FoundryClient;
@@ -652,6 +655,7 @@ describe('initiative-ordered turn semantics (#214)', () => {
     });
     const updateCombat = vi.fn();
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       setCombatantInitiative,
       updateCombat,
@@ -720,6 +724,7 @@ describe('set_initiative re-anchors Combat#turn', () => {
     const updateCombat = vi.fn();
     const setCombatantInitiative = vi.fn();
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       setCombatantInitiative,
       updateCombat,
