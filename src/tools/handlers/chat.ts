@@ -2,6 +2,7 @@
  * Chat message tool handler
  */
 
+import { parseChatLimit } from '../../foundry/chat-contract.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import { withWorldRead } from './utils.js';
 
@@ -9,8 +10,8 @@ export async function handleGetChatMessages(
   args: { limit?: number },
   foundryClient: FoundryClient,
 ) {
+  const limit = parseChatLimit(args.limit);
   return withWorldRead('get chat messages', foundryClient, async () => {
-    const limit = Math.min(args.limit ?? 20, 100);
     const messages = foundryClient.getChatMessages(limit);
 
     if (messages.length === 0) {

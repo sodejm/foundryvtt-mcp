@@ -148,6 +148,106 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     vi.restoreAllMocks();
   });
 
+  it('preserves extension fields on trusted initial snapshots and refreshes', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      retryAttempts: 0,
+    });
+    const mock = buildMockSocket();
+    attachClient(client, mock);
+    await loadSnapshot(client, mock, Object.assign(snapshot(), { extensionState: { version: 1 } }));
+    expect(client.getWorldData()).toMatchObject({ extensionState: { version: 1 } });
+    const refresh = client.refreshWorldData();
+    mock.worldAcks[1]?.(Object.assign(snapshot(), { extensionState: { version: 2 } }));
+    await refresh;
+    expect(client.getWorldData()).toMatchObject({ extensionState: { version: 2 } });
+  });
+
+  it.each([
+    'synthetic actor',
+    'missing actor',
+  ])('marks unapplied %s broadcasts stale and recovers from a clean ACK', async (kind) => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      retryAttempts: 0,
+    });
+    const mock = buildMockSocket();
+    attachClient(client, mock);
+    await loadSnapshot(client, mock);
+    callPrivate(client, 'onDocumentBroadcast', {
+      type: 'Actor',
+      action: 'update',
+      result: [{ _id: 'ActorMissing0001', name: 'Changed' }],
+      ...(kind === 'synthetic actor'
+        ? {
+            operation: {
+              parentUuid: 'Scene.Scene00000000001.Token.Token00000000001.Actor.ActorMissing0001',
+            },
+          }
+        : {}),
+    });
+    expect(client.getReadMetadata().freshness).toBe('stale');
+    expect(client.getWorldData()?.actors[0]?.name).toBe('Alpha');
+    const refresh = client.refreshWorldData();
+    mock.worldAcks[1]?.(snapshot());
+    await refresh;
+    expect(client.getReadMetadata().freshness).toBe('current');
+  });
+
+  it('rejects buffered synthetic actor changes instead of publishing a false-current snapshot', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      retryAttempts: 0,
+    });
+    const mock = buildMockSocket();
+    attachClient(client, mock);
+    await loadSnapshot(client, mock);
+    const refresh = client.refreshWorldData();
+    const rejected = expect(refresh).rejects.toThrow('unapplied document broadcast');
+    callPrivate(client, 'onDocumentBroadcast', {
+      type: 'Actor',
+      action: 'update',
+      result: [{ _id: ACTOR_ONE, name: 'Synthetic change' }],
+      operation: { parentUuid: `Scene.Scene00000000001.Token.Token00000000001.Actor.${ACTOR_ONE}` },
+    });
+    mock.worldAcks[1]?.(snapshot());
+    await rejected;
+    expect(client.getReadMetadata()).toMatchObject({ freshness: 'stale', revision: 1 });
+    const recovery = client.refreshWorldData();
+    mock.worldAcks[2]?.(snapshot());
+    await recovery;
+    expect(client.getReadMetadata()).toMatchObject({ freshness: 'current', revision: 2 });
+  });
+
+  it('keeps unknown settings and duplicate deletes current during ordinary reads and buffered replay', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      retryAttempts: 0,
+    });
+    const mock = buildMockSocket();
+    attachClient(client, mock);
+    await loadSnapshot(client, mock);
+    const events = [
+      { type: 'Setting', action: 'update', result: [{ _id: 'unknown-setting', value: true }] },
+      { type: 'Actor', action: 'delete', result: ['ActorMissing0001'] },
+    ];
+    for (const event of events) {
+      callPrivate(client, 'onDocumentBroadcast', event);
+    }
+    expect(client.getReadMetadata()).toMatchObject({ freshness: 'current', revision: 1 });
+    const refresh = client.refreshWorldData();
+    for (const event of events) {
+      callPrivate(client, 'onDocumentBroadcast', event);
+    }
+    mock.worldAcks[1]?.(snapshot());
+    await refresh;
+    expect(client.getReadMetadata()).toMatchObject({ freshness: 'current', revision: 2 });
+  });
+
   it('retries an invalid identity after the configured delay and publishes only the valid ACK', async () => {
     vi.useFakeTimers();
     const client = new FoundryClient({

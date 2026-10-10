@@ -305,6 +305,51 @@ export function applyDocumentBroadcast(
   return applyToCollection(collection as Array<Record<string, unknown>>, action, result);
 }
 
+/** Whether a broadcast affecting cached documents could not be fully represented.
+ * Call after application: duplicate deletes are safe, but missing updates and
+ * synthetic actor deltas require a new authoritative snapshot.
+ */
+export function documentBroadcastRequiresRefresh(
+  worldData: WorldData,
+  broadcast: DocumentBroadcast,
+): boolean {
+  const { type, action, result, parentUuid } = broadcast;
+  if (result.length === 0) {
+    return false;
+  }
+  let collection: unknown;
+  if (parentUuid) {
+    const parentType = parentUuid.split('.')[0] ?? '';
+    if (!Object.hasOwn(TOP_LEVEL_COLLECTIONS, parentType)) {
+      return false;
+    }
+    const resolved = resolveParent(worldData, parentUuid);
+    const field = resolved && EMBEDDED_COLLECTIONS[resolved.parentType]?.[type];
+    if (!resolved || !field) {
+      return true;
+    }
+    collection = resolved.parent[field];
+  } else {
+    if (!Object.hasOwn(TOP_LEVEL_COLLECTIONS, type)) {
+      return false;
+    }
+    collection = worldData[TOP_LEVEL_COLLECTIONS[type] as keyof WorldData];
+  }
+  if (action === 'delete') {
+    return result.some((id) => typeof id !== 'string' || id.length === 0);
+  }
+  if (!Array.isArray(collection)) {
+    return true;
+  }
+  return result.some(
+    (doc) =>
+      !isRecord(doc) ||
+      typeof doc._id !== 'string' ||
+      doc._id.length === 0 ||
+      !collection.some((cached: unknown) => isRecord(cached) && cached._id === doc._id),
+  );
+}
+
 // ============================================================================
 // User presence (`userActivity`) — #218
 // ============================================================================

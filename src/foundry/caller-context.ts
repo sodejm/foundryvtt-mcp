@@ -52,9 +52,11 @@ export class CallerAuthorizationError extends McpError {
 
 export interface AuthorizedCallerState {
   readonly context: Readonly<TrustedCallerContext>;
-  readonly view: Readonly<WorldData>;
-  readonly spatialView: Readonly<SceneSpatialProjection>;
-  readonly authorizationFingerprint: string;
+  readonly getWorldView: (surface: ReadSurface) => Readonly<WorldData>;
+  readonly getSpatialView: () => Readonly<SceneSpatialProjection>;
+  readonly fingerprintFor: (surface: ReadSurface) => string;
+  readonly getSummary: () => Readonly<Record<string, number>>;
+  readonly snapshotId: string;
   readonly capturedAt: string;
 }
 

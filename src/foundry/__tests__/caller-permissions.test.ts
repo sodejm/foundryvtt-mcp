@@ -176,6 +176,193 @@ beforeEach(() => {
 });
 
 describe('delegated caller authorization', () => {
+  it('redacts secrets from world and actor-owned item descriptions while preserving GM data', async () => {
+    const { client, mock } = delegatedClient();
+    const visibleItem: WorldItem = {
+      _id: 'Item000000000001',
+      name: 'Visible item',
+      type: 'loot',
+      ownership: { default: 2 },
+      system: {
+        description: {
+          value: '<p>Public description</p><section class="secret">ITEM_SECRET</section>',
+        },
+      },
+    };
+    const visibleActor = actor(1, { default: 2 }, [visibleItem]);
+    const raw = snapshot({ actors: [visibleActor], items: [visibleItem] });
+    const before = structuredClone(raw);
+    await runAuthorized(client, mock, context(), raw, async () => {
+      const detail = await client.getItem(visibleItem._id);
+      expect(JSON.stringify(detail)).toContain('Public description');
+      expect(JSON.stringify(detail)).not.toContain('ITEM_SECRET');
+      expect(JSON.stringify(await client.searchItems({}))).not.toContain('ITEM_SECRET');
+      const world = client.getWorldData();
+      expect(JSON.stringify(world?.actors[0]?.items)).toContain('Public description');
+      expect(JSON.stringify(world?.actors[0]?.items)).not.toContain('ITEM_SECRET');
+      expect(JSON.stringify(world)).not.toContain('ITEM_SECRET');
+    });
+    expect(raw).toEqual(before);
+    await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
+      expect(JSON.stringify(await client.getItem(visibleItem._id))).toContain('ITEM_SECRET');
+      expect(JSON.stringify(client.getWorldData()?.actors[0]?.items)).toContain('ITEM_SECRET');
+    });
+  });
+
+  it('redacts actor biography secrets from player detail and section reads without changing GM data', async () => {
+    const { client, mock } = delegatedClient();
+    const visibleActor = actor(1, { default: 2 });
+    const biography = '<p>Public biography</p><section class="secret">BIOGRAPHY_SECRET</section>';
+    visibleActor.system = { details: { biography: { value: biography } } };
+    const raw = snapshot({ actors: [visibleActor] });
+    const before = structuredClone(raw);
+    await runAuthorized(client, mock, context(), raw, async () => {
+      const detail = await client.getActor(visibleActor._id);
+      expect(JSON.stringify(detail)).toContain('Public biography');
+      expect(JSON.stringify(detail)).not.toContain('BIOGRAPHY_SECRET');
+      expect(JSON.stringify(client.getActorSection(visibleActor._id, 'details'))).not.toContain(
+        'BIOGRAPHY_SECRET',
+      );
+      expect(JSON.stringify(client.getWorldData())).not.toContain('BIOGRAPHY_SECRET');
+    });
+    expect(raw).toEqual(before);
+    await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
+      expect(JSON.stringify(await client.getActor(visibleActor._id))).toContain('BIOGRAPHY_SECRET');
+    });
+  });
+
+  it('fails closed for blind chat without recipients while retaining GM authors and explicit recipients', async () => {
+    const { client, mock } = delegatedClient();
+    const raw = snapshot({
+      messages: [
+        message(1, PLAYER_TWO, { blind: true }),
+        message(2, PLAYER_TWO, { blind: true, whisper: [] }),
+        message(3, PLAYER_TWO, { blind: true, whisper: [PLAYER_ONE] }),
+        message(4, PLAYER_ONE, { blind: true }),
+        message(5, GM, { blind: true }),
+        message(6, PLAYER_TWO),
+      ],
+    });
+    await runAuthorized(client, mock, context(), raw, () => {
+      expect(client.getChatMessages(100).map((entry) => entry._id)).toEqual([
+        'Message000000003',
+        'Message000000006',
+      ]);
+      expect(client.getWorldSummary().messages).toBe(2);
+    });
+    await runAuthorized(client, mock, context({ userId: GM }), raw, () => {
+      expect(client.getChatMessages(100).map((entry) => entry._id)).toEqual([
+        'Message000000005',
+        'Message000000006',
+      ]);
+    });
+  });
+
+  it('keeps unrelated reads available when journal or spatial projections exceed their bounds', async () => {
+    const { client, mock } = delegatedClient();
+    const raw = snapshot({
+      actors: [actor(1, { default: 2 })],
+      messages: [message(1, PLAYER_TWO)],
+      journal: [
+        {
+          _id: 'Journal000000001',
+          name: 'Large journal',
+          ownership: { default: 2 },
+          pages: [
+            {
+              _id: 'JournalPage00001',
+              name: 'Large page',
+              type: 'text',
+              text: { content: 'x'.repeat(4 * 1024 * 1024 + 1) },
+            },
+          ],
+        },
+      ],
+      scenes: [
+        {
+          _id: 'Scene00000000001',
+          ownership: { default: 2 },
+          tokens: Array.from({ length: 10_001 }, (_, index) => ({
+            _id: `Token${String(index).padStart(11, '0')}`,
+            actorId: 'Actor00000000001',
+            x: 0,
+            y: 0,
+          })),
+        } as never,
+      ],
+    });
+    await runAuthorized(client, mock, context(), raw, async () => {
+      expect(client.getUsers().users).toHaveLength(1);
+      expect((await client.searchActors({})).total).toBe(1);
+      expect(client.getChatMessages()).toHaveLength(1);
+      expect(client.getWorldSummary()).toEqual({
+        actors: 1,
+        items: 0,
+        journals: 1,
+        users: 1,
+        messages: 1,
+      });
+      expect(() => client.getJournals()).toThrow('Caller is not authorized');
+      expect(() => client.listSceneTokens({ sceneId: 'Scene00000000001' })).toThrow(
+        'Scene spatial read unavailable',
+      );
+      expect(client.getUsers().users).toHaveLength(1);
+      expect((await client.searchActors({})).total).toBe(1);
+    });
+  });
+
+  it('clones the authorized ACK before constructing lazy projections and excludes extra fields', async () => {
+    const { client, mock } = delegatedClient();
+    const raw = Object.assign(snapshot({ actors: [actor(1, { default: 2 })] }), {
+      extensionState: { secret: 'EXTRA_PRIVATE_FIELD' },
+    });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = client.runWithCaller(context(), async () => {
+      entered();
+      await gate;
+      return client.getWorldData();
+    });
+    mock.worldAcks[0]?.(raw);
+    await started;
+    const rawActor = raw.actors[0];
+    if (!rawActor) {
+      throw new Error('Missing actor fixture');
+    }
+    rawActor.name = 'MUTATED_AFTER_AUTHORIZATION';
+    rawActor.ownership = { default: 0 };
+    release();
+    const view = await pending;
+    expect(view?.actors[0]?.name).toBe('Actor 1');
+    expect(JSON.stringify(view)).not.toContain('EXTRA_PRIVATE_FIELD');
+    expect(Object.isFrozen(view?.actors[0]?.system)).toBe(true);
+  });
+
+  it.each([
+    0,
+    -1,
+    101,
+    'all',
+    null,
+    Number.NaN,
+    1.5,
+  ])('rejects invalid chat getter limit %s before authorization', (limit) => {
+    const { client, mock } = delegatedClient();
+    expect(() => client.getChatMessages(limit as number)).toThrow(McpError);
+    try {
+      client.getChatMessages(limit as number);
+    } catch (error) {
+      expect(error).toMatchObject({ code: ErrorCode.InvalidParams });
+    }
+    expect(mock.worldAcks).toHaveLength(0);
+  });
+
   it('redacts nested journal secrets before every player read and content search', async () => {
     const { client, mock } = delegatedClient();
     const journalId = 'Journal000000001';
@@ -536,7 +723,9 @@ describe('delegated caller authorization', () => {
       sessionId: 'transport-session-one',
       revision: 1,
     });
-    expect(result.metadata.snapshotId).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.metadata.snapshotId).toMatch(
+      /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+    );
   });
 
   it('isolates concurrent callers and freezes projections without mutating the raw snapshot', async () => {

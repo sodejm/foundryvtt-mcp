@@ -194,13 +194,18 @@ describe('live delegated caller permissions', () => {
     ] as const) {
       actors.push((await create('Actor', { name: `${prefix} ${label}`, type: 'npc', ownership }))._id);
     }
-    visibleEmbedded = (await create('Item', { name: `${prefix} Inherited Gear`, type: 'loot', ownership: { default: -1 } }, `Actor.${actors[0]}`))._id;
+    await fixtureWriter().modifyDocument('Actor', 'update', { updates: [{
+      _id: actors[0],
+      'system.details.biography.value': '<p>Public actor biography</p><section class="secret">NEVER_PUBLIC_BIOGRAPHY</section>',
+    }] });
+    const description = { value: '<p>Public item description</p><section class="secret">NEVER_PUBLIC_ITEM_DESCRIPTION</section>' };
+    visibleEmbedded = (await create('Item', { name: `${prefix} Inherited Gear`, type: 'loot', ownership: { default: -1 }, system: { description } }, `Actor.${actors[0]}`))._id;
     secondVisibleEmbedded = (await create('Item', { name: `${prefix} Second Inherited Gear`, type: 'loot', ownership: { default: -1 }, system: { quantity: 0 } }, `Actor.${actors[0]}`))._id;
     secretEmbedded = (await create('Item', { name: `${prefix} Secret Gear`, type: 'loot', ownership: owner(b) }, `Actor.${actors[0]}`))._id;
     unidentifiedEmbedded = (await create('Item', { name: unidentifiedName, type: 'loot', ownership: { default: -1 }, system: { identified: false, price: { value: 5000, denomination: 'gp' }, rarity: 'legendary' } }, `Actor.${actors[0]}`))._id;
     unidentifiedWorld = (await create('Item', { name: unidentifiedName, type: 'loot', ownership: owner(a), system: { identified: false, price: { value: 5000, denomination: 'gp' }, rarity: 'legendary' } }))._id;
     for (const userId of [a, b]) {
-      items.push((await create('Item', { name: `${prefix} Item ${userId}`, type: 'loot', ownership: owner(userId) }))._id);
+      items.push((await create('Item', { name: `${prefix} Item ${userId}`, type: 'loot', ownership: owner(userId), system: { description } }))._id);
     }
     journalA = (await create('JournalEntry', { name: `${prefix} Journal A`, ownership: owner(a) }))._id;
     journals.push(journalA);
@@ -561,6 +566,33 @@ describe('live delegated caller permissions', () => {
     expect(markdown.total).toBe(1);
     token = 'gm';
     expect((await collectJournalPage(journalA, journalAInheritedPage, 'source')).content).toContain('NEVER_PUBLIC_JOURNAL_TAIL');
+  });
+
+  it('redacts actor and item HTML secrets in delegated reads while preserving GM source', async () => {
+    token = 'a';
+    const actorDetail = JSON.stringify(await call('get_actor_details', { actorId: actors[0] }));
+    expect(actorDetail).toContain('Public actor biography');
+    expect(actorDetail).not.toContain('NEVER_PUBLIC_BIOGRAPHY');
+    const itemDetail = JSON.stringify(await call('get_item_details', { itemId: items[0] }));
+    expect(itemDetail).toContain('Public item description');
+    expect(itemDetail).not.toContain('NEVER_PUBLIC_ITEM_DESCRIPTION');
+    expect(JSON.stringify(await call('search_items', { query: prefix }))).not.toContain('NEVER_PUBLIC_ITEM_DESCRIPTION');
+    const projected = await backend!.runWithCaller(context(a), () => backend!.getWorldData()!);
+    expect(JSON.stringify(projected)).not.toContain('NEVER_PUBLIC_BIOGRAPHY');
+    expect(JSON.stringify(projected)).not.toContain('NEVER_PUBLIC_ITEM_DESCRIPTION');
+    expect(JSON.stringify(projected.actors.find(actor => actor._id === actors[0])!.items)).toContain('Public item description');
+    token = 'gm';
+    expect(JSON.stringify(await call('get_actor_details', { actorId: actors[0] }))).toContain('NEVER_PUBLIC_BIOGRAPHY');
+    expect(JSON.stringify(await call('get_item_details', { itemId: items[0] }))).toContain('NEVER_PUBLIC_ITEM_DESCRIPTION');
+    const source = await backend!.runWithCaller(context(gm), () => backend!.getWorldData()!);
+    expect(JSON.stringify(source.actors.find(actor => actor._id === actors[0])!.items)).toContain('NEVER_PUBLIC_ITEM_DESCRIPTION');
+  });
+
+  it('rejects invalid chat limits through the built MCP transport', async () => {
+    token = 'a';
+    for (const limit of [0, -1, 101, 1.5]) {
+      expect((await toolError('get_chat_messages', { limit })).code).toBe(ErrorCode.InvalidParams);
+    }
   });
 
   it('withholds unidentified item identity and economy before player search and detail', async () => {

@@ -45,6 +45,7 @@ import {
   DIAGNOSTICS_UNAVAILABLE,
   RULES_LOOKUP_UNAVAILABLE,
 } from './capabilities.js';
+import { parseChatLimit } from './chat-contract.js';
 import { compendiumParamsSchema } from './compendium-contract.js';
 import { type DiceRollInput, diceRollOutputSchema, parseDiceRollInput } from './dice-contract.js';
 import {
@@ -127,6 +128,7 @@ import {
   applyDocumentBroadcast,
   applyUserActivity,
   type DocumentBroadcast,
+  documentBroadcastRequiresRefresh,
   parseDocumentBroadcast,
   parseUserActivity,
   type UserActivity,
@@ -280,29 +282,31 @@ const TOKEN_ACTOR_UUID_PATTERN =
  * Minimal Zod schema for the WorldData Socket.IO payload.
  * Validates the required top-level array fields; extra fields pass through.
  */
-const WorldDataSchema = z.object({
-  userId: z.string().min(1),
-  release: z.record(z.string(), z.unknown()),
-  world: z.object({ id: z.string().min(1) }).passthrough(),
-  system: z.object({ id: z.string().min(1) }).passthrough(),
-  modules: z.array(z.record(z.string(), z.unknown())),
-  demoMode: z.boolean(),
-  actors: z.array(z.unknown()),
-  scenes: z.array(z.unknown()),
-  items: z.array(z.unknown()),
-  journal: z.array(z.unknown()),
-  messages: z.array(z.unknown()),
-  combats: z.array(z.unknown()),
-  users: z.array(z.unknown()),
-  activeUsers: z.array(z.string()),
-  settings: z.array(z.unknown()),
-  macros: z.array(z.unknown()),
-  playlists: z.array(z.unknown()),
-  tables: z.array(z.unknown()),
-  folders: z.array(z.unknown()),
-  cards: z.array(z.unknown()),
-  packs: z.array(z.unknown()),
-});
+const WorldDataSchema = z
+  .object({
+    userId: z.string().min(1),
+    release: z.record(z.string(), z.unknown()),
+    world: z.object({ id: z.string().min(1) }).passthrough(),
+    system: z.object({ id: z.string().min(1) }).passthrough(),
+    modules: z.array(z.record(z.string(), z.unknown())),
+    demoMode: z.boolean(),
+    actors: z.array(z.unknown()),
+    scenes: z.array(z.unknown()),
+    items: z.array(z.unknown()),
+    journal: z.array(z.unknown()),
+    messages: z.array(z.unknown()),
+    combats: z.array(z.unknown()),
+    users: z.array(z.unknown()),
+    activeUsers: z.array(z.string()),
+    settings: z.array(z.unknown()),
+    macros: z.array(z.unknown()),
+    playlists: z.array(z.unknown()),
+    tables: z.array(z.unknown()),
+    folders: z.array(z.unknown()),
+    cards: z.array(z.unknown()),
+    packs: z.array(z.unknown()),
+  })
+  .passthrough();
 
 const MAX_REFRESH_EVENT_BUFFER = 1000;
 const OBSERVER_PERMISSION = 2;
@@ -413,7 +417,9 @@ function canReadChatMessage(message: WorldMessage, user: WorldUser): boolean {
   if (author === user._id) {
     return message.blind !== true || user.role >= GAMEMASTER_ROLE;
   }
-  return whisper.length === 0 || whisper.includes(user._id);
+  return message.blind === true
+    ? whisper.includes(user._id)
+    : whisper.length === 0 || whisper.includes(user._id);
 }
 
 function canReadItemIdentity(item: WorldItem, user: WorldUser): boolean {
@@ -433,23 +439,53 @@ function canReadItemIdentity(item: WorldItem, user: WorldUser): boolean {
   return true;
 }
 
-function projectWorldData(source: WorldData, user: WorldUser): WorldData {
-  const actors = source.actors
+function projectItem(item: WorldItem, user: WorldUser): WorldItem {
+  const result = cloneValue(item);
+  if (user.role < GAMEMASTER_ROLE) {
+    const description = result.system.description;
+    if (typeof description === 'object' && description !== null && !Array.isArray(description)) {
+      const value = Reflect.get(description, 'value');
+      if (typeof value === 'string') {
+        Reflect.set(description, 'value', redactHtmlSecrets(value));
+      }
+    }
+  }
+  return result;
+}
+
+function projectWorldData(source: WorldData, user: WorldUser, surface: ReadSurface): WorldData {
+  const includes = (requested: ReadSurface) => surface === 'search' || surface === requested;
+  const actors = (includes('actors') ? source.actors : [])
     .filter((actor) => canObserve(actor.ownership, user))
     .map((actor) => {
       const actorLevel = permissionLevel(actor.ownership, user._id);
       const result = cloneValue(actor);
+      if (user.role < GAMEMASTER_ROLE) {
+        const details = result.system.details;
+        if (typeof details === 'object' && details !== null && !Array.isArray(details)) {
+          const biography = Reflect.get(details, 'biography');
+          if (typeof biography === 'object' && biography !== null && !Array.isArray(biography)) {
+            const value = Reflect.get(biography, 'value');
+            if (typeof value === 'string') {
+              Reflect.set(biography, 'value', redactHtmlSecrets(value));
+            }
+          }
+        }
+      }
       if (Array.isArray(result.items)) {
-        result.items = result.items.filter(
-          (item) => canObserve(item.ownership, user, actorLevel) && canReadItemIdentity(item, user),
-        );
+        result.items = result.items
+          .filter(
+            (item) =>
+              canObserve(item.ownership, user, actorLevel) && canReadItemIdentity(item, user),
+          )
+          .map((item) => projectItem(item, user));
       }
       return result;
     });
-  const items = source.items
+  const items = (includes('items') ? source.items : [])
     .filter((item) => canObserve(item.ownership, user) && canReadItemIdentity(item, user))
-    .map(cloneValue);
-  const journal = source.journal
+    .map((item) => projectItem(item, user));
+  const journal = (includes('journals') ? source.journal : [])
     .filter((entry) => canObserve(entry.ownership, user))
     .map((entry) => {
       const entryLevel = permissionLevel(entry.ownership, user._id);
@@ -471,14 +507,19 @@ function projectWorldData(source: WorldData, user: WorldUser): WorldData {
       }
       return result;
     });
-  const messages = source.messages
+  const messages = (includes('chat') ? source.messages : [])
     .filter((message) => canReadChatMessage(message, user))
     .map((message) => {
       const result = cloneValue(message);
       result.user = message.author ?? message.user;
       return result;
     });
-  const ownUser = sanitizeUser(user, new Set(actors.map((actor) => actor._id)));
+  const ownUser = sanitizeUser(
+    user,
+    new Set(
+      source.actors.filter((actor) => canObserve(actor.ownership, user)).map((actor) => actor._id),
+    ),
+  );
   return {
     userId: user._id,
     release: cloneValue(source.release),
@@ -746,7 +787,7 @@ export class FoundryClient {
     if (!DELEGATED_READ_SURFACES.has(surface)) {
       throw new CallerAuthorizationError();
     }
-    return this.requireDelegatedState().view as WorldData;
+    return this.requireDelegatedState().getWorldView(surface) as WorldData;
   }
 
   async runWithCaller<T>(
@@ -778,7 +819,7 @@ export class FoundryClient {
       ) {
         throw new CallerAuthorizationError();
       }
-      const snapshot = parsed.data as unknown as WorldData;
+      const snapshot = cloneValue(parsed.data) as unknown as WorldData;
       if (snapshot.userId !== this.socketUserId || snapshot.world.id !== validated.worldId) {
         throw new CallerAuthorizationError();
       }
@@ -795,16 +836,61 @@ export class FoundryClient {
       ) {
         throw new CallerAuthorizationError();
       }
-      const view = deepFreeze(projectWorldData(snapshot, caller));
-      const spatialView = deepFreeze(projectSceneSpatial(snapshot, caller));
-      const authorizationFingerprint = createHash('sha256')
-        .update(JSON.stringify({ context: validated, view, spatialView }))
-        .digest('hex');
+      const views = new Map<ReadSurface, Readonly<WorldData>>();
+      const fingerprints = new Map<ReadSurface, string>();
+      let spatialView: Readonly<SceneSpatialProjection> | undefined;
+      const project = <V>(operation: () => V): V => {
+        try {
+          return operation();
+        } catch {
+          throw new CallerAuthorizationError();
+        }
+      };
+      const getWorldView = (surface: ReadSurface): Readonly<WorldData> =>
+        project(() => {
+          let view = views.get(surface);
+          if (!view) {
+            view = deepFreeze(projectWorldData(snapshot, caller, surface));
+            views.set(surface, view);
+          }
+          return view;
+        });
+      const getSpatialView = (): Readonly<SceneSpatialProjection> =>
+        project(() => {
+          spatialView ??= deepFreeze(projectSceneSpatial(snapshot, caller));
+          return spatialView;
+        });
       state = Object.freeze({
         context: validated,
-        view,
-        spatialView,
-        authorizationFingerprint,
+        getWorldView,
+        getSpatialView,
+        fingerprintFor: (surface: ReadSurface) =>
+          project(() => {
+            let fingerprint = fingerprints.get(surface);
+            if (!fingerprint) {
+              const view = surface === 'scene-spatial' ? getSpatialView() : getWorldView(surface);
+              fingerprint = createHash('sha256')
+                .update(JSON.stringify({ context: validated, surface, view }))
+                .digest('hex');
+              fingerprints.set(surface, fingerprint);
+            }
+            return fingerprint;
+          }),
+        getSummary: () =>
+          project(() =>
+            Object.freeze({
+              actors: snapshot.actors.filter((actor) => canObserve(actor.ownership, caller)).length,
+              items: snapshot.items.filter(
+                (item) => canObserve(item.ownership, caller) && canReadItemIdentity(item, caller),
+              ).length,
+              journals: snapshot.journal.filter((entry) => canObserve(entry.ownership, caller))
+                .length,
+              users: 1,
+              messages: snapshot.messages.filter((message) => canReadChatMessage(message, caller))
+                .length,
+            }),
+          ),
+        snapshotId: randomUUID(),
         capturedAt: new Date().toISOString(),
       });
     } catch (error) {
@@ -1008,6 +1094,9 @@ export class FoundryClient {
 
     try {
       const applied = applyDocumentBroadcast(this.worldData, broadcast);
+      if (documentBroadcastRequiresRefresh(this.worldData, broadcast)) {
+        this.worldDataStale = true;
+      }
       if (applied) {
         this.noteSnapshotMutation();
       }
@@ -1017,6 +1106,7 @@ export class FoundryClient {
           : `Ignored ${broadcast.action} ${broadcast.type} broadcast (not cached)`,
       );
     } catch (error) {
+      this.worldDataStale = true;
       logger.warn('Failed to apply document broadcast to cached worldData', {
         type: broadcast.type,
         action: broadcast.action,
@@ -1228,7 +1318,7 @@ export class FoundryClient {
         freshness: 'current',
         worldId: state.context.worldId,
         sessionId: state.context.sessionId,
-        snapshotId: state.authorizationFingerprint,
+        snapshotId: state.snapshotId,
         revision: 1,
         capturedAt: state.capturedAt,
         observedAt: state.capturedAt,
@@ -1406,6 +1496,9 @@ export class FoundryClient {
         for (const event of buffer.events) {
           if (event.kind === 'document') {
             applyDocumentBroadcast(candidate, event.value);
+            if (documentBroadcastRequiresRefresh(candidate, event.value)) {
+              throw new Error('World snapshot contains an unapplied document broadcast');
+            }
           } else {
             applyUserActivity(candidate, event.value);
           }
@@ -1486,7 +1579,11 @@ export class FoundryClient {
   // Actor methods
   // ==========================================================================
 
-  private paginationContext(kind: string, filters: Record<string, unknown>): string {
+  private paginationContext(
+    kind: string,
+    filters: Record<string, unknown>,
+    surface: ReadSurface,
+  ): string {
     if (this.isDelegatedMode()) {
       const state = this.requireDelegatedState();
       return JSON.stringify({
@@ -1496,7 +1593,7 @@ export class FoundryClient {
         userId: state.context.userId,
         worldId: state.context.worldId,
         sessionId: state.context.sessionId,
-        authorizationFingerprint: state.authorizationFingerprint,
+        authorizationFingerprint: state.fingerprintFor(surface),
       });
     }
     const world = this.config.apiKey
@@ -1687,7 +1784,7 @@ export class FoundryClient {
     const filters = { query: params.query, type: params.type };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
-    const context = this.paginationContext('actor-search', filters);
+    const context = this.paginationContext('actor-search', filters, 'actors');
     let records: FoundryActor[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
@@ -1816,7 +1913,7 @@ export class FoundryClient {
       type: params.type,
       contentFingerprint,
     };
-    const context = this.paginationContext('actor-item-list', filters);
+    const context = this.paginationContext('actor-item-list', filters, 'actors');
     let records: ActorItemSummary[] | undefined;
     if (params.cursor === undefined) {
       const query = params.query?.toLocaleLowerCase();
@@ -1958,7 +2055,7 @@ export class FoundryClient {
     const filters = { query: params.query, type: params.type, rarity: params.rarity };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
-    const context = this.paginationContext('item-search', filters);
+    const context = this.paginationContext('item-search', filters, 'items');
     let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
       let identity: ItemEconomyIdentity;
@@ -2578,7 +2675,7 @@ export class FoundryClient {
       throw new Error('Structured scene spatial reads are unsupported by the REST backend');
     }
     if (this.isDelegatedMode()) {
-      return this.requireDelegatedState().spatialView;
+      return this.requireDelegatedState().getSpatialView();
     }
     const source = this.requireWorldData();
     const callers = source.users.filter((candidate) => candidate._id === source.userId);
@@ -2637,13 +2734,17 @@ export class FoundryClient {
     const contentFingerprint = createHash('sha256')
       .update(JSON.stringify({ scene: selected.scene, tokens: selected.tokens }))
       .digest('hex');
-    const context = this.paginationContext('scene-token-list', {
-      sceneSelector: params.sceneId === undefined ? 'active' : 'explicit',
-      requestedSceneId: params.sceneId,
-      resolvedSceneId: selected.scene.id,
-      query: params.query,
-      contentFingerprint,
-    });
+    const context = this.paginationContext(
+      'scene-token-list',
+      {
+        sceneSelector: params.sceneId === undefined ? 'active' : 'explicit',
+        requestedSceneId: params.sceneId,
+        resolvedSceneId: selected.scene.id,
+        query: params.query,
+        contentFingerprint,
+      },
+      'scene-spatial',
+    );
     let records: SceneTokenSummary[] | undefined;
     if (params.cursor === undefined) {
       const query = params.query?.normalize('NFKC').toLowerCase();
@@ -2786,7 +2887,8 @@ export class FoundryClient {
   // ==========================================================================
 
   getChatMessages(limit = 20): WorldMessage[] {
-    return this.readWorld('chat').messages.slice(-limit);
+    const boundedLimit = parseChatLimit(limit);
+    return this.readWorld('chat').messages.slice(-boundedLimit);
   }
 
   // ==========================================================================
@@ -2833,7 +2935,7 @@ export class FoundryClient {
     }
     this.assertSocketPaginationAuthorized();
     const filters = { query: params.query };
-    const context = this.paginationContext('journal-search', filters);
+    const context = this.paginationContext('journal-search', filters, 'journals');
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       records = sortCollectionRecords(
@@ -2876,10 +2978,14 @@ export class FoundryClient {
     const result = this.paginator.paginate(
       prepared.pages.map(journalPageSummary),
       this.paginationParams(validated),
-      this.paginationContext('journal-summary', {
-        journalId: prepared.id,
-        digest: prepared.digest,
-      }),
+      this.paginationContext(
+        'journal-summary',
+        {
+          journalId: prepared.id,
+          digest: prepared.digest,
+        },
+        'journals',
+      ),
       this.getReadMetadata(),
       JOURNAL_DEFAULT_PAGE_LIMIT,
     );
@@ -2919,12 +3025,16 @@ export class FoundryClient {
     const result = this.paginator.paginate(
       content.chunks,
       this.paginationParams(validated),
-      this.paginationContext('journal-page-content', {
-        journalId: prepared.id,
-        pageId: page.metadata.id,
-        format,
-        digest: prepared.digest,
-      }),
+      this.paginationContext(
+        'journal-page-content',
+        {
+          journalId: prepared.id,
+          pageId: page.metadata.id,
+          format,
+          digest: prepared.digest,
+        },
+        'journals',
+      ),
       this.getReadMetadata(),
       JOURNAL_DEFAULT_PAGE_LIMIT,
     );
@@ -3038,7 +3148,7 @@ export class FoundryClient {
     this.assertSocketPaginationAuthorized();
     const worldData = this.readWorld('search');
     const filters = { query: params.query };
-    const context = this.paginationContext('world-search', filters);
+    const context = this.paginationContext('world-search', filters, 'search');
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       const query = (params.query ?? '').toLowerCase();
@@ -3098,7 +3208,7 @@ export class FoundryClient {
       );
     }
 
-    const context = this.paginationContext('collection', { collection });
+    const context = this.paginationContext('collection', { collection }, surface);
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
@@ -3175,16 +3285,10 @@ export class FoundryClient {
   // ==========================================================================
 
   getWorldSummary(): Record<string, number> {
-    const worldData = this.readWorld('world-summary');
     if (this.isDelegatedMode()) {
-      return {
-        actors: worldData.actors.length,
-        items: worldData.items.length,
-        journals: worldData.journal.length,
-        users: worldData.users.length,
-        messages: worldData.messages.length,
-      };
+      return { ...this.requireDelegatedState().getSummary() };
     }
+    const worldData = this.readWorld('world-summary');
     return {
       actors: worldData.actors.length,
       items: worldData.items.length,
