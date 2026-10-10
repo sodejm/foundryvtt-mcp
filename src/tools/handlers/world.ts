@@ -17,26 +17,30 @@ export async function handleSearchWorld(
   foundryClient: FoundryClient,
 ) {
   const params = parseReadInput(worldSearchInputSchema, args);
-  return withToolError('search world', async () => {
-    const page = await foundryClient.searchWorldPage(params);
-    const structuredContent = collectionSearchSchema.parse({
-      schemaVersion: 3,
-      scope: 'world',
-      ...page,
-    });
-    const formatted = structuredContent.records
-      .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
-      .join('\n');
-    return boundedReadResponse({
-      structuredContent,
-      content: [
-        {
-          type: 'text' as const,
-          text: `**World Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
-        },
-      ],
-    });
-  });
+  return withToolError(
+    'search world',
+    async () => {
+      const page = await foundryClient.searchWorldPage(params);
+      const structuredContent = collectionSearchSchema.parse({
+        schemaVersion: 3,
+        scope: 'world',
+        ...page,
+      });
+      const formatted = structuredContent.records
+        .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
+        .join('\n');
+      return boundedReadResponse({
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `**World Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
+          },
+        ],
+      });
+    },
+    foundryClient,
+  );
 }
 
 export async function handleGetWorldSummary(

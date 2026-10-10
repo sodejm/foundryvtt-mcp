@@ -2,14 +2,19 @@
 import type { FoundryClient } from '../../src/foundry/client.js';
 import { createConnectedClient } from './setup.js';
 
-type DocumentType = 'Actor' | 'Scene' | 'Combat';
+type DocumentType = 'Actor' | 'Item' | 'Scene' | 'Combat';
 type DocumentRecord = Record<string, unknown> & { _id: string };
 type FixtureWriter = {
   modifyDocument(
     type: string,
-    action: 'create' | 'delete',
+    action: 'create',
     operation: Record<string, unknown>,
   ): Promise<DocumentRecord[]>;
+  modifyDocument(
+    type: string,
+    action: 'delete',
+    operation: Record<string, unknown>,
+  ): Promise<string[]>;
 };
 
 export class WorldFixture {
@@ -20,9 +25,10 @@ export class WorldFixture {
   static async connect(): Promise<WorldFixture> {
     const client = await createConnectedClient({ writeEnabled: true });
     const world = client.getWorldData();
-    if (world?.world.id !== 'test1world' || world.system.id !== 'dnd5e') {
+    const expectedWorld = process.env.FOUNDRY_TEST_WORLD_ID ?? 'test1world';
+    if (world?.world.id !== expectedWorld || world.system.id !== 'dnd5e') {
       await client.disconnect();
-      throw new Error('Mutation fixtures require the disposable dnd5e test1world');
+      throw new Error(`Mutation fixtures require the disposable dnd5e world ${expectedWorld}`);
     }
     return new WorldFixture(client);
   }
@@ -60,6 +66,15 @@ export class WorldFixture {
     )._id;
   }
 
+  async delete(type: DocumentType, id: string): Promise<void> {
+    if (!this.owned.get(type)?.has(id)) throw new Error('Cannot delete an unowned fixture');
+    const result = await this.writer().modifyDocument(type, 'delete', { ids: [id] });
+    if (!result.includes(id)) {
+      throw new Error(`Foundry did not delete the owned ${type} fixture`);
+    }
+    this.forget(type, id);
+  }
+
   async createSceneWithToken(actorId: string): Promise<{ sceneId: string; tokenId: string }> {
     const scene = await this.create('Scene', {
       name: `${this.prefix} Scene`,
@@ -82,7 +97,11 @@ export class WorldFixture {
       for (const [type, ids] of [...this.owned].reverse()) {
         if (ids.size === 0) continue;
         try {
-          await this.writer().modifyDocument(type, 'delete', { ids: [...ids] });
+          const deleted = await this.writer().modifyDocument(type, 'delete', { ids: [...ids] });
+          if ([...ids].some(id => !deleted.includes(id))) {
+            throw new Error(`Foundry did not delete every owned ${type} fixture`);
+          }
+          ids.clear();
         } catch (error) {
           errors.push(error);
         }

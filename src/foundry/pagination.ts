@@ -1,6 +1,10 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { WorldReadMetadata } from './freshness.js';
 
+export class PaginationCursorError extends Error {
+  override readonly name = 'PaginationCursorError';
+}
+
 export interface PaginationParams {
   limit?: number;
   cursor?: string;
@@ -156,20 +160,24 @@ export class SnapshotPaginator {
     if (params.cursor !== undefined) {
       const payload = this.decodeCursor(params.cursor);
       if (payload.expiresAt <= now) {
-        throw new Error('Pagination cursor has expired');
+        throw new PaginationCursorError('Pagination cursor has expired');
       }
       const stored = this.snapshots.get(payload.snapshotId) as Snapshot<T> | undefined;
       if (!stored) {
-        throw new Error('Pagination snapshot is no longer available');
+        throw new PaginationCursorError('Pagination snapshot is no longer available');
       }
       if (stored.expiresAt !== payload.expiresAt) {
-        throw new Error('Pagination cursor does not match its snapshot');
+        throw new PaginationCursorError('Pagination cursor does not match its snapshot');
       }
       if (payload.contextHash !== contextHash || stored.contextHash !== contextHash) {
-        throw new Error('Pagination cursor does not match the current query, world, or caller');
+        throw new PaginationCursorError(
+          'Pagination cursor does not match the current query, world, or caller',
+        );
       }
       if (params.limit !== undefined && params.limit !== stored.limit) {
-        throw new Error('Pagination cursor limit does not match the original request');
+        throw new PaginationCursorError(
+          'Pagination cursor limit does not match the original request',
+        );
       }
       this.validateLimit(stored.limit);
       if (
@@ -177,7 +185,7 @@ export class SnapshotPaginator {
         payload.offset <= 0 ||
         payload.offset >= stored.records.length
       ) {
-        throw new Error('Pagination cursor contains an invalid offset');
+        throw new PaginationCursorError('Pagination cursor contains an invalid offset');
       }
       snapshot = stored;
       offset = payload.offset;
@@ -288,15 +296,15 @@ export class SnapshotPaginator {
   private decodeCursor(cursor: string): CursorPayload {
     const parts = cursor.split('.');
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      throw new Error('Pagination cursor is malformed');
+      throw new PaginationCursorError('Pagination cursor is malformed');
     }
     const expected = createHmac('sha256', this.secret).update(parts[0]).digest();
     if (!/^[A-Za-z0-9_-]+$/.test(parts[1])) {
-      throw new Error('Pagination cursor is malformed');
+      throw new PaginationCursorError('Pagination cursor is malformed');
     }
     const supplied = Buffer.from(parts[1], 'base64url');
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-      throw new Error('Pagination cursor signature is invalid');
+      throw new PaginationCursorError('Pagination cursor signature is invalid');
     }
     try {
       const payload = JSON.parse(
@@ -313,7 +321,7 @@ export class SnapshotPaginator {
       }
       return payload;
     } catch {
-      throw new Error('Pagination cursor payload is invalid');
+      throw new PaginationCursorError('Pagination cursor payload is invalid');
     }
   }
 

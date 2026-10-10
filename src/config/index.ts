@@ -50,6 +50,26 @@ const ConfigSchema = z.object({
         }
       }, 'URL validation failed'),
     apiKey: z.string().optional(),
+    restUrl: z
+      .string()
+      .url()
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return (
+            ['http:', 'https:'].includes(url.protocol) &&
+            !url.username &&
+            !url.password &&
+            !url.search &&
+            !url.hash
+          );
+        } catch {
+          return false;
+        }
+      }, 'REST relay URL must use HTTP or HTTPS without credentials, query, or fragment')
+      .optional(),
+    restApiKey: z.string().optional(),
+    restClientId: z.string().optional(),
     username: z.string().optional(),
     password: z.string().optional(),
     userId: z.string().optional(),
@@ -58,6 +78,7 @@ const ConfigSchema = z.object({
     retryAttempts: z.number().default(3),
     retryDelay: z.number().default(1000),
     writeEnabled: z.boolean().default(false),
+    authorizationMode: z.enum(['service-identity', 'delegated']).default('service-identity'),
   }),
 
   cache: z.object({
@@ -101,9 +122,13 @@ function loadConfig(): Config {
     foundry: {
       url: process.env.FOUNDRY_URL,
       apiKey: process.env.FOUNDRY_API_KEY,
+      restUrl: process.env.FOUNDRY_REST_URL,
+      restApiKey: process.env.FOUNDRY_REST_API_KEY,
+      restClientId: process.env.FOUNDRY_REST_CLIENT_ID,
       username: process.env.FOUNDRY_USERNAME,
       password: process.env.FOUNDRY_PASSWORD,
       userId: process.env.FOUNDRY_USER_ID,
+      authorizationMode: process.env.FOUNDRY_AUTHORIZATION_MODE,
       socketPath: process.env.FOUNDRY_SOCKET_PATH,
       timeout: process.env.FOUNDRY_TIMEOUT ? parseInt(process.env.FOUNDRY_TIMEOUT, 10) : undefined,
       retryAttempts: process.env.FOUNDRY_RETRY_ATTEMPTS
