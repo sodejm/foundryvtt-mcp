@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { WorldReadMetadata } from './freshness.js';
 
 export class PaginationCursorError extends Error {
@@ -277,7 +277,10 @@ export class SnapshotPaginator {
 
   private hashContext(context: unknown): string {
     const serialized = typeof context === 'string' ? context : JSON.stringify(context);
-    return createHash('sha256').update(serialized).digest('base64url');
+    return createHmac('sha256', this.secret)
+      .update('foundryvtt-mcp:pagination-context:v1\0')
+      .update(serialized)
+      .digest('base64url');
   }
 
   private encodeCursor(snapshot: Snapshot<unknown>, offset: number): string {
