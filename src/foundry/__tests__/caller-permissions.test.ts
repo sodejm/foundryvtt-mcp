@@ -2,7 +2,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TrustedCallerContext } from '../caller-context.js';
-import type { WorldActor, WorldData, WorldMessage, WorldUser } from '../types.js';
+import type { WorldActor, WorldData, WorldItem, WorldMessage, WorldUser } from '../types.js';
 
 vi.mock('axios');
 vi.mock('socket.io-client');
@@ -176,6 +176,145 @@ beforeEach(() => {
 });
 
 describe('delegated caller authorization', () => {
+  it('redacts nested journal secrets before every player read and content search', async () => {
+    const { client, mock } = delegatedClient();
+    const journalId = 'Journal000000001';
+    const htmlPageId = 'JournalPage00001';
+    const markdownPageId = 'JournalPage00002';
+    const secret =
+      '<section CLASS = secret><section>NEVER_PUBLIC</section>NEVER_PUBLIC_TAIL</section>';
+    const raw = snapshot({
+      journal: [
+        {
+          _id: journalId,
+          name: 'Visible journal',
+          ownership: { default: 2 },
+          pages: [
+            {
+              _id: htmlPageId,
+              name: 'HTML',
+              type: 'text',
+              text: { format: 1, content: `<p>Visible</p>${secret}` },
+            },
+            {
+              _id: markdownPageId,
+              name: 'Markdown',
+              type: 'text',
+              text: { format: 2, markdown: `**Markdown needle**\n${secret}` },
+            },
+          ],
+        },
+      ],
+    });
+    const before = structuredClone(raw);
+    await runAuthorized(client, mock, context(), raw, async () => {
+      expect(JSON.stringify(client.getWorldData())).not.toContain('NEVER_PUBLIC');
+      expect(JSON.stringify(client.getJournals())).not.toContain('NEVER_PUBLIC');
+      expect(client.searchJournals('NEVER_PUBLIC')).toEqual([]);
+      expect((await client.searchJournalsPage({ query: 'NEVER_PUBLIC' })).total).toBe(0);
+      expect(
+        (await client.searchJournalsPage({ query: 'Markdown needle' })).records.map(
+          (record) => record.id,
+        ),
+      ).toEqual([journalId]);
+      expect(JSON.stringify(await client.getJournalSummaryPage({ journalId }))).not.toContain(
+        'NEVER_PUBLIC',
+      );
+      for (const format of ['text', 'source'] as const) {
+        const html = await client.getJournalPageContent({ journalId, pageId: htmlPageId, format });
+        expect(html.chunks.map((chunk) => chunk.content).join('')).toBe(
+          format === 'source' ? '<p>Visible</p>' : 'Visible',
+        );
+        const markdown = await client.getJournalPageContent({
+          journalId,
+          pageId: markdownPageId,
+          format,
+        });
+        expect(markdown.chunks.map((chunk) => chunk.content).join('')).toBe(
+          '**Markdown needle**\n',
+        );
+      }
+    });
+    expect(raw).toEqual(before);
+    await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
+      expect(JSON.stringify(client.getJournals())).toContain('NEVER_PUBLIC_TAIL');
+      expect(
+        (await client.getJournalPageContent({ journalId, pageId: htmlPageId, format: 'source' }))
+          .chunks[0]?.content,
+      ).toContain('NEVER_PUBLIC_TAIL');
+    });
+  });
+
+  it.each([
+    'dnd5e',
+    'pf2e',
+  ])('filters %s unidentified and misidentified items before player counts, search and detail', async (systemId) => {
+    const { client, mock } = delegatedClient();
+    const identity: WorldItem = {
+      _id: 'Item000000000001',
+      name: 'Visible equipment',
+      type: 'equipment',
+      ownership: { default: 2 },
+      system: { identified: true, identification: { status: 'identified' }, quantity: 0 },
+    };
+    const hidden: WorldItem[] = [
+      {
+        ...identity,
+        _id: 'Item000000000002',
+        name: 'NEVER_PUBLIC DND5E',
+        img: 'secret.webp',
+        system: {
+          identified: false,
+          price: { value: 5000, denomination: 'gp' },
+          rarity: 'legendary',
+        },
+      },
+      {
+        ...identity,
+        _id: 'Item000000000003',
+        name: 'NEVER_PUBLIC PF2E',
+        system: { identification: { status: 'unidentified' }, price: { value: { gp: 5000 } } },
+      },
+      {
+        ...identity,
+        _id: 'Item000000000004',
+        name: 'NEVER_PUBLIC MISIDENTIFIED',
+        system: { identification: { status: 'misidentified' }, rarity: 'unique' },
+      },
+    ];
+    const actorData = actor(1, { default: 2 }, [identity, ...hidden]);
+    const raw = snapshot({
+      system: { id: systemId },
+      actors: [actorData],
+      items: [identity, ...hidden],
+    });
+    const before = structuredClone(raw);
+    const actorId = actorData._id;
+    await runAuthorized(client, mock, context(), raw, async () => {
+      expect(client.getWorldSummary().items).toBe(1);
+      expect(JSON.stringify(client.getWorldData())).not.toContain('NEVER_PUBLIC');
+      expect(client.listActorItems({ actorId }).total).toBe(1);
+      expect(client.listActorItems({ actorId, query: 'NEVER_PUBLIC' }).total).toBe(0);
+      expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(0);
+      expect((await client.searchItems({})).total).toBe(1);
+      for (const item of hidden) {
+        expect(() => client.getActorItem(actorId, item._id)).toThrow('Actor item read unavailable');
+        await expect(client.getItem(item._id)).rejects.toThrow();
+      }
+    });
+    expect(raw).toEqual(before);
+    await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
+      expect(client.listActorItems({ actorId }).total).toBe(4);
+      expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(3);
+      for (const item of hidden) {
+        expect(client.getActorItem(actorId, item._id).item.name).toBe(item.name);
+      }
+    });
+    const service = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+    Reflect.set(service, 'worldData', raw);
+    expect(service.getWorldData()).toBe(raw);
+  });
+
   it('preserves service-identity reads as the compatibility default', () => {
     const client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
     const raw = snapshot({ actors: [actor(1, { default: 0 })] });

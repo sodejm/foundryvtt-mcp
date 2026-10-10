@@ -53,6 +53,7 @@ import {
   parseDiceFormula,
 } from './dice-formula.js';
 import type { WorldReadMetadata } from './freshness.js';
+import { redactHtmlSecrets } from './html-secret-redaction.js';
 import type { ItemEconomy } from './item-economy-contract.js';
 import { itemEconomyAliases, restItemSystemIdentity } from './item-economy-read.js';
 import {
@@ -415,6 +416,23 @@ function canReadChatMessage(message: WorldMessage, user: WorldUser): boolean {
   return whisper.length === 0 || whisper.includes(user._id);
 }
 
+function canReadItemIdentity(item: WorldItem, user: WorldUser): boolean {
+  if (user.role >= GAMEMASTER_ROLE) {
+    return true;
+  }
+  if (item.system.identified === false) {
+    return false;
+  }
+  const identification = item.system.identification;
+  if (typeof identification === 'object' && identification !== null) {
+    const status = Reflect.get(identification, 'status');
+    if (status !== undefined && status !== 'identified') {
+      return false;
+    }
+  }
+  return true;
+}
+
 function projectWorldData(source: WorldData, user: WorldUser): WorldData {
   const actors = source.actors
     .filter((actor) => canObserve(actor.ownership, user))
@@ -422,11 +440,15 @@ function projectWorldData(source: WorldData, user: WorldUser): WorldData {
       const actorLevel = permissionLevel(actor.ownership, user._id);
       const result = cloneValue(actor);
       if (Array.isArray(result.items)) {
-        result.items = result.items.filter((item) => canObserve(item.ownership, user, actorLevel));
+        result.items = result.items.filter(
+          (item) => canObserve(item.ownership, user, actorLevel) && canReadItemIdentity(item, user),
+        );
       }
       return result;
     });
-  const items = source.items.filter((item) => canObserve(item.ownership, user)).map(cloneValue);
+  const items = source.items
+    .filter((item) => canObserve(item.ownership, user) && canReadItemIdentity(item, user))
+    .map(cloneValue);
   const journal = source.journal
     .filter((entry) => canObserve(entry.ownership, user))
     .map((entry) => {
@@ -434,6 +456,18 @@ function projectWorldData(source: WorldData, user: WorldUser): WorldData {
       const result = cloneValue(entry);
       if (Array.isArray(result.pages)) {
         result.pages = result.pages.filter((page) => canObserve(page.ownership, user, entryLevel));
+        if (user.role < GAMEMASTER_ROLE) {
+          for (const page of result.pages) {
+            if (page.text) {
+              for (const field of ['content', 'markdown'] as const) {
+                const source = page.text[field];
+                if (typeof source === 'string') {
+                  page.text[field] = redactHtmlSecrets(source);
+                }
+              }
+            }
+          }
+        }
       }
       return result;
     });
@@ -2783,7 +2817,9 @@ export class FoundryClient {
         return true;
       }
       return j.pages?.some(
-        (p) => p.name.toLowerCase().includes(q) || p.text?.content?.toLowerCase().includes(q),
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.text?.format === 2 ? p.text.markdown : p.text?.content)?.toLowerCase().includes(q),
       );
     });
   }
@@ -3202,7 +3238,7 @@ export class FoundryClient {
       typeof restClientId === 'string' &&
       restClientId.trim().length > 0;
     const partial = configured.some((value) => value !== undefined) && !complete;
-    if (input.engine !== 'local') {
+    if (input.engine === 'foundry') {
       if (partial) {
         throw new Error(
           'Configure all FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID for dice.',
@@ -3217,7 +3253,7 @@ export class FoundryClient {
         throw new Error('Foundry dice REST transport is not configured.');
       }
     }
-    const native = input.engine !== 'local' && complete;
+    const native = input.engine === 'foundry' && complete;
     const result = native
       ? await new DiceRestAdapter({
           baseUrl: restUrl,
@@ -3238,7 +3274,12 @@ export class FoundryClient {
       ...(input.reason === undefined ? {} : { reason: input.reason }),
       fallback:
         input.engine === 'auto' && !native
-          ? { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' }
+          ? {
+              requestedEngine: 'auto',
+              reason: complete
+                ? 'foundry-execution-not-requested'
+                : 'foundry-transport-not-configured',
+            }
           : null,
     });
   }

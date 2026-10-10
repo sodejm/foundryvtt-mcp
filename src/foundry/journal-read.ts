@@ -108,7 +108,7 @@ export class JournalReadUnavailableError extends Error {
 
 export interface PreparedJournalPage {
   metadata: JournalPageMetadata;
-  /** Exact stored source for text pages; null for non-text pages. */
+  /** Caller-authorized source for text pages; null for non-text pages. */
   source: string | null;
   /** Inert, displayable text for text pages; null for non-text pages. */
   text: string | null;

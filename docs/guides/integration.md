@@ -413,7 +413,7 @@ Source capacity is bounded to 10,000 scenes, actors and tokens per scene.
 
 Delegated reads require scene OBSERVER permission and evaluate token and actor
 visibility before counts, pagination or serialization. Players cannot retrieve
-hidden tokens, secret dispositions or tokens whose linked/synthetic actors are
+hidden tokens or tokens whose linked/synthetic actors are
 inaccessible. Actorless visible tokens are supported. Synthetic actor deltas
 inherit nullable name/type/ownership fields and merge explicit ownership with
 the base actor. Hidden and missing IDs share generic errors. Raw scene/token
@@ -480,7 +480,8 @@ const completeText = parts.join('');
 Import `journalPageContentSchema` from `foundry/journal-contract`. The default
 `text` format parses HTML inertly, retains headings/paragraph/list breaks and
 decodes entities; Markdown is returned literally. `source` preserves the original
-HTML/Markdown string. Returning source never executes it; consumers must handle
+HTML/Markdown string after removing secret sections for non-GM delegated callers.
+Redaction precedes previews, content searches and text conversion. Returning source never executes it; consumers must handle
 it as untrusted content. Empty text returns one empty chunk. Non-text pages
 return zero chunks and typed metadata, including visible image/video references.
 

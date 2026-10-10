@@ -31,7 +31,8 @@ describe('actor sheet system profiles', () => {
       details: {
         level: 0,
         biography: {
-          value: '<p>Visible</p><section CLASS = secret>hidden</section><p>After</p>',
+          value:
+            '<p>Visible</p><section CLASS = secret><section>hidden</section>NEVER_PUBLIC_TAIL</section><p>After</p>',
         },
       },
       currency: { gp: 0 },
@@ -143,7 +144,10 @@ describe('actor sheet system profiles', () => {
     const source = item({
       quantity: { value: 0 },
       equipped: false,
-      description: { value: '<p>Visible</p><section class="secret">hidden</section>' },
+      description: {
+        value:
+          '<p>Visible</p><section class="secret"><section>hidden</section>NEVER_PUBLIC_TAIL</section>',
+      },
     });
     expect(publicActorItemSummary(ACTOR_ID, source)).toMatchObject({
       id: ITEM_ID,

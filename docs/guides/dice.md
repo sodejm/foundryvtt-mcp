@@ -51,15 +51,16 @@ for the official engine.
 | --- | --- |
 | `local` | Evaluate locally even when a remote transport is configured |
 | `auto`, no dice transport | Evaluate locally and report `foundry-transport-not-configured` as the fallback reason |
-| `auto`, configured transport | Evaluate once through Foundry; errors remain errors |
+| `auto`, configured transport | Evaluate locally and report `foundry-execution-not-requested` |
 | `foundry` | Require a configured Foundry transport; missing transport is an error |
 
 The supported Foundry transport is the paired REST module/relay configured with
 all three `FOUNDRY_REST_URL`, `FOUNDRY_REST_API_KEY` and
-`FOUNDRY_REST_CLIENT_ID` values. Partial REST configuration is an error, not a
-reason to evaluate locally. The adapter calls `POST /roll` with
+`FOUNDRY_REST_CLIENT_ID` values. Partial REST configuration is an error for explicit
+`engine: foundry` execution. The default `auto` engine always evaluates locally;
+read-only REST credentials do not authorize remote dice execution. The adapter calls `POST /roll` with
 `createChatMessage: false`. Complete paired configuration takes precedence when
-a legacy `FOUNDRY_API_KEY` is also present. A legacy-only configuration fails
+a legacy `FOUNDRY_API_KEY` is also present. A legacy-only configuration with `engine: foundry` fails
 before HTTP: that route's total and optional numeric results cannot establish
 dice counts, faces, active flags or a matching formula. Configure the paired REST
 values to use Foundry, or select `engine: local` explicitly.
@@ -75,8 +76,8 @@ for that uncertainty.
 The advertised strict output schema has `schemaVersion: 1`, the actual `engine`,
 `normalizedFormula`, `dice`, integer `total`, `breakdown`, ISO `timestamp`,
 optional `reason` and `fallback`. JSON text and MCP `structuredContent` carry the
-same value. `fallback` is null except for `auto` with no configured transport,
-where it contains `requestedEngine: auto` and the reason above.
+same value. `fallback` is null for explicit engine selection. For `auto`, it
+contains `requestedEngine: auto` and the applicable local-selection reason above.
 
 Each dice term identifies its `termIndex`, normalized `formula`, `count`,
 `faces`, nullable `modifier` and all `results`. Every result has its numeric

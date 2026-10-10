@@ -526,6 +526,30 @@ describe('FoundryClient', () => {
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
+    it.each([
+      paired,
+      { restUrl: paired.restUrl },
+      { restApiKey: paired.restApiKey },
+      { restClientId: paired.restClientId },
+      { restUrl: paired.restUrl, restApiKey: paired.restApiKey },
+      { restUrl: paired.restUrl, restClientId: paired.restClientId },
+      { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
+      { apiKey: 'legacy-key' },
+      { ...paired, apiKey: 'legacy-key' },
+    ])('keeps default and auto dice local with read transport configuration %j', async (config) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      for (const engine of [undefined, 'auto'] as const) {
+        const result = await client.rollDice('(7-3)+2', undefined, engine);
+        expect(result).toMatchObject({ engine: 'local', total: 6 });
+        expect(result.fallback?.reason).toBe(
+          'restUrl' in config && 'restApiKey' in config && 'restClientId' in config
+            ? 'foundry-execution-not-requested'
+            : 'foundry-transport-not-configured',
+        );
+      }
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
     it('requires a configured Foundry transport for explicit native execution', async () => {
       await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('not configured');
       expect(Math.random).not.toHaveBeenCalled();
@@ -540,7 +564,7 @@ describe('FoundryClient', () => {
       { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
     ])('rejects partial native configuration %j', async (config) => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
-      await expect(client.rollDice('d6')).rejects.toThrow('Configure all');
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Configure all');
       expect(Math.random).not.toHaveBeenCalled();
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
       expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
@@ -552,7 +576,7 @@ describe('FoundryClient', () => {
 
     it('rejects the legacy-only dice route while allowing explicit local evaluation', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'legacy-key' });
-      await expect(client.rollDice('d6')).rejects.toThrow('Legacy');
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Legacy');
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
       expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
         engine: 'local',
@@ -562,7 +586,6 @@ describe('FoundryClient', () => {
     });
 
     it.each([
-      'auto',
       'foundry',
     ] as const)('selects paired Foundry execution for %s even with legacy configuration', async (engine) => {
       client = new FoundryClient({
@@ -625,7 +648,9 @@ describe('FoundryClient', () => {
       } else {
         mockAxiosInstance.post.mockResolvedValue({ data: { total: 10 } });
       }
-      await expect(client.rollDice('d6')).rejects.toThrow('no retry or local fallback');
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow(
+        'no retry or local fallback',
+      );
       expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
       expect(Math.random).not.toHaveBeenCalled();
     });

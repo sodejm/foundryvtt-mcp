@@ -128,9 +128,19 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     expect(local.total).toBe(official.total);
     expect(local.dice.map(({ faces, results }) => ({ faces, results }))).toEqual(official.dice);
   });
+  for (const index of [1, 2]) {
+    it(`keeps automatic dice local even with native credentials ${index}`, async () => {
+      for (const extra of [{}, { engine: 'auto' }]) {
+        const value = assertDice(await call(index, { formula: '(7-3)+2', ...extra }), 'local');
+        expect(value.total).toBe(6);
+        expect(value.fallback).toEqual({ requestedEngine: 'auto', reason: 'foundry-execution-not-requested' });
+        expect(ajv.validate(schemas[index]!, value), JSON.stringify(ajv.errors)).toBe(true);
+      }
+    });
+  }
   for (const index of [0, 1]) {
     it.each(validDiceCases)(`returns the advertised contract with live transport ${index}: %s`, async formula => {
-      const result = await call(index, { formula, reason: 'live dice proof' });
+      const result = await call(index, { formula, reason: 'live dice proof', ...(index === 1 && { engine: 'foundry' }) });
       const value = assertDice(result, index === 0 ? 'local' : 'foundry');
       expect(ajv.validate(schemas[index]!, value), JSON.stringify(ajv.errors)).toBe(true);
       expect(value.reason).toBe('live dice proof');
@@ -146,7 +156,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
   it('preserves local selection and returns a real authorization failure without a fallback', async () => {
     const local = assertDice(await call(2, { formula: '(7 - 3) + 2', engine: 'local' }), 'local');
     expect(local.total).toBe(6); expect(local.fallback).toBeNull();
-    await internalFailure(2, { formula: '1d6', engine: 'auto' });
+    await internalFailure(2, { formula: '1d6', engine: 'foundry' });
     const foundry = assertDice(await call(1, { formula: '(7 - 3) + 2', engine: 'foundry' }), 'foundry');
     expect(foundry.total).toBe(6); expect(foundry.fallback).toBeNull();
   });
@@ -161,7 +171,7 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
     const attemptsBefore = remoteAttempts;
     const completedBefore = completedRemoteRolls;
     const before = await oracleStatus();
-    await internalFailure(3, { formula: '4d6kh3 + 2', engine: 'auto' });
+    await internalFailure(3, { formula: '4d6kh3 + 2', engine: 'foundry' });
     expect(remoteAttempts - attemptsBefore).toBe(1); expect(completedRemoteRolls - completedBefore).toBe(1);
     const after = await oracleStatus();
     expect(after.chatMessageCount).toBe(before.chatMessageCount);

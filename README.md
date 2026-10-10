@@ -248,7 +248,10 @@ and bind to the world, caller and session.
 DND5e and PF2e have bounded normalized profiles. Unknown systems expose a bounded
 primitive `system` section in service-identity mode; delegated unknown-system
 reads fail closed. Delegated reads require actor and embedded-item visibility
-before serialization and withhold rich descriptions. Sections contain at most
+before serialization and withhold rich descriptions. Non-GM delegated reads
+omit unidentified or misidentified items before counts, searches, pagination and
+detail reads, including world-item reads. GM and service-identity reads retain
+these items. Sections contain at most
 64 fields, each text value at most 4,096 UTF-16 code units, with an aggregate
 text budget of 8,192. Text clipping preserves surrogate pairs and reports
 `truncated`; zero and false remain values, while missing fields use
@@ -289,7 +292,7 @@ changes. Combined MCP responses remain bounded to 128 KiB; reduce the limit if
 a page exceeds this bound.
 
 Delegated reads check scene and token visibility before counts, pages, details
-and actor references. Hidden tokens, secret dispositions and inaccessible linked
+and actor references. Hidden tokens and inaccessible linked
 or synthetic actors are filtered using the caller's permissions. Synthetic actor
 overrides inherit nullable fields and merge explicit ownership with their base
 actor. Native Socket.IO is required; REST reports an explicit unsupported error.
@@ -326,7 +329,9 @@ text chunks.
 
 The default `text` format converts HTML without executing it, preserving block
 breaks and decoding entities; Markdown remains literal text. `source` returns
-the original HTML or Markdown as an inert string. Clients must treat returned
+the original HTML or Markdown as an inert string after removing secret sections
+for non-GM delegated callers. Redaction also applies before previews, searches
+and text conversion. Clients must treat returned
 source as untrusted content. Asset references are metadata; the server does not
 download or render them.
 
@@ -454,7 +459,8 @@ needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
 ### Game Mechanics
 
 - `roll_dice` — evaluate bounded additive dice formulas with parentheses and
-  `kh`, `kl`, `dh`, `dl` modifiers. Select `auto`, `local` or `foundry`; the result
+  `kh`, `kl`, `dh`, `dl` modifiers. The default and `auto` execute locally;
+  select `foundry` explicitly to execute on the native transport. The result
   identifies the engine that actually evaluated the roll. Unsupported syntax is
   rejected before rolling, and failed remote attempts are never rolled again.
   See the [dice contract](docs/guides/dice.md) for grammar, limits and transport behavior.

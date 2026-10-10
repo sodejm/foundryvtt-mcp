@@ -34,14 +34,14 @@ function fixture(count = 251, systemId = 'dnd5e') {
     system: {
       attributes: { hp: { value: 0, max: 23 }, ac: { value: 12 } },
       details: { level: systemId === 'pf2e' ? { value: 0 } : 0,
-        biography: { value: '<p>Public biography</p><section class="secret">NEVER_PUBLIC</section>' } },
+        biography: { value: '<p>Public biography</p><section class="secret"><section>NEVER_PUBLIC</section>NEVER_PUBLIC_TAIL</section>' } },
       currency: { gp: 0 },
     },
     items: Array.from({ length: count }, (_, index) => ({
       _id: itemId(index), name: index < 2 ? 'Duplicate 😀' : `Gear ${String(index).padStart(3, '0')}`,
       type: 'loot', sort: index * 1000, ownership: { default: -1 }, flags: { secret: 'NEVER_PUBLIC' },
       system: { quantity: index, equipped: false,
-        description: { value: '<p>Public description</p><section class="secret">NEVER_PUBLIC</section>' } },
+        description: { value: '<p>Public description</p><section class="secret"><section>NEVER_PUBLIC</section>NEVER_PUBLIC_TAIL</section>' } },
     })),
   };
   return {

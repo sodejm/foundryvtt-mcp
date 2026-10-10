@@ -5,6 +5,7 @@ import type {
   ActorSectionName,
   ActorSystemIdentity,
 } from './actor-sheet-contract.js';
+import { redactHtmlSecrets } from './html-secret-redaction.js';
 import { type ItemEconomyIdentity, normalizeItemEconomy } from './item-normalization.js';
 import type { WorldActor, WorldData, WorldItem } from './types.js';
 
@@ -100,13 +101,6 @@ function truncateUtf16(value: string, maxUnits: number): { value: string; trunca
   return { value: value.slice(0, end), truncated: true };
 }
 
-function sanitizeRichText(value: string): string {
-  return value.replace(
-    /<section\b[^>]*\bclass\s*=\s*(?:"[^"]*\bsecret\b[^"]*"|'[^']*\bsecret\b[^']*'|[^\s>]*\bsecret\b[^\s>]*)[^>]*>[\s\S]*?<\/section\s*>/gi,
-    '',
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -138,7 +132,7 @@ function publicScalar(
   if (typeof value !== 'string') {
     return {};
   }
-  const safe = richText ? sanitizeRichText(value) : value;
+  const safe = richText ? redactHtmlSecrets(value) : value;
   const result = truncateUtf16(safe, MAX_FIELD_TEXT_UNITS);
   return result.truncated ? result : { value: result.value };
 }

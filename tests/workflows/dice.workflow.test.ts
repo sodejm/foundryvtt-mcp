@@ -135,6 +135,18 @@ describe('built MCP bounded dice workflow', () => {
     expect(String(error)).not.toContain('legacy-dice-key');
     return error;
   }
+  for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+    it(`does not execute native dice implicitly with read configuration ${index}`, async () => {
+      for (const extra of [{}, { engine: 'auto' }]) {
+        const value = assertDice(await call(index, { formula: '(7-3)+2', ...extra }), 'local');
+        expect(value.total).toBe(6);
+        expect(value.fallback?.reason).toBe([1, 4].includes(index)
+          ? 'foundry-execution-not-requested' : 'foundry-transport-not-configured');
+        expect(ajv.validate(schemas[index]!, value), JSON.stringify(ajv.errors)).toBe(true);
+      }
+      expect(attempts).toEqual([]);
+    });
+  }
   it.each(validDiceCases)('supports bounded grammar without a configured transport: %s', async formula => {
     const result = await call(0, { formula, reason: 'workflow provenance' });
     const value = assertDice(result, 'local');
@@ -154,29 +166,29 @@ describe('built MCP bounded dice workflow', () => {
     });
   }
   it('fails a required Foundry engine or partial configuration before rolling', async () => {
-    for (const [index, args] of [[0, { formula: '1d6', engine: 'foundry' }], [2, { formula: '1d6' }]] as const) {
+    for (const [index, args] of [[0, { formula: '1d6', engine: 'foundry' }], [2, { formula: '1d6', engine: 'foundry' }]] as const) {
       await internalFailure(index, args); expect(attempts).toEqual([]);
     }
   });
   for (const index of [2, 5, 6, 7, 8, 9]) {
-    it.each(['auto', 'foundry'])(`fails partial paired configuration ${index} for engine %s before HTTP`, async engine => {
+    it.each(['foundry'])(`fails partial paired configuration ${index} for engine %s before HTTP`, async engine => {
       await internalFailure(index, { formula: '1d6', engine });
       expect(attempts).toEqual([]);
     });
   }
-  it.each(['auto', 'foundry'])('rejects an unsupported legacy dice transport for engine %s before HTTP', async engine => {
+  it.each(['foundry'])('rejects an unsupported legacy dice transport for engine %s before HTTP', async engine => {
     const error = await internalFailure(3, { formula: '1d6', engine });
     expect(String(error)).toMatch(/legacy|FOUNDRY_REST/i);
     expect(attempts).toEqual([]);
   });
   it('prefers complete paired configuration when a legacy API key is also present', async () => {
-    const value = assertDice(await call(4, { formula: '2d6kh1 + 3' }), 'foundry');
+    const value = assertDice(await call(4, { formula: '2d6kh1 + 3', engine: 'foundry' }), 'foundry');
     expect(value.total).toBe(9); expect(value.fallback).toBeNull();
     expect(attempts).toHaveLength(1);
     expect(attempts[0]).toMatchObject({ method: 'POST', key: 'fixture-key', body: { createChatMessage: false } });
     expect(new URL(attempts[0]!.path, 'http://fixture').pathname).toBe('/roll');
   });
-  it.each(['auto', 'foundry'])('returns verified server outcomes once for engine %s', async engine => {
+  it.each(['foundry'])('returns verified server outcomes once for engine %s', async engine => {
     const result = await call(1, { formula: '2d6kh1 + 3', engine, reason: 'workflow native roll' });
     const value = assertDice(result, 'foundry');
     expect(value.total).toBe(9); expect(value.fallback).toBeNull();
@@ -189,10 +201,10 @@ describe('built MCP bounded dice workflow', () => {
   });
   it('accepts documented optional roll metadata without changing verified outcomes', async () => {
     mode = 'optional-roll-fields';
-    const value = assertDice(await call(1, { formula: '2d6kh1 + 3' }), 'foundry');
+    const value = assertDice(await call(1, { formula: '2d6kh1 + 3', engine: 'foundry' }), 'foundry');
     expect(value.total).toBe(9); expect(attempts).toHaveLength(1);
   });
-  for (const engine of ['auto', 'foundry']) {
+  for (const engine of ['foundry']) {
     it.each(['401', '403', '500', 'timeout', 'disconnect', 'malformed', 'unsuccessful', 'wrong-total',
       'wrong-formula', 'wrong-face', 'wrong-active', 'missing-die', 'chat-created', 'extra-die',
       'extra-outcome', 'wrong-die-faces', 'fractional-outcome', 'missing-active', 'missing-faces',

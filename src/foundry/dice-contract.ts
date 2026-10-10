@@ -51,7 +51,7 @@ const outputDieSchema = z.strictObject({
 
 const autoFallbackSchema = z.strictObject({
   requestedEngine: z.literal('auto'),
-  reason: z.literal('foundry-transport-not-configured'),
+  reason: z.enum(['foundry-transport-not-configured', 'foundry-execution-not-requested']),
 });
 
 export const diceRollOutputSchema = z.strictObject({

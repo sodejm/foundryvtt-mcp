@@ -49,6 +49,10 @@ describe('live delegated caller permissions', () => {
   let secretEmbedded = '';
   let visibleEmbedded = '';
   let secondVisibleEmbedded = '';
+  let unidentifiedEmbedded = '';
+  let unidentifiedWorld = '';
+  const unidentifiedName = `${prefix} NEVER_PUBLIC Unidentified Gear`;
+  const journalSecret = '<section class="secret"><section>NEVER_PUBLIC_JOURNAL</section>NEVER_PUBLIC_JOURNAL_TAIL</section>';
   let sceneId = '';
   let token = 'a';
   let sessionId = 'live-caller-session';
@@ -193,6 +197,8 @@ describe('live delegated caller permissions', () => {
     visibleEmbedded = (await create('Item', { name: `${prefix} Inherited Gear`, type: 'loot', ownership: { default: -1 } }, `Actor.${actors[0]}`))._id;
     secondVisibleEmbedded = (await create('Item', { name: `${prefix} Second Inherited Gear`, type: 'loot', ownership: { default: -1 }, system: { quantity: 0 } }, `Actor.${actors[0]}`))._id;
     secretEmbedded = (await create('Item', { name: `${prefix} Secret Gear`, type: 'loot', ownership: owner(b) }, `Actor.${actors[0]}`))._id;
+    unidentifiedEmbedded = (await create('Item', { name: unidentifiedName, type: 'loot', ownership: { default: -1 }, system: { identified: false, price: { value: 5000, denomination: 'gp' }, rarity: 'legendary' } }, `Actor.${actors[0]}`))._id;
+    unidentifiedWorld = (await create('Item', { name: unidentifiedName, type: 'loot', ownership: owner(a), system: { identified: false, price: { value: 5000, denomination: 'gp' }, rarity: 'legendary' } }))._id;
     for (const userId of [a, b]) {
       items.push((await create('Item', { name: `${prefix} Item ${userId}`, type: 'loot', ownership: owner(userId) }))._id);
     }
@@ -202,7 +208,7 @@ describe('live delegated caller permissions', () => {
       name: `${prefix} Inherited Page`,
       type: 'text',
       ownership: { default: -1 },
-      text: { format: 1, content: '<p>Visible inherited text</p>' },
+      text: { format: 1, content: `<p>Visible inherited text</p>${journalSecret}` },
     }, `JournalEntry.${journalA}`))._id;
     journalASecretPage = (await create('JournalEntryPage', {
       name: `${prefix} Secret Page`,
@@ -328,16 +334,21 @@ describe('live delegated caller permissions', () => {
         ['items', items, 'search_items', 'foundry://items'],
         ['journal', journals, 'search_journals', 'foundry://journals'],
       ] as const) {
-        const expected = (await oracle(collection, [...ids], userId)).sort();
+        const expectedIds = collection === 'items' && principal === 'gm'
+          ? [...ids, unidentifiedWorld]
+          : [...ids];
+        const expected = (await oracle(collection, expectedIds, userId)).sort();
         const response = (await call(tool, { query: prefix })).structuredContent!;
         expect(response.records.map((record: { id: string }) => record.id).sort()).toEqual(expected);
         expect(response.total).toBe(expected.length);
         const page = await resource(uri);
-        expect(page.records.filter((record: { id: string }) => ids.includes(record.id)).map((record: { id: string }) => record.id).sort()).toEqual(expected);
+        expect(page.records.filter((record: { id: string }) => expectedIds.includes(record.id)).map((record: { id: string }) => record.id).sort()).toEqual(expected);
       }
       const worldSearch = (await call('search_world', { query: prefix, limit: 100 })).structuredContent!;
       const expected = (await Promise.all([
-        oracle('actors', actors, userId), oracle('items', items, userId), oracle('journal', journals, userId),
+        oracle('actors', actors, userId),
+        oracle('items', principal === 'gm' ? [...items, unidentifiedWorld] : items, userId),
+        oracle('journal', journals, userId),
       ])).flat().sort();
       expect(worldSearch.records.map((record: { id: string }) => record.id).sort()).toEqual(expected);
       expect(JSON.stringify(worldSearch)).not.toContain('Hidden Token');
@@ -518,7 +529,7 @@ describe('live delegated caller permissions', () => {
     // Foundry 14 embedded Items inherit the parent's native permission regardless
     // of their ownership field. The MCP contract also honors explicit item denies.
     expect(nativePermissions.actorVisible).toBe(true);
-    expect(nativePermissions.itemIds.sort()).toEqual([visibleEmbedded, secondVisibleEmbedded, secretEmbedded].sort());
+    expect(nativePermissions.itemIds.sort()).toEqual([visibleEmbedded, secondVisibleEmbedded, secretEmbedded, unidentifiedEmbedded].sort());
     expect(nativePermissions.ownership.find((item: any) => item.id === secretEmbedded)?.ownership)
       .toMatchObject({ default: 0, [b]: 2 });
     expect(response.records.map((item: any) => item.id).sort())
@@ -536,6 +547,37 @@ describe('live delegated caller permissions', () => {
     expect(await toolError('list_actor_items', { actorId: actors[0] }))
       .toEqual(await toolError('list_actor_items', { actorId: 'zzzzzzzzzzzzzzzz' }));
     expect(await toolError('get_actor_item', { actorId: actors[0], itemId: secretEmbedded })).toEqual(hidden);
+  });
+
+  it('redacts nested journal secrets before summaries, source, text and content searches', async () => {
+    token = 'a';
+    expect(JSON.stringify(await call('get_journal', { journalId: journalA }))).not.toContain('NEVER_PUBLIC_JOURNAL');
+    expect((await collectJournalPage(journalA, journalAInheritedPage, 'source')).content).toBe('<p>Visible inherited text</p>');
+    expect((await collectJournalPage(journalA, journalAInheritedPage, 'text')).content).toBe('Visible inherited text');
+    const hidden = (await call('search_journals', { query: 'NEVER_PUBLIC_JOURNAL' })).structuredContent as Record<string, any>;
+    expect(hidden.total).toBe(0);
+    const markdown = (await call('search_journals', { query: `${prefix} long page opening` })).structuredContent as Record<string, any>;
+    expect(markdown.records.map((record: any) => record.id)).toEqual([journalShared]);
+    expect(markdown.total).toBe(1);
+    token = 'gm';
+    expect((await collectJournalPage(journalA, journalAInheritedPage, 'source')).content).toContain('NEVER_PUBLIC_JOURNAL_TAIL');
+  });
+
+  it('withholds unidentified item identity and economy before player search and detail', async () => {
+    token = 'a';
+    expect(await oracle('items', [unidentifiedWorld], a)).toEqual([unidentifiedWorld]);
+    const inventory = (await call('list_actor_items', { actorId: actors[0], query: unidentifiedName })).structuredContent as Record<string, any>;
+    expect(inventory.total).toBe(0);
+    const worldItems = (await call('search_items', { query: unidentifiedName })).structuredContent as Record<string, any>;
+    expect(worldItems.total).toBe(0);
+    expect(JSON.stringify(await resource('foundry://items'))).not.toContain(unidentifiedWorld);
+    expect(await toolError('get_actor_item', { actorId: actors[0], itemId: unidentifiedEmbedded }))
+      .toEqual(await toolError('get_actor_item', { actorId: actors[0], itemId: 'zzzzzzzzzzzzzzzz' }));
+    expect(await toolError('get_item_details', { itemId: unidentifiedWorld }))
+      .toEqual(await toolError('get_item_details', { itemId: 'zzzzzzzzzzzzzzzz' }));
+    token = 'gm';
+    expect(JSON.stringify(await call('get_actor_item', { actorId: actors[0], itemId: unidentifiedEmbedded }))).toContain(unidentifiedName);
+    expect(JSON.stringify(await call('get_item_details', { itemId: unidentifiedWorld }))).toContain(unidentifiedName);
   });
 
   it('binds live owned-item continuation to caller, session, actor and embedded permissions', async () => {

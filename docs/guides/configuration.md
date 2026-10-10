@@ -119,7 +119,7 @@ inventory reads fail closed because no field-visibility profile is established;
 service-identity mode supports a bounded primitive system-path fallback.
 
 Structured spatial reads check scene OBSERVER permission and token visibility
-before counts, pages or details. Hidden tokens, secret dispositions and tokens
+before counts, pages or details. Hidden tokens and tokens
 with inaccessible linked or synthetic actors are excluded for players. Actor
 references are emitted only when observable. See the
 [spatial read contract](integration.md#structured-scene-and-token-reads).

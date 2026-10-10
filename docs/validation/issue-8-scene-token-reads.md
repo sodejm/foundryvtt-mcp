@@ -49,7 +49,7 @@ none of these advisories has been remediated or treated as safe.
   texture metadata; direct detail includes bounded optional texture metadata.
   IDs and `Scene.<sceneId>.Token.<tokenId>` UUIDs compose under the verified parent.
 - Live GM and two-player callers compare scene/token visibility and actor
-  permissions with native Foundry results. Hidden tokens, secret dispositions,
+  permissions with native Foundry results. Hidden tokens,
   denied scenes and inaccessible actors are excluded before counts, pages,
   details and actor references. Actorless visible tokens remain readable.
   Synthetic actor deltas inherit nullable fields and merge explicit ownership

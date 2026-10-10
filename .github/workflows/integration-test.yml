@@ -55,6 +55,9 @@ jobs:
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: foundryvtt-shared-test-world
+      cancel-in-progress: false
     env:
       FOUNDRY_URL: ${{ secrets.FOUNDRY_TEST_URL }}
       FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_TEST_USERNAME }}
