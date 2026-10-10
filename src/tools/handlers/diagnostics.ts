@@ -9,8 +9,11 @@ import type { DiagnosticsClient } from '../../diagnostics/client.js';
 import type { LogEntry } from '../../diagnostics/types.js';
 import { LogEntrySchema } from '../../diagnostics/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
-import type { DiagnosticSystem } from '../../utils/diagnostics.js';
+import { worldReadMetadataSchema } from '../../foundry/freshness.js';
+import { readMetadataText } from '../../foundry/read-contract.js';
 import { withToolError } from './utils.js';
+
+export { handleDiagnoseErrors } from './error-diagnosis.js';
 
 /** Valid log levels recognized by the tool schema */
 const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'log', 'notification']);
@@ -21,14 +24,10 @@ const MAX_LOG_LIMIT = 1000;
 /** Default number of search hits rendered when the caller supplies no limit */
 const DEFAULT_SEARCH_LIMIT = 50;
 
-/**
- * Shown whenever `FoundryClient.isWorldDataStale()` is set (#217): the cached
- * world snapshot is still being served, but it stopped following live document
- * changes when the socket dropped and nothing replays the gap.
- */
+/** Retained snapshots stay explicitly stale until recovery validates a replacement. */
 const STALE_WORLD_DATA_NOTICE =
-  '⚠️ **Stale:** this snapshot stopped following live changes when the connection dropped, ' +
-  'and document changes made since are missing. Run `refresh_world_data` to resync.';
+  '⚠️ **Stale:** this retained snapshot may be missing changes from the outage. ' +
+  'Automatic recovery runs after reconnect; use `refresh_world_data` to retry now.';
 
 /**
  * Handles recent log retrieval requests
@@ -282,88 +281,23 @@ ${performanceLines.join('\n')}
   });
 }
 
-/**
- * Handles error diagnosis requests
- */
-export async function handleDiagnoseErrors(
-  args: {
-    category?: string;
-  },
-  _diagnosticSystem: DiagnosticSystem,
-) {
-  const { category } = args;
-
-  return withToolError('diagnose errors', async () => {
-    // Mock diagnosis since the method doesn't exist yet
-    const diagnosis = {
-      errors: [],
-      recommendations: ['No specific errors detected', 'System appears to be functioning normally'],
-      systemStatus: 'Operational',
-    };
-
-    const errorsByCategory = diagnosis.errors.reduce(
-      (acc: Record<string, unknown[]>, error: { category: string }) => {
-        if (!acc[error.category]) {
-          acc[error.category] = [];
-        }
-        acc[error.category]?.push(error);
-        return acc;
-      },
-      {},
-    );
-
-    const errorSummary =
-      Object.entries(errorsByCategory)
-        .map(([cat, errors]: [string, unknown[]]) => `**${cat}:** ${errors.length} error(s)`)
-        .join('\n') || 'No errors found';
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `🔧 **Error Diagnosis**
-**Category Filter:** ${category || 'All categories'}
-**Total Errors:** ${diagnosis.errors.length}
-
-**Error Summary:**
-${errorSummary}
-
-**Recommendations:**
-${diagnosis.recommendations.map((rec: string) => `- ${rec}`).join('\n')}
-
-**System Status:** ${diagnosis.systemStatus}`,
-        },
-      ],
-    };
-  });
-}
-
-/**
- * Handles comprehensive health status requests
- *
- * The system-health section reads the nested fields `SystemHealthSchema`
- * declares. Playtime is not reported: `getWorldInfo()` has no genuine source
- * for it and hard-codes 0.
- *
- * The world section carries {@link STALE_WORLD_DATA_NOTICE} whenever the cache
- * has stopped following live document changes (#217). Reads keep being served
- * from that snapshot, which is the right call — a flagged answer beats no
- * answer — but rendering it bare presents a point-in-time copy as though it
- * were live. It matters most right after an automatic reconnect, where the
- * connection line legitimately reads "✅ Connected" while the cache is still
- * missing every broadcast the outage swallowed.
- */
+/** Report socket snapshot freshness separately from optional REST diagnostics. */
 export async function handleGetHealthStatus(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
 ) {
   return withToolError('get health status', async () => {
-    const [worldInfo, systemHealth] = await Promise.all([
+    const [worldInfo, restObservation] = await Promise.all([
       foundryClient.getWorldInfo().catch(() => null),
-      diagnosticsClient.getSystemHealth().catch(() => null),
+      diagnosticsClient
+        .getSystemHealth()
+        .then((health) => ({ health, observedAt: new Date().toISOString() }))
+        .catch(() => null),
     ]);
 
+    const systemHealth = restObservation?.health ?? null;
+    const readMetadata = worldReadMetadataSchema.parse(foundryClient.getReadMetadata());
     const worldLines = worldInfo
       ? [
           `- **Title:** ${worldInfo.title}`,
@@ -371,7 +305,7 @@ export async function handleGetHealthStatus(
           `- **Core Version:** ${worldInfo.coreVersion}`,
         ]
       : ['ℹ️ Not available'];
-    if (foundryClient.isWorldDataStale()) {
+    if (readMetadata.freshness === 'stale') {
       worldLines.unshift(STALE_WORLD_DATA_NOTICE);
     }
 
@@ -396,6 +330,18 @@ export async function handleGetHealthStatus(
     }
 
     return {
+      structuredContent: {
+        connected: foundryClient.isConnected(),
+        readMetadata,
+        restDiagnostics: {
+          source: 'rest',
+          freshness: systemHealth ? 'current' : 'unavailable',
+          capturedAt: systemHealth?.timestamp ?? null,
+          observedAt: restObservation?.observedAt ?? null,
+          respondedAt: new Date().toISOString(),
+          systemHealth,
+        },
+      },
       content: [
         {
           type: 'text',
@@ -406,8 +352,9 @@ ${foundryClient.isConnected() ? '✅ Connected' : '❌ Disconnected'}
 
 **World Information:**
 ${worldLines.join('\n')}
+${readMetadataText(readMetadata)}
 
-**System Health:**
+**System Health (REST diagnostics):**
 ${healthSection}`,
         },
       ],

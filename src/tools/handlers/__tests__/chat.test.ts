@@ -1,10 +1,12 @@
 /**
- * @fileoverview Unit tests for chat handler — get_chat_messages limit clamp
+ * @fileoverview Unit tests for bounded chat reads
  */
 
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import { handleGetChatMessages } from '../chat.js';
+import { readMetadata } from './pagination-fixture.js';
 
 interface MockChatMessage {
   _id: string;
@@ -26,6 +28,7 @@ function buildMessages(count: number): MockChatMessage[] {
 
 function mockFoundryClient(allMessages: MockChatMessage[]): FoundryClient {
   return {
+    getReadMetadata: vi.fn(() => readMetadata()),
     getChatMessages: vi.fn((limit: number) => allMessages.slice(0, limit)),
     getUsers: vi.fn(() => ({ users: [{ _id: 'user-1', name: 'Alice' }] })),
   } as unknown as FoundryClient;
@@ -42,19 +45,25 @@ function countLines(result: Awaited<ReturnType<typeof handleGetChatMessages>>): 
   return body.split('\n').filter(Boolean).length;
 }
 
-describe('handleGetChatMessages — limit clamp', () => {
-  it('clamps limit at 100 when caller requests 500', async () => {
+describe('handleGetChatMessages — bounded limits', () => {
+  it.each([
+    0,
+    -1,
+    500,
+    10_000,
+    'all',
+    null,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    1.5,
+  ])('rejects invalid limit %s before reading world data', async (limit) => {
     const client = mockFoundryClient(buildMessages(1000));
-    const result = await handleGetChatMessages({ limit: 500 }, client);
-    expect(countLines(result)).toBeLessThanOrEqual(100);
-    // Verify the clamped value was passed to the client, not the raw 500
-    expect(client.getChatMessages).toHaveBeenCalledWith(100);
-  });
-
-  it('clamps limit at 100 when caller requests 10000', async () => {
-    const client = mockFoundryClient(buildMessages(1000));
-    await handleGetChatMessages({ limit: 10_000 }, client);
-    expect(client.getChatMessages).toHaveBeenCalledWith(100);
+    await expect(handleGetChatMessages({ limit }, client)).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
+    });
+    expect(client.getChatMessages).not.toHaveBeenCalled();
+    expect(client.getUsers).not.toHaveBeenCalled();
+    expect(client.getReadMetadata).not.toHaveBeenCalled();
   });
 
   it('uses default limit of 20 when no limit supplied', async () => {
@@ -64,9 +73,9 @@ describe('handleGetChatMessages — limit clamp', () => {
     expect(client.getChatMessages).toHaveBeenCalledWith(20);
   });
 
-  it('passes through small limits unchanged', async () => {
+  it.each([1, 5, 100])('passes through valid limit %s unchanged', async (limit) => {
     const client = mockFoundryClient(buildMessages(50));
-    await handleGetChatMessages({ limit: 5 }, client);
-    expect(client.getChatMessages).toHaveBeenCalledWith(5);
+    await handleGetChatMessages({ limit }, client);
+    expect(client.getChatMessages).toHaveBeenCalledWith(limit);
   });
 });

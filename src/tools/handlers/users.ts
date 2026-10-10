@@ -3,7 +3,7 @@
  */
 
 import type { FoundryClient } from '../../foundry/client.js';
-import { withToolError } from './utils.js';
+import { withWorldRead } from './utils.js';
 
 const ROLE_NAMES: Record<number, string> = {
   0: 'None',
@@ -14,7 +14,7 @@ const ROLE_NAMES: Record<number, string> = {
 };
 
 export async function handleGetUsers(_args: Record<string, unknown>, foundryClient: FoundryClient) {
-  return withToolError('get users', async () => {
+  return withWorldRead('get users', foundryClient, async () => {
     const { users, activeUsers } = foundryClient.getUsers();
     const activeSet = new Set(activeUsers);
 

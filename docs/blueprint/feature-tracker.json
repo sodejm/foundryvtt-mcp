@@ -91,21 +91,21 @@
       "id": "FR-013",
       "name": "NPC generation",
       "prd": "PRD-001",
-      "status": "complete",
+      "status": "partial",
       "priority": "low"
     },
     {
       "id": "FR-014",
       "name": "Loot table generation",
       "prd": "PRD-001",
-      "status": "complete",
+      "status": "partial",
       "priority": "low"
     },
     {
       "id": "FR-015",
       "name": "Rule lookup",
       "prd": "PRD-001",
-      "status": "complete",
+      "status": "partial",
       "priority": "low"
     },
     {
@@ -119,7 +119,7 @@
       "id": "FR-017",
       "name": "Optional REST API diagnostics (logs, health)",
       "prd": "PRD-002",
-      "status": "complete",
+      "status": "partial",
       "priority": "low"
     },
     {

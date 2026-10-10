@@ -2,23 +2,28 @@
  * Resource definitions for FoundryVTT MCP Server
  */
 
+import { isDelegatedResource } from './authorization.js';
+
 export const resourceDefinitions = [
   {
     uri: 'foundry://actors',
     name: 'All Actors',
-    description: 'List of all actors in the current world',
+    description:
+      'First bounded page of world actors; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://items',
     name: 'All Items',
-    description: 'List of all items in the current world',
+    description:
+      'First bounded page of world items; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://scenes',
     name: 'All Scenes',
-    description: 'List of all scenes in the current world',
+    description:
+      'First bounded page of world scenes; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
@@ -30,13 +35,15 @@ export const resourceDefinitions = [
   {
     uri: 'foundry://journals',
     name: 'All Journals',
-    description: 'List of all journal entries in the current world',
+    description:
+      'First bounded page of world journals; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
     uri: 'foundry://users',
     name: 'Users',
-    description: 'List of users and their online status',
+    description:
+      'First bounded page of user metadata; follow nextUri until complete (default 100, maximum 100)',
     mimeType: 'application/json',
   },
   {
@@ -59,6 +66,19 @@ export const resourceDefinitions = [
   },
 ];
 
-export function getAllResources() {
-  return resourceDefinitions;
+export function getAllResources(delegated = false) {
+  return delegated
+    ? resourceDefinitions.filter((resource) => isDelegatedResource(resource.uri))
+    : resourceDefinitions;
+}
+
+export function getAllResourceTemplates(delegated = false) {
+  return ['actors', 'items', 'scenes', 'journals', 'users']
+    .filter((collection) => !delegated || isDelegatedResource(`foundry://${collection}`))
+    .map((collection) => ({
+      uriTemplate: `foundry://${collection}{?limit,cursor}`,
+      name: `${collection} pages`,
+      description: `Version 3 snapshot pages with stable IDs, total, returnedCount, complete, nextCursor, nextUri and readMetadata. Limit 1–100; cursors expire after five minutes. ${delegated ? 'Delegated pages require trusted caller context and fresh authorization; totals and cursors are scoped to readable records.' : 'Service mode uses the backend identity. Socket pagination requires a GM; REST supports actors/items only.'}`,
+      mimeType: 'application/json',
+    }));
 }

@@ -90,7 +90,10 @@ describe('Integration Tests', () => {
         .mockRejectedValueOnce(new Error('Temporary error'))
         .mockResolvedValueOnce({
           data: {
-            actors: [{ _id: '1', name: 'Test Actor', type: 'character' }],
+            actors: [{ _id: 'Actor00000000001', name: 'Test Actor', type: 'character' }],
+            total: 1,
+            page: 1,
+            limit: 100,
           },
         });
 
@@ -132,7 +135,7 @@ describe('Integration Tests', () => {
       const mockActorData = {
         actors: [
           {
-            _id: 'actor-1',
+            _id: 'Actor00000000001',
             name: 'Gandalf',
             type: 'npc',
             level: 20,
@@ -145,7 +148,7 @@ describe('Integration Tests', () => {
         ],
         total: 1,
         page: 1,
-        limit: 10,
+        limit: 100,
       };
 
       mockAxiosInstance.get
@@ -159,7 +162,7 @@ describe('Integration Tests', () => {
 
       await client.connect();
 
-      const searchParams = { query: 'Gandalf', type: 'npc', limit: 10 };
+      const searchParams = { query: 'Gandalf', type: 'npc', limit: 100 };
       const result = await client.searchActors(searchParams);
 
       expect(result.actors).toHaveLength(1);
@@ -172,10 +175,10 @@ describe('Integration Tests', () => {
       const mockItemData = {
         items: [
           {
-            _id: 'item-1',
+            _id: 'Item000000000001',
             name: 'Flame Tongue',
             type: 'weapon',
-            rarity: 'rare',
+            system: { rarities: ['rare'], price: { value: 5000, denomination: 'gp' } },
             damage: {
               parts: [
                 ['1d8', 'slashing'],
@@ -187,12 +190,13 @@ describe('Integration Tests', () => {
         ],
         total: 1,
         page: 1,
-        limit: 10,
+        limit: 100,
       };
 
       mockAxiosInstance.get
         .mockResolvedValueOnce({ data: { status: 'connected' } })
-        .mockResolvedValueOnce({ data: mockItemData });
+        .mockResolvedValueOnce({ data: mockItemData })
+        .mockResolvedValueOnce({ data: { system: { id: 'dnd5e', version: '6.0.6' } } });
 
       client = new FoundryClient({
         baseUrl: 'http://localhost:30000',
@@ -201,7 +205,7 @@ describe('Integration Tests', () => {
 
       await client.connect();
 
-      const searchParams = { query: 'Flame', type: 'weapon', rarity: 'rare', limit: 10 };
+      const searchParams = { query: 'Flame', type: 'weapon', rarity: 'rare', limit: 100 };
       const result = await client.searchItems(searchParams);
 
       expect(result.items).toHaveLength(1);
@@ -232,8 +236,8 @@ describe('Integration Tests', () => {
       mockAxiosInstance.get
         .mockResolvedValueOnce({ data: { status: 'connected' } })
         .mockRejectedValueOnce(new Error('Temporary failure'))
-        .mockResolvedValueOnce({ data: { actors: [] } })
-        .mockResolvedValueOnce({ data: { items: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 100 } })
+        .mockResolvedValueOnce({ data: { items: [], total: 0, page: 1, limit: 100 } });
 
       client = new FoundryClient({
         baseUrl: 'http://localhost:30000',

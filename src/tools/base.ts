@@ -34,6 +34,7 @@ export interface ToolResult {
     mimeType?: string;
     [key: string]: unknown;
   }>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
 
@@ -49,6 +50,9 @@ export interface Tool {
 
   /** JSON Schema for input validation */
   readonly inputSchema: object;
+
+  /** JSON Schema for structured output, when the tool returns one */
+  readonly outputSchema?: object;
 
   /**
    * Execute the tool with validated arguments

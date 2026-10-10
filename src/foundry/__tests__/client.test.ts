@@ -80,6 +80,50 @@ describe('FoundryClient', () => {
     });
   });
 
+  describe('testConnection', () => {
+    it.each([
+      { username: 'gm', password: 'secret' },
+      { username: 'gm', password: '' },
+      { userId: 'User000000000001', password: '' },
+      { apiKey: 'test-api-key' },
+    ])('loads the authenticated connection for %j', async (credentials) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      const connect = vi.spyOn(client, 'connect').mockResolvedValue();
+
+      await expect(client.testConnection()).resolves.toBe(true);
+
+      expect(connect).toHaveBeenCalledOnce();
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {},
+      { username: 'gm' },
+      { password: '' },
+    ])('only checks HTTP reachability when authentication is incomplete: %j', async (credentials) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      const connect = vi.spyOn(client, 'connect');
+      mockAxiosInstance.get.mockResolvedValue({ status: 200 });
+
+      await expect(client.testConnection()).resolves.toBe(true);
+
+      expect(connect).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/');
+    });
+
+    it('propagates authentication errors instead of falling back to HTTP reachability', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        username: 'gm',
+        password: '',
+      });
+      vi.spyOn(client, 'connect').mockRejectedValue(new Error('Authentication failed'));
+
+      await expect(client.testConnection()).rejects.toThrow('Authentication failed');
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+  });
+
   describe('REST API mode (with apiKey)', () => {
     beforeEach(() => {
       client = new FoundryClient({
@@ -96,25 +140,35 @@ describe('FoundryClient', () => {
     });
 
     it('should search actors via REST API', async () => {
-      const mockData = { actors: [{ _id: '1', name: 'Hero', type: 'character' }] };
+      const mockData = {
+        actors: [{ _id: 'Actor00000000001', name: 'Hero', type: 'character' }],
+        total: 1,
+        page: 1,
+        limit: 10,
+      };
       mockAxiosInstance.get.mockResolvedValue({ data: mockData });
 
       const result = await client.searchActors({ query: 'Hero' });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/actors', {
-        params: { query: 'Hero' },
+        params: { query: 'Hero', page: 1, limit: 100 },
       });
       expect(result.actors).toEqual(mockData.actors);
     });
 
     it('should search items via REST API', async () => {
-      const mockData = { items: [{ _id: '1', name: 'Sword', type: 'weapon' }] };
+      const mockData = {
+        items: [{ _id: 'Item000000000001', name: 'Sword', type: 'weapon' }],
+        total: 1,
+        page: 1,
+        limit: 10,
+      };
       mockAxiosInstance.get.mockResolvedValue({ data: mockData });
 
       const result = await client.searchItems({ query: 'Sword', type: 'weapon', limit: 10 });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/items', {
-        params: { query: 'Sword', type: 'weapon', limit: 10 },
+        params: { page: 1, limit: 100 },
       });
-      expect(result.items).toEqual(mockData.items);
+      expect(result.items).toMatchObject(mockData.items);
     });
 
     it('should get world info via REST API', async () => {
@@ -137,7 +191,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(new Error('Network error'))
         .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'test' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
@@ -305,7 +359,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(429))
         .mockRejectedValueOnce(build4xxError(429))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
@@ -322,7 +376,7 @@ describe('FoundryClient', () => {
 
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(500))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const result = await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
@@ -339,7 +393,7 @@ describe('FoundryClient', () => {
 
       mockAxiosInstance.get
         .mockRejectedValueOnce(build4xxError(503))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       await client.searchActors({ query: 'x' });
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
@@ -358,7 +412,7 @@ describe('FoundryClient', () => {
       mockAxiosInstance.get
         .mockRejectedValueOnce(new Error('transient'))
         .mockRejectedValueOnce(new Error('transient'))
-        .mockResolvedValueOnce({ data: { actors: [] } });
+        .mockResolvedValueOnce({ data: { actors: [], total: 0, page: 1, limit: 10 } });
 
       const start = Date.now();
       await client.searchActors({ query: 'x' });
@@ -372,22 +426,18 @@ describe('FoundryClient', () => {
   });
 
   describe('worldData mode (no apiKey)', () => {
-    it('should return empty results when no worldData', async () => {
+    it('should report unavailable backend when no worldData', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
 
-      const actors = await client.searchActors({ query: 'test' });
-      expect(actors.actors).toEqual([]);
-      expect(actors.total).toBe(0);
-
-      const items = await client.searchItems({ query: 'test' });
-      expect(items.items).toEqual([]);
+      await expect(client.searchActors({ query: 'test' })).rejects.toThrow(
+        'World data unavailable',
+      );
+      await expect(client.searchItems({ query: 'test' })).rejects.toThrow('World data unavailable');
     });
 
-    it('should return default world info when no worldData', async () => {
+    it('should reject world info when no snapshot has been captured', async () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const info = await client.getWorldInfo();
-      expect(info.id).toBe('unknown');
-      expect(info.title).toBe('Not connected');
+      await expect(client.getWorldInfo()).rejects.toThrow('World data unavailable');
     });
 
     it('should require credentials for connect in Socket.IO mode', async () => {
@@ -395,207 +445,214 @@ describe('FoundryClient', () => {
       await expect(client.connect()).rejects.toThrow('Socket.IO mode requires');
     });
 
-    it('should return null combat state when no worldData', () => {
+    it('should reject combat state when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getCombatState()).toBeNull();
+      expect(() => client.getCombatState()).toThrow('World data unavailable');
     });
 
-    it('should return empty chat messages when no worldData', () => {
+    it('should reject chat messages when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getChatMessages()).toEqual([]);
+      expect(() => client.getChatMessages()).toThrow('World data unavailable');
     });
 
-    it('should return empty users when no worldData', () => {
+    it('should reject users when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const { users, activeUsers } = client.getUsers();
-      expect(users).toEqual([]);
-      expect(activeUsers).toEqual([]);
+      expect(() => client.getUsers()).toThrow('World data unavailable');
     });
 
-    it('should return empty journals when no worldData', () => {
+    it('should reject journals when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getJournals()).toEqual([]);
+      expect(() => client.getJournals()).toThrow('World data unavailable');
     });
 
-    it('should return empty world search when no worldData', () => {
+    it('should reject world search when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      const results = client.searchWorld('test');
-      expect(results.actors).toEqual([]);
-      expect(results.items).toEqual([]);
+      expect(() => client.searchWorld('test')).toThrow('World data unavailable');
     });
 
-    it('should return empty summary when no worldData', () => {
+    it('should reject summary when no snapshot has been captured', () => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
-      expect(client.getWorldSummary()).toEqual({});
+      expect(() => client.getWorldSummary()).toThrow('World data unavailable');
     });
   });
 
-  describe('dice rolling', () => {
+  describe('bounded dice rolling and engine selection', () => {
+    const paired = {
+      restUrl: 'http://localhost:3010',
+      restApiKey: 'fixture-key',
+      restClientId: 'paired-client',
+    };
     beforeEach(() => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      ['1d20+5', 15],
+      ['1d20 + 5', 15],
+      ['1d20+5+3', 18],
+      ['d20', 10],
+      ['2d6+1d4', 8],
+      ['2d6 - 1', 5],
+      ['(4d6kh3+2)-1', 10],
+    ])('evaluates the complete expression %s', async (formula, total) => {
+      const result = await client.rollDice(formula as string, 'attack');
+      expect(result).toMatchObject({
+        schemaVersion: 1,
+        engine: 'local',
+        total,
+        reason: 'attack',
+        fallback: { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' },
+      });
+      expect(result.breakdown.endsWith(` = ${total}`)).toBe(true);
+      expect(result.timestamp).toMatch(/^\d{4}-/);
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
-    it('should validate dice formula', async () => {
-      await expect(client.rollDice('')).rejects.toThrow('Invalid dice formula');
-      await expect(client.rollDice('DROP TABLE')).rejects.toThrow('Invalid dice formula');
+    it.each([
+      '',
+      'DROP TABLE',
+      '(1d20+5)*2',
+      '1d20r1',
+      '1d20+STR',
+      '1d20+',
+      '1d20 5',
+      '1d0',
+      '1000d6',
+    ])('rejects invalid formula %s before randomness or transport', async (formula) => {
+      await expect(client.rollDice(formula)).rejects.toMatchObject({ code: -32602 });
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
-    it('should perform fallback dice roll', async () => {
-      const result = await client.rollDice('1d20+5', 'Attack roll');
-      expect(result.formula).toBe('1d20+5');
-      expect(result.total).toBeGreaterThanOrEqual(6);
-      expect(result.total).toBeLessThanOrEqual(25);
-      expect(result.reason).toBe('Attack roll');
-      expect(result.timestamp).toBeDefined();
-    });
-
-    it('should perform fallback roll for multiple dice', async () => {
-      const result = await client.rollDice('3d6');
-      expect(result.formula).toBe('3d6');
-      expect(result.total).toBeGreaterThanOrEqual(3);
-      expect(result.total).toBeLessThanOrEqual(18);
-    });
-
-    /**
-     * Issue #219 — the old parser only captured a modifier glued directly to a
-     * dice term, so every formula below returned a plausible-but-wrong total
-     * with the unparsed part silently dropped. RNG is pinned so the totals are
-     * exact rather than ranges.
-     */
-    describe('formulas that used to be silently mis-totalled (#219)', () => {
-      beforeEach(() => {
-        // Math.floor(0.5 * sides) + 1 — the middle-ish face of every die.
-        vi.spyOn(Math, 'random').mockReturnValue(0.5);
-      });
-
-      afterEach(() => {
-        vi.restoreAllMocks();
-      });
-
-      it.each([
-        { formula: '1d20+5', total: 16, breakdown: '1d20: [11] + 5 = 16' },
-        { formula: '1d20 + 5', total: 16, breakdown: '1d20: [11] + 5 = 16' },
-        { formula: '1d20+5+3', total: 19, breakdown: '1d20: [11] + 5 + 3 = 19' },
-        { formula: 'd20', total: 11, breakdown: '1d20: [11] = 11' },
-        { formula: '2d6+1d4', total: 11, breakdown: '2d6: [4, 4] + 1d4: [3] = 11' },
-        { formula: '2d6 - 1', total: 7, breakdown: '2d6: [4, 4] - 1 = 7' },
-      ])('rolls $formula for exactly $total', async ({ formula, total, breakdown }) => {
-        const result = await client.rollDice(formula);
-        expect(result.total).toBe(total);
-        expect(result.breakdown).toBe(breakdown);
-        // The rendered breakdown must agree with the total it claims.
-        expect(result.breakdown.endsWith(` = ${result.total}`)).toBe(true);
-      });
-
-      /**
-       * The message has to name the problem, not just the formula: `roll_dice`
-       * advertises `4d6kh3` and `1d20r1` by name as notation that "is rejected
-       * with an error naming the problem". A generic `Invalid dice formula:
-       * 4d6kh3` does not tell the caller which character was not understood.
-       */
-      it.each([
-        { formula: '(1d20+5)', match: /parenthes/i },
-        { formula: '(1d20+5)*2', match: /parenthes/i },
-        { formula: '4d6kh3', match: /unexpected "k" at position 3/ },
-        { formula: '1d20r1', match: /unexpected "r" at position 4/ },
-        { formula: '1d20*2', match: /unexpected "\*" at position 4/ },
-        { formula: '1d20+STR', match: /unexpected "S" at position 5/ },
-        { formula: '1d20+', match: /ends with/i },
-        { formula: '1d20 5', match: /unexpected/i },
-        { formula: '1d0', match: /at least 1 side/i },
-      ])('rejects $formula instead of dropping part of it', async ({ formula, match }) => {
-        await expect(client.rollDice(formula)).rejects.toThrow(match);
-      });
-    });
-
-    /**
-     * The transports do not accept the same grammar, and that is deliberate.
-     * REST hands the formula to FoundryVTT's own `Roll` engine, which
-     * understands more than the local fallback parser does; capping REST at
-     * the fallback's grammar would drop a capability #219 never asked to lose.
-     * Both transports still refuse anything outside the dice alphabet.
-     */
-    describe('per-transport formula grammar', () => {
-      function restClient() {
-        return new FoundryClient({
-          baseUrl: 'http://localhost:30000',
-          apiKey: 'test-api-key',
-        });
-      }
-
-      it('lets a parenthesised formula through to FoundryVTT over REST', async () => {
-        mockAxiosInstance.post.mockResolvedValue({
-          data: { total: 21, terms: [{ results: [16] }] },
-        });
-
-        const result = await restClient().rollDice('(1d20+5)', 'Attack');
-
-        expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/dice/roll', {
-          formula: '(1d20+5)',
-          flavor: 'Attack',
-        });
-        expect(result.total).toBe(21);
-      });
-
-      /**
-       * The REST body is external input. A 200 that carries no numeric `total`
-       * must not become a `DiceRoll` whose `total` is `undefined` while the
-       * type promises `number` — `roll_dice` would render that to the caller.
-       * A malformed body is treated like any other REST failure: fall through
-       * to the local roller, which produces a real total.
-       */
-      it('falls back to the local roller when the REST body has no numeric total', async () => {
-        mockAxiosInstance.post.mockResolvedValue({
-          data: { error: 'something went sideways' },
-        });
-
-        const result = await restClient().rollDice('1d20+5');
-
-        expect(mockAxiosInstance.post).toHaveBeenCalled();
-        expect(typeof result.total).toBe('number');
-        expect(Number.isNaN(result.total)).toBe(false);
-        expect(result.total).toBeGreaterThanOrEqual(6);
-        expect(result.total).toBeLessThanOrEqual(25);
-      });
-
-      /**
-       * REST accepts a wider grammar, but when it does refuse the message has
-       * to be as specific as the local path's: `roll_dice` promises `4d6kh3`
-       * and `1d20r1` are "rejected with an error naming the problem", and that
-       * promise is not scoped to a transport. A bare `Invalid dice formula:
-       * 4d6kh3` names nothing.
-       */
-      it('names the offending character when REST refuses notation outside the dice alphabet', async () => {
-        const rest = restClient();
-        await expect(rest.rollDice('4d6kh3')).rejects.toThrow(/unexpected "k" at position 3/);
-        await expect(rest.rollDice('1d20r1')).rejects.toThrow(/unexpected "r" at position 4/);
-        await expect(rest.rollDice('1d20*2')).rejects.toThrow(/unexpected "\*" at position 4/);
-        await expect(rest.rollDice('1d20+STR')).rejects.toThrow(/unexpected "S" at position 5/);
-        await expect(rest.rollDice('')).rejects.toThrow(/the formula is empty/);
-        await expect(rest.rollDice('1d20'.repeat(30))).rejects.toThrow(/Invalid dice formula/);
-        expect(mockAxiosInstance.post).not.toHaveBeenCalled();
-      });
-
-      it('does not blame parentheses, which REST supports, for an unrelated bad character', async () => {
-        // Delegating to the local parser here would report the parentheses —
-        // the wrong problem, since FoundryVTT evaluates those fine.
-        const rest = restClient();
-        await expect(rest.rollDice('(1d20+5)*2')).rejects.toThrow(/unexpected "\*" at position 8/);
-        await expect(rest.rollDice('(1d20+5)*2')).rejects.not.toThrow(
-          /parentheses are not supported/i,
+    it.each([
+      paired,
+      { restUrl: paired.restUrl },
+      { restApiKey: paired.restApiKey },
+      { restClientId: paired.restClientId },
+      { restUrl: paired.restUrl, restApiKey: paired.restApiKey },
+      { restUrl: paired.restUrl, restClientId: paired.restClientId },
+      { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
+      { apiKey: 'legacy-key' },
+      { ...paired, apiKey: 'legacy-key' },
+    ])('keeps default and auto dice local with read transport configuration %j', async (config) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      for (const engine of [undefined, 'auto'] as const) {
+        const result = await client.rollDice('(7-3)+2', undefined, engine);
+        expect(result).toMatchObject({ engine: 'local', total: 6 });
+        expect(result.fallback?.reason).toBe(
+          'restUrl' in config && 'restApiKey' in config && 'restClientId' in config
+            ? 'foundry-execution-not-requested'
+            : 'foundry-transport-not-configured',
         );
-        expect(mockAxiosInstance.post).not.toHaveBeenCalled();
-      });
+      }
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
 
-      it('rejects a parenthesised formula on the local path — nothing there can roll it', async () => {
-        await expect(client.rollDice('(1d20+5)')).rejects.toThrow(/parenthes/i);
-      });
+    it('requires a configured Foundry transport for explicit native execution', async () => {
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('not configured');
+      expect(Math.random).not.toHaveBeenCalled();
+    });
 
-      it('reports the parse error when REST is unreachable and the fallback cannot roll it', async () => {
-        mockAxiosInstance.post.mockRejectedValue(new Error('ECONNREFUSED'));
-
-        await expect(restClient().rollDice('(1d20+5)')).rejects.toThrow(/parenthes/i);
+    it.each([
+      { restUrl: paired.restUrl },
+      { restApiKey: paired.restApiKey },
+      { restClientId: paired.restClientId },
+      { restUrl: paired.restUrl, restApiKey: paired.restApiKey },
+      { restUrl: paired.restUrl, restClientId: paired.restClientId },
+      { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
+    ])('rejects partial native configuration %j', async (config) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Configure all');
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
       });
+    });
+
+    it('rejects the legacy-only dice route while allowing explicit local evaluation', async () => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'legacy-key' });
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Legacy');
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
+      });
+    });
+
+    it.each([
+      'foundry',
+    ] as const)('selects paired Foundry execution for %s even with legacy configuration', async (engine) => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        ...paired,
+        apiKey: 'legacy-key',
+      });
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          type: 'roll-result',
+          requestId: 'fixture',
+          success: true,
+          data: {
+            id: 'manual_fixture',
+            chatMessageCreated: false,
+            roll: {
+              formula: '1d6 + 3',
+              total: 9,
+              timestamp: 0,
+              dice: [{ faces: 6, results: [{ result: 6, active: true }] }],
+            },
+          },
+        },
+      });
+      const result = await client.rollDice('d6+3', 'attack', engine);
+      expect(result).toMatchObject({
+        engine: 'foundry',
+        total: 9,
+        normalizedFormula: '1d6 + 3',
+        fallback: null,
+        dice: [
+          {
+            termIndex: 0,
+            faces: 6,
+            count: 1,
+            modifier: null,
+            results: [{ result: 6, active: true }],
+          },
+        ],
+      });
+      expect(result.timestamp).toBe('1970-01-01T00:00:00.000Z');
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
+    });
+
+    it('never calls a configured native transport for explicit local execution', async () => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
+      });
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it.each(['network', 'malformed'])('never rerolls after a %s native failure', async (kind) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      if (kind === 'network') {
+        mockAxiosInstance.post.mockRejectedValue(new Error('fixture-key'));
+      } else {
+        mockAxiosInstance.post.mockResolvedValue({ data: { total: 10 } });
+      }
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow(
+        'no retry or local fallback',
+      );
+      expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
+      expect(Math.random).not.toHaveBeenCalled();
     });
   });
 
@@ -608,76 +665,183 @@ describe('FoundryClient', () => {
     });
   });
 
-  describe('refreshWorldData listener cleanup', () => {
-    /**
-     * Builds a minimal mock socket that records `once`/`off`/`emit` calls and
-     * lets the test trigger the registered 'world' handler manually.
-     */
+  describe('world snapshot refresh lifecycle', () => {
+    const ACTOR_ID = 'Actor00000000001';
+    const WORLD_SNAPSHOT = {
+      userId: 'test-user-id',
+      release: { version: '12.331' },
+      world: { id: 'world-1', title: 'Test World' },
+      system: { id: 'dnd5e', version: '3.3.1' },
+      modules: [],
+      demoMode: false,
+      actors: [{ _id: ACTOR_ID, name: 'Before refresh', type: 'npc', system: {} }],
+      scenes: [],
+      items: [],
+      journal: [],
+      messages: [],
+      combats: [],
+      users: [{ _id: 'user-aaaaaaaaaaaaaa', name: 'GM', role: 4 }],
+      activeUsers: [],
+      settings: [],
+      macros: [],
+      playlists: [],
+      tables: [],
+      folders: [],
+      cards: [],
+      packs: [],
+    };
+
     function buildMockSocket() {
-      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const worldAcks: Array<(payload: unknown) => void> = [];
+      const modifyAcks: Array<(payload: unknown) => void> = [];
       const socket = {
         connected: true,
-        once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-          listeners.set(event, handler);
+        emit: vi.fn((event: string, ...args: unknown[]) => {
+          const ack = args.at(-1);
+          if (event === 'world' && typeof ack === 'function') {
+            worldAcks.push(ack as (payload: unknown) => void);
+          }
+          if (event === 'modifyDocument' && typeof ack === 'function') {
+            modifyAcks.push(ack as (payload: unknown) => void);
+          }
           return socket;
         }),
-        off: vi.fn((event: string, _handler: (...args: unknown[]) => void) => {
-          listeners.delete(event);
-          return socket;
-        }),
-        emit: vi.fn(),
         disconnect: vi.fn(),
       };
-      return { socket, listeners };
+      return { socket, worldAcks, modifyAcks };
     }
 
-    it('removes the world listener on the success path', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', timeout: 50 });
-      const { socket, listeners } = buildMockSocket();
-      // Inject the mock socket — bypasses the real Socket.IO connect path.
-      (client as unknown as { socket: typeof socket }).socket = socket;
+    function attachSocket(socket: ReturnType<typeof buildMockSocket>['socket']) {
+      Reflect.set(client, 'socket', socket);
+      Reflect.set(client, 'socketGeneration', 1);
+      Reflect.set(client, 'socketEpoch', 1);
+      Reflect.set(client, 'socketUserId', 'test-user-id');
+      Reflect.set(client, '_isConnected', true);
+    }
 
-      const refresh = client.refreshWorldData();
-
-      // Trigger the 'world' event handler with a minimal valid WorldData payload.
-      const handler = listeners.get('world');
-      expect(handler).toBeDefined();
-      handler?.({
-        userId: 'test-user',
-        actors: [],
-        scenes: [],
-        items: [],
-        journal: [],
-        messages: [],
-        combats: [],
-        users: [],
-        activeUsers: [],
-        macros: [],
-        playlists: [],
-        tables: [],
-        folders: [],
+    it('uses an acknowledgement callback and coalesces concurrent refreshes', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
       });
+      const { socket, worldAcks } = buildMockSocket();
+      attachSocket(socket);
 
-      await refresh;
+      const first = client.refreshWorldData();
+      const second = client.refreshWorldData();
 
-      expect(socket.once).toHaveBeenCalledWith('world', expect.any(Function));
-      const registeredHandler = socket.once.mock.calls[0]?.[1];
-      expect(socket.off).toHaveBeenCalledWith('world', registeredHandler);
-      expect(listeners.has('world')).toBe(false);
+      expect(worldAcks).toHaveLength(1);
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await Promise.all([first, second]);
+
+      expect(socket.emit).toHaveBeenCalledWith('world', expect.any(Function));
+      expect(client.getReadMetadata()).toMatchObject({
+        source: 'socket',
+        freshness: 'current',
+        worldId: 'world-1',
+        revision: 1,
+      });
+      expect((await client.getWorldInfo()).title).toBe('Test World');
     });
 
-    it('removes the world listener on the timeout path', async () => {
-      // Short timeout so the test runs fast; never trigger the 'world' event.
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', timeout: 25 });
-      const { socket, listeners } = buildMockSocket();
-      (client as unknown as { socket: typeof socket }).socket = socket;
+    it('rejects a timed-out refresh and ignores its late acknowledgement', async () => {
+      vi.useFakeTimers();
+      try {
+        client = new FoundryClient({
+          baseUrl: 'http://localhost:30000',
+          timeout: 25,
+          retryAttempts: 0,
+        });
+        const { socket, worldAcks } = buildMockSocket();
+        attachSocket(socket);
 
-      await expect(client.refreshWorldData()).rejects.toThrow('Refresh timeout');
+        const refresh = client.refreshWorldData();
+        const rejected = expect(refresh).rejects.toThrow('ACK timed out');
+        await vi.advanceTimersByTimeAsync(26);
+        await rejected;
 
-      expect(socket.once).toHaveBeenCalledWith('world', expect.any(Function));
-      const registeredHandler = socket.once.mock.calls[0]?.[1];
-      expect(socket.off).toHaveBeenCalledWith('world', registeredHandler);
-      expect(listeners.has('world')).toBe(false);
+        worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+        await Promise.resolve();
+        expect(client.hasWorldData()).toBe(false);
+        expect(client.getReadMetadata().freshness).toBe('unavailable');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not publish malformed or retired acknowledgements', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+      });
+      const first = buildMockSocket();
+      attachSocket(first.socket);
+      const malformed = client.refreshWorldData();
+      first.worldAcks[0]?.({ ...WORLD_SNAPSHOT, actors: null });
+      await expect(malformed).rejects.toThrow('snapshot validation failed');
+      expect(client.hasWorldData()).toBe(false);
+
+      const retired = client.refreshWorldData();
+      Reflect.set(client, 'socketEpoch', 2);
+      first.worldAcks[1]?.(structuredClone(WORLD_SNAPSHOT));
+      await expect(retired).rejects.toThrow(/retired socket session/i);
+      expect(client.hasWorldData()).toBe(false);
+    });
+
+    it('replays document and presence events received during refresh', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+      });
+      const { socket, worldAcks } = buildMockSocket();
+      attachSocket(socket);
+
+      const refresh = client.refreshWorldData();
+      Reflect.get(
+        client,
+        'onDocumentBroadcast',
+      )({
+        type: 'Actor',
+        action: 'update',
+        result: [{ _id: ACTOR_ID, name: 'During refresh' }],
+      });
+      Reflect.get(client, 'onUserActivity')('user-aaaaaaaaaaaaaa', { active: true });
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await refresh;
+
+      expect(client.getRawActor(ACTOR_ID)?.name).toBe('During refresh');
+      expect(client.getUsers().activeUsers).toEqual(['user-aaaaaaaaaaaaaa']);
+    });
+
+    it('applies an authoritative write acknowledgement when no broadcast returns to the writer', async () => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        timeout: 50,
+        retryAttempts: 0,
+        writeEnabled: true,
+      });
+      const { socket, worldAcks, modifyAcks } = buildMockSocket();
+      attachSocket(socket);
+      const refresh = client.refreshWorldData();
+      worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
+      await refresh;
+
+      const modifyDocument = Reflect.get(client, 'modifyDocument').bind(client) as (
+        type: string,
+        action: string,
+        operation: Record<string, unknown>,
+      ) => Promise<unknown>;
+      const update = modifyDocument('Actor', 'update', {
+        updates: [{ _id: ACTOR_ID, name: 'Acknowledged update' }],
+      });
+      modifyAcks[0]?.({ result: [{ _id: ACTOR_ID, name: 'Acknowledged update' }] });
+      await update;
+
+      expect(client.getRawActor(ACTOR_ID)?.name).toBe('Acknowledged update');
+      expect(client.getReadMetadata().revision).toBe(2);
     });
   });
 
@@ -735,6 +899,8 @@ describe('FoundryClient', () => {
       world: { id: 'w', title: 'Test World' },
       system: { id: 'dnd5e', version: '3.3.1' },
       release: { version: '12.331' },
+      modules: [],
+      demoMode: false,
       actors: [],
       scenes: [],
       items: [],
@@ -751,6 +917,8 @@ describe('FoundryClient', () => {
       playlists: [],
       tables: [],
       folders: [],
+      cards: [],
+      packs: [],
     };
 
     async function connectWithMockSocket(existing?: FoundryClient) {
@@ -785,6 +953,17 @@ describe('FoundryClient', () => {
     it('reports connected after a successful handshake', async () => {
       const { client: connected } = await connectWithMockSocket();
       expect(connected.isConnected()).toBe(true);
+    });
+
+    it('authenticates an explicitly empty password for a passwordless Foundry user', async () => {
+      const { authenticateFoundry } = await import('../auth.js');
+      const { client: connected } = await connectWithMockSocket(
+        new FoundryClient({ baseUrl: 'http://localhost:30000', username: 'gm', password: '' }),
+      );
+
+      expect(authenticateFoundry).toHaveBeenCalledWith('http://localhost:30000', 'gm', '');
+      expect(connected.isConnected()).toBe(true);
+      await connected.disconnect();
     });
 
     it('reports disconnected once the socket drops without disconnect()', async () => {
@@ -861,9 +1040,7 @@ describe('FoundryClient', () => {
       fire('connect');
 
       expect(connected.isConnected()).toBe(true);
-      // The gap was not replayed: broadcasts missed while the socket was down
-      // are gone, so the cache stays flagged until an explicit refresh.
-      expect(connected.isWorldDataStale()).toBe(true);
+      await vi.waitFor(() => expect(connected.isWorldDataStale()).toBe(false));
     });
 
     /**
@@ -885,14 +1062,14 @@ describe('FoundryClient', () => {
       fire('disconnect', 'transport close');
       socket.connected = true;
       fire('connect');
+      await vi.waitFor(() => expect(connected.isWorldDataStale()).toBe(false));
 
       const after = (await handleGetHealthStatus({}, connected, diagnosticsClient)).content[0] as {
         text: string;
       };
 
       expect(after.text).toContain('✅ Connected');
-      expect(after.text).toMatch(/stale/i);
-      expect(after.text).toContain('refresh_world_data');
+      expect(after.text).not.toMatch(/stale/i);
     });
 
     it('removes the persistent connect listener on explicit disconnect()', async () => {

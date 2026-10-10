@@ -69,11 +69,11 @@ async function getSessionCookie(baseUrl: string): Promise<string> {
 async function resolveUserId(baseUrl: string, user: string, session: string): Promise<string> {
   // FoundryVTT document IDs are 16-character alphanumeric strings
   if (/^[a-zA-Z0-9]{16}$/.test(user)) {
-    logger.debug('User identifier is already a document _id', { userId: user });
+    logger.debug('User identifier is already a document _id');
     return user;
   }
 
-  logger.debug('Resolving display name to document _id', { displayName: user });
+  logger.debug('Resolving display name to document _id');
 
   return new Promise((resolve, reject) => {
     const socket = io(baseUrl, sessionSocketOptions(session));
@@ -101,12 +101,11 @@ async function resolveUserId(baseUrl: string, user: string, session: string): Pr
 
         const found = data.users.find((u) => u.name.toLowerCase() === user.toLowerCase());
         if (!found) {
-          const available = data.users.map((u) => u.name).join(', ');
-          logger.debug('User not found in FoundryVTT user list', { available });
-          return reject(new Error(`User "${user}" not found`));
+          logger.debug('User not found in FoundryVTT user list');
+          return reject(new Error('FoundryVTT user not found'));
         }
 
-        logger.debug('Resolved user document _id', { displayName: user, _id: found._id });
+        logger.debug('Resolved user document _id');
         resolve(found._id);
       });
     };
@@ -179,6 +178,7 @@ export async function authenticateFoundry(
       headers: {
         'Content-Type': 'application/json',
         Cookie: `session=${session}`,
+        Origin: new URL(baseUrl).origin,
       },
       // Accept 200 (success JSON), 302 (redirect to /game on success) and 401
       // (bad password). 401 carries FoundryVTT's own explanation in the body;
@@ -199,6 +199,6 @@ export async function authenticateFoundry(
     throw new Error(`FoundryVTT authentication failed (HTTP ${joinRes.status}): ${msg}`);
   }
 
-  logger.info('FoundryVTT authentication successful', { userId });
+  logger.info('FoundryVTT authentication successful');
   return { session, userId };
 }

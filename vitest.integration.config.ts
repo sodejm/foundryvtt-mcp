@@ -16,8 +16,11 @@ export default defineConfig({
     isolate: false,
     env: {
       NODE_ENV: 'test',
-      FOUNDRY_URL: 'http://localhost:30001',
-      LOG_LEVEL: 'error',
+      FOUNDRY_URL: process.env.FOUNDRY_URL ?? 'http://127.0.0.1:30001',
+      FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME ?? 'test-user',
+      // Preserve an explicitly empty password for passwordless test users.
+      FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? 'test-password',
+      LOG_LEVEL: process.env.LOG_LEVEL ?? 'error',
     },
     globalSetup: ['tests/integration/global-setup.ts'],
   },

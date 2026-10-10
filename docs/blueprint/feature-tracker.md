@@ -14,11 +14,11 @@
 | Chat message history | PRD-001 | complete | medium |
 | Full-text world search | PRD-001 | complete | medium |
 | World summary | PRD-001 | complete | medium |
-| NPC generation | PRD-001 | complete | low |
-| Loot table generation | PRD-001 | complete | low |
-| Rule lookup | PRD-001 | complete | low |
+| NPC generation | PRD-001 | partial | low |
+| Loot table generation | PRD-001 | partial | low |
+| Rule lookup | PRD-001 | partial | low |
 | MCP resource endpoints (foundry://) | PRD-001 | complete | medium |
-| Optional REST API diagnostics (logs, health) | PRD-002 | complete | low |
+| Optional REST API diagnostics (logs, health) | PRD-002 | partial | low |
 | Combat management (start/end, advance initiative) | PRD-001 | partial | high |
 | Token manipulation (move, status effects) | PRD-001 | planned | medium |
 | Scene navigation and switching | PRD-001 | planned | medium |
@@ -26,3 +26,8 @@
 | Journal creation and editing | PRD-001 | planned | low |
 | Macro execution | PRD-001 | planned | low |
 | Multi-world support | PRD-001 | planned | low |
+
+NPC/loot templates and legacy diagnostics utilities remain partial. Rule lookup
+returns an explicit unavailable result with no generated rule content.
+`get_capabilities` reports these Foundry-backed integrations as unavailable;
+only compendium search currently has a verified optional adapter.

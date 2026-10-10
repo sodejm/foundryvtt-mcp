@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { WorldActor, WorldCombat } from '../../../foundry/types.js';
 import { handleGetCombatState } from '../combat.js';
+import { readMetadata } from './pagination-fixture.js';
 
 function getText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -39,6 +40,7 @@ function buildCombat(overrides: Partial<WorldCombat> = {}): WorldCombat {
 describe('handleGetCombatState', () => {
   it('returns "No active combat encounter." when no combat exists', async () => {
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(null),
     } as unknown as FoundryClient;
 
@@ -60,6 +62,7 @@ describe('handleGetCombatState', () => {
       ],
     });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -87,6 +90,7 @@ describe('handleGetCombatState', () => {
       combatants: [buildCombatant({ name: 'Sneaky', initiative: null })],
     });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -105,6 +109,7 @@ describe('handleGetCombatState', () => {
       ],
     });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -134,6 +139,7 @@ describe('handleGetCombatState', () => {
       },
     };
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(rawActor),
     } as unknown as FoundryClient;
@@ -151,6 +157,7 @@ describe('handleGetCombatState', () => {
       combatants: [buildCombatant({ name: 'Ghost', initiative: 7, actorId: 'missing-id' })],
     });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -166,6 +173,7 @@ describe('handleGetCombatState', () => {
   it('handles empty combatant list gracefully', async () => {
     const combat = buildCombat({ round: 2, combatants: [] });
     const client = {
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     } as unknown as FoundryClient;
@@ -180,6 +188,7 @@ describe('handleGetCombatState', () => {
 describe('handleGetCombatState — turn order (#214)', () => {
   const makeClient = (combat: WorldCombat) =>
     ({
+      getReadMetadata: () => readMetadata(),
       getCombatState: vi.fn().mockReturnValue(combat),
       getRawActor: vi.fn().mockReturnValue(undefined),
     }) as unknown as FoundryClient;

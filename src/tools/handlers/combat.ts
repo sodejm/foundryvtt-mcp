@@ -4,13 +4,13 @@
 
 import type { FoundryClient } from '../../foundry/client.js';
 import { getTurnOrder } from './combat-order.js';
-import { withToolError } from './utils.js';
+import { withWorldRead } from './utils.js';
 
 export async function handleGetCombatState(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('get combat state', async () => {
+  return withWorldRead('get combat state', foundryClient, async () => {
     const combat = foundryClient.getCombatState();
 
     if (!combat) {

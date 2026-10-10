@@ -10,6 +10,19 @@
  * @see {@link https://foundryvtt.com/api/} FoundryVTT API Documentation
  */
 
+import type { Capability } from './capabilities.js';
+import type { PaginationMetadata } from './pagination.js';
+
+/** Public versioned MCP read envelopes and their allowlisted document records. */
+export type {
+  ActorDetailsEnvelope,
+  ActorReadRecord,
+  ActorSearchEnvelope,
+  ItemDetailsEnvelope,
+  ItemReadRecord,
+  ItemSearchEnvelope,
+} from './read-contract.js';
+
 // FoundryVTT Data Types
 
 /**
@@ -22,7 +35,7 @@
  * @example
  * ```typescript
  * const hero: FoundryActor = {
- *   _id: 'actor-123',
+ *   _id: 'Actor00000000001',
  *   name: 'Aragorn',
  *   type: 'character',
  *   hp: { value: 45, max: 45 },
@@ -38,9 +51,10 @@ export interface FoundryActor {
   img?: string;
   data?: Record<string, unknown>;
   // Common actor properties
+  uuid?: string;
   hp?: {
-    value: number;
-    max: number;
+    value?: number;
+    max?: number;
     temp?: number;
   };
   ac?: {
@@ -50,8 +64,8 @@ export interface FoundryActor {
   abilities?: Record<
     string,
     {
-      value: number;
-      mod: number;
+      value?: number;
+      mod?: number;
       save?: number;
     }
   >;
@@ -82,7 +96,7 @@ export interface FoundryActor {
  * @example
  * ```typescript
  * const sword: FoundryItem = {
- *   _id: 'item-456',
+ *   _id: 'Item000000000001',
  *   name: 'Longsword +1',
  *   type: 'weapon',
  *   rarity: 'uncommon',
@@ -92,6 +106,10 @@ export interface FoundryActor {
  * ```
  */
 export interface FoundryItem {
+  /** Internal raw system input; public records expose only bounded economy source fields. */
+  system?: unknown;
+  economy?: import('./item-economy-contract.js').ItemEconomy;
+  uuid?: string;
   _id: string;
   name: string;
   type: string;
@@ -456,30 +474,8 @@ export interface FoundryCombat {
   };
 }
 
-/**
- * Represents the result of a dice roll in FoundryVTT
- *
- * Contains all information about a completed dice roll including
- * the formula used, total result, breakdown, and metadata.
- *
- * @example
- * ```typescript
- * const attackRoll: DiceRoll = {
- *   formula: '1d20+5',
- *   total: 18,
- *   breakdown: '13 + 5',
- *   reason: 'Sword attack',
- *   timestamp: '2024-01-15T10:30:00Z'
- * };
- * ```
- */
-export interface DiceRoll {
-  formula: string;
-  total: number;
-  breakdown: string;
-  reason?: string;
-  timestamp: string;
-}
+/** Versioned, verified outcomes with explicit engine provenance. */
+export type DiceRoll = import('./dice-contract.js').DiceRollOutput;
 
 export interface FoundryUser {
   _id: string;
@@ -510,11 +506,8 @@ export interface FoundryUser {
  * };
  * ```
  */
-export interface ActorSearchResult {
+export interface ActorSearchResult extends PaginationMetadata {
   actors: FoundryActor[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 /**
@@ -533,11 +526,8 @@ export interface ActorSearchResult {
  * };
  * ```
  */
-export interface ItemSearchResult {
+export interface ItemSearchResult extends PaginationMetadata {
   items: FoundryItem[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 /**
@@ -564,24 +554,24 @@ export interface CompendiumSearchEntry {
   };
 }
 
-/**
- * Result envelope for a compendium search.
- *
- * `restAvailable` signals whether the REST API module (FOUNDRY_API_KEY) was
- * present. When false, `results` is empty and the handler surfaces a note
- * explaining that compendium search requires REST mode.
- *
- * `nextCursor` carries the opaque pagination cursor for the following page
- * (an offset, base64-encoded); it is `null` when no further results exist.
- */
-export interface CompendiumSearchResult {
-  results: CompendiumSearchEntry[];
-  total: number;
-  page: number;
-  limit: number;
-  restAvailable: boolean;
-  nextCursor: string | null;
-}
+/** Unsupported searches carry null results; a verified search may return an empty array. */
+export type CompendiumSearchResult =
+  | (PaginationMetadata & {
+      schemaVersion: 1;
+      capability: Capability & { status: 'available' };
+      restAvailable: true;
+      results: CompendiumSearchEntry[];
+    })
+  | {
+      schemaVersion: 1;
+      capability: Capability & { status: Exclude<Capability['status'], 'available'> };
+      restAvailable: false;
+      results: null;
+      total: null;
+      page: null;
+      limit: number;
+      nextCursor: null;
+    };
 
 /**
  * Source for creating an item on an actor.
@@ -824,24 +814,82 @@ export interface WorldScene {
 /**
  * Raw journal entry from worldData.
  */
+export interface WorldJournalPage {
+  _id: string;
+  name: string;
+  type: string;
+  title?: { show: boolean; level: number };
+  text?: { content?: string | null; markdown?: string | null; format: number };
+  image?: Record<string, unknown>;
+  video?: Record<string, unknown>;
+  src?: string | null;
+  sort?: number;
+  ownership?: Record<string, number>;
+}
+
 export interface WorldJournal {
   _id: string;
   name: string;
-  pages?: Array<{
-    _id: string;
-    name: string;
-    type: string;
-    title?: { show: boolean; level: number };
-    text?: { content: string; format: number };
-    image?: Record<string, unknown>;
-    video?: Record<string, unknown>;
-    src?: string;
-    sort?: number;
-  }>;
+  pages?: WorldJournalPage[];
   folder?: string | null;
   sort?: number;
   ownership?: Record<string, number>;
   flags?: Record<string, unknown>;
+}
+
+export type JournalSourceFormat = 'html' | 'markdown' | 'unknown' | 'none';
+export type JournalContentFormat = 'text' | 'source';
+
+export interface JournalPageMetadata {
+  id: string;
+  uuid: string;
+  name: string;
+  type: string;
+  sort: number;
+  sourceFormat: JournalSourceFormat;
+  title?: { show: boolean; level: number };
+  asset?: { src: string; caption?: string };
+}
+
+export interface JournalPageSummary extends JournalPageMetadata {
+  content: string;
+  contentTruncated: boolean;
+}
+
+export interface JournalContentChunk {
+  index: number;
+  start: number;
+  end: number;
+  content: string;
+}
+
+export interface JournalSummaryPageParams {
+  journalId: string;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface JournalPageContentParams extends JournalSummaryPageParams {
+  pageId: string;
+  format?: JournalContentFormat | undefined;
+}
+
+export interface JournalSummaryPage extends PaginationMetadata {
+  id: string;
+  uuid: string;
+  name: string;
+  pages: JournalPageSummary[];
+}
+
+export interface JournalPageContent extends Omit<PaginationMetadata, 'page'> {
+  journalId: string;
+  page: JournalPageMetadata;
+  /** Numeric paginator position; `page` is reserved for JournalEntryPage metadata. */
+  paginationPage: number;
+  format: JournalContentFormat;
+  contentLength: number;
+  chunks: JournalContentChunk[];
+  contentTruncated: boolean;
 }
 
 /**
@@ -850,6 +898,8 @@ export interface WorldJournal {
 export interface WorldMessage {
   _id: string;
   type: number;
+  /** Foundry v14 persists the author id as `author`; older snapshots use `user`. */
+  author?: string;
   user: string;
   timestamp: number;
   flavor?: string;
@@ -958,8 +1008,8 @@ export interface WorldEffect {
 export interface WorldData {
   userId: string;
   release: Record<string, unknown>;
-  world: Record<string, unknown>;
-  system: Record<string, unknown>;
+  world: Record<string, unknown> & { id: string };
+  system: Record<string, unknown> & { id: string };
   modules: Array<Record<string, unknown>>;
   demoMode: boolean;
   actors: WorldActor[];

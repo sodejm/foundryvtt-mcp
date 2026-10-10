@@ -3,69 +3,51 @@
  */
 
 import type { FoundryClient } from '../../foundry/client.js';
-import { withToolError } from './utils.js';
+import {
+  boundedReadResponse,
+  collectionSearchSchema,
+  paginationText,
+  parseReadInput,
+  worldSearchInputSchema,
+} from '../../foundry/read-contract.js';
+import { withToolError, withWorldRead } from './utils.js';
 
 export async function handleSearchWorld(
-  args: { query: string; limit?: number },
+  args: { query?: string; limit?: number; cursor?: string },
   foundryClient: FoundryClient,
 ) {
-  return withToolError('search world', async () => {
-    const results = foundryClient.searchWorld(args.query);
-    const limit = args.limit || 5;
-
-    const sections: string[] = [];
-
-    if (results.actors.length > 0) {
-      const items = results.actors
-        .slice(0, limit)
-        .map((a) => `  - ${a.name} (${a.type})`)
+  const params = parseReadInput(worldSearchInputSchema, args);
+  return withToolError(
+    'search world',
+    async () => {
+      const page = await foundryClient.searchWorldPage(params);
+      const structuredContent = collectionSearchSchema.parse({
+        schemaVersion: 3,
+        scope: 'world',
+        ...page,
+      });
+      const formatted = structuredContent.records
+        .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
         .join('\n');
-      sections.push(`**Actors** (${results.actors.length})\n${items}`);
-    }
-    if (results.items.length > 0) {
-      const items = results.items
-        .slice(0, limit)
-        .map((i) => `  - ${i.name} (${i.type})`)
-        .join('\n');
-      sections.push(`**Items** (${results.items.length})\n${items}`);
-    }
-    if (results.scenes.length > 0) {
-      const items = results.scenes
-        .slice(0, limit)
-        .map((s) => `  - ${s.name}${s.active ? ' [ACTIVE]' : ''}`)
-        .join('\n');
-      sections.push(`**Scenes** (${results.scenes.length})\n${items}`);
-    }
-    if (results.journals.length > 0) {
-      const items = results.journals
-        .slice(0, limit)
-        .map((j) => `  - ${j.name}`)
-        .join('\n');
-      sections.push(`**Journals** (${results.journals.length})\n${items}`);
-    }
-
-    if (sections.length === 0) {
-      return {
-        content: [{ type: 'text', text: `No results found for "${args.query}".` }],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `**World Search** — "${args.query}"\n\n${sections.join('\n\n')}`,
-        },
-      ],
-    };
-  });
+      return boundedReadResponse({
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `**World Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
+          },
+        ],
+      });
+    },
+    foundryClient,
+  );
 }
 
 export async function handleGetWorldSummary(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('get world summary', async () => {
+  return withWorldRead('get world summary', foundryClient, async () => {
     const worldInfo = await foundryClient.getWorldInfo();
     const counts = foundryClient.getWorldSummary();
 
@@ -93,7 +75,7 @@ export async function handleRefreshWorldData(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('refresh world data', async () => {
+  return withWorldRead('refresh world data', foundryClient, async () => {
     await foundryClient.refreshWorldData();
     const counts = foundryClient.getWorldSummary();
 

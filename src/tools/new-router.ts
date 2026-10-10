@@ -8,11 +8,25 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { FoundryClient } from '../foundry/client.js';
+import { parseErrorDiagnosisInput } from '../foundry/diagnosis-contract.js';
+import {
+  parseLootGenerationInput,
+  parseNpcGenerationInput,
+} from '../foundry/generation-contract.js';
+import { parseRuleLookupInput } from '../foundry/rule-contract.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
+import { assertResourceAllowed, assertToolAllowed } from './authorization.js';
 import type { ToolContext } from './base.js';
 // Import legacy handlers for tools not yet converted
-import { handleGetActorDetails, handleSearchActors } from './handlers/actors.js';
+import {
+  handleGetActorDetails,
+  handleGetActorItem,
+  handleGetActorSection,
+  handleGetActorSheet,
+  handleListActorItems,
+  handleSearchActors,
+} from './handlers/actors.js';
 import {
   handleDiagnoseErrors,
   handleGetHealthStatus,
@@ -20,10 +34,17 @@ import {
   handleGetSystemHealth,
   handleSearchLogs,
 } from './handlers/diagnostics.js';
-import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
-import { handleSearchItems } from './handlers/items.js';
+import { handleRollDice } from './handlers/dice.js';
+import { handleGenerateLoot, handleGenerateNPC } from './handlers/generation.js';
+import { handleGetItemDetails, handleSearchItems } from './handlers/items.js';
 import { handleReadResource } from './handlers/resources.js';
-import { handleGetSceneInfo } from './handlers/scenes.js';
+import { handleLookupRule } from './handlers/rules.js';
+import {
+  handleGetSceneInfo,
+  handleGetSceneSpatial,
+  handleGetSceneToken,
+  handleListSceneTokens,
+} from './handlers/scenes.js';
 import { toolRegistry } from './registry.js';
 
 /**
@@ -36,7 +57,10 @@ export async function routeToolRequest(
   diagnosticsClient: DiagnosticsClient,
   diagnosticSystem: DiagnosticSystem,
 ) {
-  logger.debug(`Routing tool request: ${name}`, { args });
+  assertToolAllowed(name, foundryClient);
+  if (!foundryClient.isDelegatedMode?.()) {
+    logger.debug(`Routing tool request: ${name}`, { args });
+  }
 
   const context: ToolContext = {
     foundryClient,
@@ -54,7 +78,9 @@ export async function routeToolRequest(
       }
       throw new McpError(
         ErrorCode.InternalError,
-        `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        foundryClient.isDelegatedMode?.()
+          ? 'Delegated read unavailable'
+          : `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
     }
   }
@@ -72,42 +98,57 @@ async function routeLegacyTool(
   args: Record<string, unknown>,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
-  diagnosticSystem: DiagnosticSystem,
+  _diagnosticSystem: DiagnosticSystem,
 ) {
   switch (name) {
+    case 'roll_dice':
+      return handleRollDice(args, foundryClient);
     // Actor tools
     case 'search_actors':
       return handleSearchActors(args, foundryClient);
     case 'get_actor_details':
       if (!('actorId' in args) || typeof args.actorId !== 'string') {
-        throw new Error('Missing required parameter: actorId');
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
+    case 'get_actor_sheet':
+      return handleGetActorSheet(args, foundryClient);
+    case 'get_actor_section':
+      return handleGetActorSection(args, foundryClient);
+    case 'list_actor_items':
+      return handleListActorItems(args, foundryClient);
+    case 'get_actor_item':
+      return handleGetActorItem(args, foundryClient);
 
     // Item tools
     case 'search_items':
       return handleSearchItems(args, foundryClient);
+    case 'get_item_details':
+      if (!('itemId' in args) || typeof args.itemId !== 'string') {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required parameter: itemId');
+      }
+      return handleGetItemDetails(args as { itemId: string }, foundryClient);
 
     // Scene tools
     case 'get_scene_info':
       return handleGetSceneInfo(args, foundryClient);
+    case 'get_scene_spatial':
+      return handleGetSceneSpatial(args, foundryClient);
+    case 'list_scene_tokens':
+      return handleListSceneTokens(args, foundryClient);
+    case 'get_scene_token':
+      return handleGetSceneToken(args, foundryClient);
 
     // Generation tools
     case 'generate_npc':
-      return handleGenerateNPC(
-        args as { level?: number; race?: string; class?: string },
-        foundryClient,
-      );
+      parseNpcGenerationInput(args);
+      return handleGenerateNPC(args);
     case 'generate_loot':
-      return handleGenerateLoot(
-        args as { challengeRating?: number; treasureType?: string },
-        foundryClient,
-      );
+      parseLootGenerationInput(args);
+      return handleGenerateLoot(args);
     case 'lookup_rule':
-      if (!('query' in args) || typeof args.query !== 'string') {
-        throw new Error('Missing required parameter: query');
-      }
-      return handleLookupRule(args as { query: string; system?: string }, foundryClient);
+      parseRuleLookupInput(args);
+      return handleLookupRule(args, foundryClient);
 
     // Diagnostics tools
     case 'get_recent_logs':
@@ -123,7 +164,8 @@ async function routeLegacyTool(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      parseErrorDiagnosisInput(args);
+      return handleDiagnoseErrors(args);
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 
@@ -140,6 +182,9 @@ export async function routeResourceRequest(
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
 ) {
-  logger.debug(`Routing resource request: ${uri}`);
+  assertResourceAllowed(uri, foundryClient);
+  if (!foundryClient.isDelegatedMode?.()) {
+    logger.debug(`Routing resource request: ${uri}`);
+  }
   return handleReadResource(uri, foundryClient, diagnosticsClient);
 }

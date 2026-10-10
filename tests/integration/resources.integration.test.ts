@@ -108,9 +108,10 @@ describe.skipIf(SKIP_INTEGRATION)('Resource URIs', () => {
           // Either is acceptable — just ensure something exists.
           expect(Object.keys(parsed).length).toBeGreaterThan(0);
         } else {
-          // Non-graceful URIs always carry a `lastUpdated` timestamp.
-          expect(parsed).toHaveProperty('lastUpdated');
-          expect(typeof parsed.lastUpdated).toBe('string');
+          // Cached reads carry source freshness rather than a response-clock lastUpdated.
+          expect(parsed).toHaveProperty('readMetadata');
+          expect(parsed.readMetadata.freshness).toBe('current');
+          expect(typeof parsed.readMetadata.respondedAt).toBe('string');
         }
       }
     },

@@ -2,41 +2,41 @@ name: Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: Build and Test
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - name: Unit tests and structured-read coverage
+        run: bun run test:reads:coverage
+        env:
+          NODE_ENV: test
+          FOUNDRY_URL: http://localhost:30000
+          LOG_LEVEL: error
+      - run: bun run test:workflow
+      - run: bun run smoke
+      - run: bun run smoke:dotenv
+      - run: bun run smoke:pack
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
-
-    - name: Install dependencies
-      run: bun install --frozen-lockfile
-
-    - name: Build
-      run: bun run build
-
-    - name: Run tests
-      run: bun run test
-      env:
-        NODE_ENV: test
-        FOUNDRY_URL: http://localhost:30000
-        LOG_LEVEL: error
-
-    - name: Startup smoke test
-      run: bun run smoke
-
-    - name: Dotenv load-order smoke test
-      run: bun run smoke:dotenv
-
-    - name: Pack smoke test
-      run: bun run smoke:pack
-
-    - name: Run linter
-      run: bun run lint
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint

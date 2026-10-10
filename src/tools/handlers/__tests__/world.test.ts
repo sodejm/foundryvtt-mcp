@@ -5,147 +5,60 @@
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
-import type {
-  FoundryWorld,
-  WorldActor,
-  WorldItem,
-  WorldJournal,
-  WorldScene,
-} from '../../../foundry/types.js';
+import type { FoundryWorld } from '../../../foundry/types.js';
 import { handleGetWorldSummary, handleRefreshWorldData, handleSearchWorld } from '../world.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 function getText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
 }
 
-function buildActor(name: string, type = 'character'): WorldActor {
-  return { _id: `a-${name}`, name, type, system: {} };
-}
-
-function buildItem(name: string, type = 'weapon'): WorldItem {
-  return { _id: `i-${name}`, name, type, system: {} };
-}
-
-function buildScene(name: string, active = false): WorldScene {
-  return {
-    _id: `s-${name}`,
-    name,
-    active,
-    navigation: true,
-    width: 0,
-    height: 0,
-    padding: 0,
-    darkness: 0,
-    globalLight: false,
-  };
-}
-
-function buildJournal(name: string): WorldJournal {
-  return { _id: `j-${name}`, name };
-}
-
 describe('handleSearchWorld', () => {
-  it('formats results across all collections on happy path', async () => {
-    const client = {
-      searchWorld: vi.fn().mockReturnValue({
-        actors: [buildActor('Wizard')],
-        items: [buildItem('Wand')],
-        scenes: [buildScene('Tower', true)],
-        journals: [buildJournal('Lore')],
-      }),
-    } as unknown as FoundryClient;
-
-    const result = await handleSearchWorld({ query: 'w' }, client);
-    const text = getText(result);
-
-    expect(client.searchWorld).toHaveBeenCalledWith('w');
-    expect(text).toContain('**World Search** — "w"');
-    expect(text).toContain('**Actors** (1)');
-    expect(text).toContain('Wizard (character)');
-    expect(text).toContain('**Items** (1)');
-    expect(text).toContain('Wand (weapon)');
-    expect(text).toContain('**Scenes** (1)');
-    expect(text).toContain('Tower [ACTIVE]');
-    expect(text).toContain('**Journals** (1)');
-    expect(text).toContain('Lore');
+  it('returns one unified page across all world document types', async () => {
+    const records = [
+      { id: 'Actor00000000001', name: 'Wizard', documentType: 'Actor', type: 'character' },
+      { id: 'Item000000000001', name: 'Wand', documentType: 'Item', type: 'weapon' },
+      { id: 'Scene00000000001', name: 'Tower', documentType: 'Scene', active: true },
+      { id: 'Journal000000001', name: 'Lore', documentType: 'JournalEntry', pageCount: 0 },
+    ];
+    const searchWorldPage = vi.fn().mockResolvedValue({ records, ...paginationMetadata(4) });
+    const result = await handleSearchWorld({ query: 'w' }, {
+      searchWorldPage,
+    } as unknown as FoundryClient);
+    expect(searchWorldPage).toHaveBeenCalledWith({ query: 'w' });
+    expect(result.structuredContent).toMatchObject({
+      schemaVersion: 3,
+      scope: 'world',
+      records,
+      returnedCount: 4,
+    });
+    for (const record of records) {
+      expect(getText(result)).toContain(record.id);
+    }
   });
-
-  it('limits each section to the configured limit (default 5)', async () => {
-    const actors = Array.from({ length: 10 }, (_, i) => buildActor(`A${i}`));
-    const client = {
-      searchWorld: vi.fn().mockReturnValue({
-        actors,
-        items: [],
-        scenes: [],
-        journals: [],
-      }),
-    } as unknown as FoundryClient;
-
-    const result = await handleSearchWorld({ query: 'a' }, client);
-    const text = getText(result);
-
-    // header reports total (10), but only 5 entries are listed
-    expect(text).toContain('**Actors** (10)');
-    const listedActors = text.split('\n').filter((line) => line.startsWith('  - A'));
-    expect(listedActors).toHaveLength(5);
+  it('forwards a single limit and cursor for the entire result set', async () => {
+    const searchWorldPage = vi
+      .fn()
+      .mockResolvedValue({ records: [], ...paginationMetadata(0, 25, 2) });
+    const result = await handleSearchWorld({ limit: 2, cursor: 'next' }, {
+      searchWorldPage,
+    } as unknown as FoundryClient);
+    expect(searchWorldPage).toHaveBeenCalledWith({ limit: 2, cursor: 'next' });
+    expect(result.structuredContent).toMatchObject({ total: 25, limit: 2, complete: false });
   });
-
-  it('respects an explicit limit override', async () => {
-    const actors = Array.from({ length: 10 }, (_, i) => buildActor(`A${i}`));
-    const client = {
-      searchWorld: vi.fn().mockReturnValue({
-        actors,
-        items: [],
-        scenes: [],
-        journals: [],
-      }),
-    } as unknown as FoundryClient;
-
-    const result = await handleSearchWorld({ query: 'a', limit: 2 }, client);
-    const text = getText(result);
-
-    const listedActors = text.split('\n').filter((line) => line.startsWith('  - A'));
-    expect(listedActors).toHaveLength(2);
+  it('returns completion metadata for an empty world', async () => {
+    const result = await handleSearchWorld({}, {
+      searchWorldPage: vi.fn().mockResolvedValue({ records: [], ...paginationMetadata(0) }),
+    } as unknown as FoundryClient);
+    expect(getText(result)).toContain('No results found.');
+    expect(result.structuredContent).toMatchObject({ total: 0, complete: true, nextCursor: null });
   });
-
-  it('returns a "no results" message when all collections are empty', async () => {
-    const client = {
-      searchWorld: vi.fn().mockReturnValue({ actors: [], items: [], scenes: [], journals: [] }),
-    } as unknown as FoundryClient;
-
-    const result = await handleSearchWorld({ query: 'zzz' }, client);
-    const text = getText(result);
-
-    expect(text).toBe('No results found for "zzz".');
-  });
-
-  it('omits sections that have no matches', async () => {
-    const client = {
-      searchWorld: vi.fn().mockReturnValue({
-        actors: [buildActor('Hero')],
-        items: [],
-        scenes: [],
-        journals: [],
-      }),
-    } as unknown as FoundryClient;
-
-    const result = await handleSearchWorld({ query: 'h' }, client);
-    const text = getText(result);
-
-    expect(text).toContain('**Actors** (1)');
-    expect(text).not.toContain('**Items**');
-    expect(text).not.toContain('**Scenes**');
-    expect(text).not.toContain('**Journals**');
-  });
-
-  it('wraps client errors in McpError', async () => {
-    const client = {
-      searchWorld: vi.fn(() => {
-        throw new Error('boom');
-      }),
-    } as unknown as FoundryClient;
-
-    await expect(handleSearchWorld({ query: 'a' }, client)).rejects.toThrow(McpError);
+  it('wraps backend errors in McpError', async () => {
+    await expect(
+      handleSearchWorld({}, {
+        searchWorldPage: vi.fn().mockRejectedValue(new Error('boom')),
+      } as unknown as FoundryClient),
+    ).rejects.toThrow(McpError);
   });
 });
 
@@ -164,6 +77,7 @@ describe('handleGetWorldSummary', () => {
     };
     const client = {
       getWorldInfo: vi.fn().mockResolvedValue(worldInfo),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({ actors: 12, items: 50 }),
     } as unknown as FoundryClient;
 
@@ -191,6 +105,7 @@ describe('handleGetWorldSummary', () => {
     };
     const client = {
       getWorldInfo: vi.fn().mockResolvedValue(worldInfo),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -203,6 +118,7 @@ describe('handleGetWorldSummary', () => {
   it('wraps getWorldInfo errors in McpError', async () => {
     const client = {
       getWorldInfo: vi.fn().mockRejectedValue(new Error('offline')),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -215,6 +131,7 @@ describe('handleRefreshWorldData', () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const client = {
       refreshWorldData: refresh,
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({ actors: 3, items: 7 }),
     } as unknown as FoundryClient;
 
@@ -230,6 +147,7 @@ describe('handleRefreshWorldData', () => {
   it('wraps refresh errors in McpError', async () => {
     const client = {
       refreshWorldData: vi.fn().mockRejectedValue(new Error('socket lost')),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -239,6 +157,7 @@ describe('handleRefreshWorldData', () => {
   it('produces a result even when getWorldSummary returns no entries', async () => {
     const client = {
       refreshWorldData: vi.fn().mockResolvedValue(undefined),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
