@@ -194,6 +194,21 @@ describe('applyDocumentBroadcast — prototype pollution', () => {
     expect(world.journal).toHaveLength(1);
   });
 
+  it('replaces inherited records without modifying their prototype state', () => {
+    const world = buildWorldData();
+    const inherited = { shared: { value: 7, keep: true } };
+    world.actors[0].system = Object.create(inherited) as Record<string, unknown>;
+    applyDocumentBroadcast(world, {
+      type: 'Actor',
+      action: 'update',
+      result: [{ _id: ACTOR_ID, system: { shared: { value: 12 } } }],
+    });
+
+    expect(inherited.shared).toEqual({ value: 7, keep: true });
+    expect(Object.hasOwn(world.actors[0].system, 'shared')).toBe(true);
+    expect(world.actors[0].system.shared).toEqual({ value: 12 });
+  });
+
   it('drops constructor and prototype keys while keeping the rest of the patch', () => {
     const world = buildWorldData();
     applyDocumentBroadcast(world, broadcast());
