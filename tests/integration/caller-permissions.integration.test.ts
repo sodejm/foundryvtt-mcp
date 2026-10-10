@@ -22,6 +22,7 @@ describe('live delegated caller permissions', () => {
   const items: string[] = [];
   const journals: string[] = [];
   const messages: string[] = [];
+  const messageText = new Map<string, string>();
   const pages = new Map<string, Page>();
   let writer: FoundryClient | undefined;
   let backend: InstanceType<typeof BuiltFoundryClient> | undefined;
@@ -278,7 +279,10 @@ describe('live delegated caller permissions', () => {
       ['Public', gm, [], false], ['Whisper A', gm, [a], false], ['Whisper B', gm, [b], false],
       ['Blind Author A', a, [gm], true], ['Own Whisper A', a, [gm], false],
     ] as const) {
-      messages.push((await create('ChatMessage', { author, content: `<p>${prefix} ${label}</p>`, whisper, blind }))._id);
+      const text = `${prefix} ${label}`;
+      const id = (await create('ChatMessage', { author, content: `<p>${text}</p>`, whisper, blind }))._id;
+      messages.push(id);
+      messageText.set(id, text);
     }
     browser = await chromium.launch({ headless: true });
     await openPlayer(gm, process.env.FOUNDRY_PASSWORD ?? '');
@@ -375,7 +379,7 @@ describe('live delegated caller permissions', () => {
       expect(projected.filter(message => messages.includes(message._id)).map(message => message._id).sort()).toEqual(expected.sort());
       const response = JSON.stringify(await call('get_chat_messages', { limit: 100 }));
       for (const message of writer!.getWorldData()!.messages.filter(message => messages.includes(message._id))) {
-        expect(response.includes(message.content.replace(/<[^>]+>/g, '')), message._id).toBe(expected.includes(message._id));
+        expect(response.includes(messageText.get(message._id)!), message._id).toBe(expected.includes(message._id));
       }
     });
   }

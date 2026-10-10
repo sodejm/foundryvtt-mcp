@@ -79,3 +79,32 @@ describe('handleGetChatMessages — bounded limits', () => {
     expect(client.getChatMessages).toHaveBeenCalledWith(limit);
   });
 });
+
+describe('handleGetChatMessages — safe text output', () => {
+  it.each([
+    ['<p>Hello &amp; <b>friends</b></p>', 'Hello &amp; friends'],
+    ['<scr<script>ipt>alert(1)</script>', 'ipt&gt;alert(1)'],
+    ['<script', ''],
+    ['&lt;img src=x onerror=alert(1)&gt;', '&lt;img src=x onerror=alert(1)&gt;'],
+    ['<script>hidden()</script><style>secret</style><p>Visible</p>', 'Visible'],
+  ])('renders HTML as escaped visible text: %s', async (content, expected) => {
+    const message = { ...buildMessages(1)[0], content };
+    const result = await handleGetChatMessages({}, mockFoundryClient([message]));
+    const text = result.content[0].text;
+    expect(text).toContain(`**speaker-0**: ${expected}`);
+    expect(text).not.toMatch(/[<>]/);
+  });
+
+  it('escapes speaker aliases and limits decoded content before escaping', async () => {
+    const message = {
+      ...buildMessages(1)[0],
+      content: `<p> ${'&lt;'.repeat(201)} </p>`,
+      speaker: { alias: '<img src=x> & GM' },
+    };
+    const result = await handleGetChatMessages({}, mockFoundryClient([message]));
+    expect(result.content[0].text).toContain(
+      `**&lt;img src=x&gt; &amp; GM**: ${'&lt;'.repeat(200)}`,
+    );
+    expect(result.content[0].text).not.toContain('&lt;'.repeat(201));
+  });
+});

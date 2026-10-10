@@ -143,7 +143,7 @@ function mergePatch(target: Record<string, unknown>, patch: Record<string, unkno
       delete target[key];
       continue;
     }
-    if (isRecord(value) && isRecord(target[key])) {
+    if (Object.hasOwn(target, key) && isRecord(value) && isRecord(target[key])) {
       mergePatch(target[key] as Record<string, unknown>, value);
       continue;
     }

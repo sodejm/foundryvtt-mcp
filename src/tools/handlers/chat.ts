@@ -4,7 +4,12 @@
 
 import { parseChatLimit } from '../../foundry/chat-contract.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import { htmlToJournalText } from '../../foundry/journal-read.js';
 import { withWorldRead } from './utils.js';
+
+function escapeHtmlText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 export async function handleGetChatMessages(
   args: { limit?: number },
@@ -26,12 +31,9 @@ export async function handleGetChatMessages(
 
     const formatted = messages
       .map((m) => {
-        const speaker = m.speaker?.alias || userMap.get(m.user) || 'Unknown';
+        const speaker = escapeHtmlText(m.speaker?.alias || userMap.get(m.user) || 'Unknown');
         const time = new Date(m.timestamp).toLocaleTimeString();
-        const content = m.content
-          .replace(/<[^>]+>/g, '')
-          .trim()
-          .slice(0, 200);
+        const content = escapeHtmlText(htmlToJournalText(m.content).trim().slice(0, 200));
         return `[${time}] **${speaker}**: ${content}`;
       })
       .join('\n');
