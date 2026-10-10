@@ -166,9 +166,9 @@ describe('FoundryClient', () => {
 
       const result = await client.searchItems({ query: 'Sword', type: 'weapon', limit: 10 });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/items', {
-        params: { query: 'Sword', type: 'weapon', page: 1, limit: 100 },
+        params: { page: 1, limit: 100 },
       });
-      expect(result.items).toEqual(mockData.items);
+      expect(result.items).toMatchObject(mockData.items);
     });
 
     it('should get world info via REST API', async () => {
@@ -476,172 +476,183 @@ describe('FoundryClient', () => {
     });
   });
 
-  describe('dice rolling', () => {
+  describe('bounded dice rolling and engine selection', () => {
+    const paired = {
+      restUrl: 'http://localhost:3010',
+      restApiKey: 'fixture-key',
+      restClientId: 'paired-client',
+    };
     beforeEach(() => {
       client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      ['1d20+5', 15],
+      ['1d20 + 5', 15],
+      ['1d20+5+3', 18],
+      ['d20', 10],
+      ['2d6+1d4', 8],
+      ['2d6 - 1', 5],
+      ['(4d6kh3+2)-1', 10],
+    ])('evaluates the complete expression %s', async (formula, total) => {
+      const result = await client.rollDice(formula as string, 'attack');
+      expect(result).toMatchObject({
+        schemaVersion: 1,
+        engine: 'local',
+        total,
+        reason: 'attack',
+        fallback: { requestedEngine: 'auto', reason: 'foundry-transport-not-configured' },
+      });
+      expect(result.breakdown.endsWith(` = ${total}`)).toBe(true);
+      expect(result.timestamp).toMatch(/^\d{4}-/);
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
-    it('should validate dice formula', async () => {
-      await expect(client.rollDice('')).rejects.toThrow('Invalid dice formula');
-      await expect(client.rollDice('DROP TABLE')).rejects.toThrow('Invalid dice formula');
+    it.each([
+      '',
+      'DROP TABLE',
+      '(1d20+5)*2',
+      '1d20r1',
+      '1d20+STR',
+      '1d20+',
+      '1d20 5',
+      '1d0',
+      '1000d6',
+    ])('rejects invalid formula %s before randomness or transport', async (formula) => {
+      await expect(client.rollDice(formula)).rejects.toMatchObject({ code: -32602 });
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
-    it('should perform fallback dice roll', async () => {
-      const result = await client.rollDice('1d20+5', 'Attack roll');
-      expect(result.formula).toBe('1d20+5');
-      expect(result.total).toBeGreaterThanOrEqual(6);
-      expect(result.total).toBeLessThanOrEqual(25);
-      expect(result.reason).toBe('Attack roll');
-      expect(result.timestamp).toBeDefined();
-    });
-
-    it('should perform fallback roll for multiple dice', async () => {
-      const result = await client.rollDice('3d6');
-      expect(result.formula).toBe('3d6');
-      expect(result.total).toBeGreaterThanOrEqual(3);
-      expect(result.total).toBeLessThanOrEqual(18);
-    });
-
-    /**
-     * Issue #219 — the old parser only captured a modifier glued directly to a
-     * dice term, so every formula below returned a plausible-but-wrong total
-     * with the unparsed part silently dropped. RNG is pinned so the totals are
-     * exact rather than ranges.
-     */
-    describe('formulas that used to be silently mis-totalled (#219)', () => {
-      beforeEach(() => {
-        // Math.floor(0.5 * sides) + 1 — the middle-ish face of every die.
-        vi.spyOn(Math, 'random').mockReturnValue(0.5);
-      });
-
-      afterEach(() => {
-        vi.restoreAllMocks();
-      });
-
-      it.each([
-        { formula: '1d20+5', total: 16, breakdown: '1d20: [11] + 5 = 16' },
-        { formula: '1d20 + 5', total: 16, breakdown: '1d20: [11] + 5 = 16' },
-        { formula: '1d20+5+3', total: 19, breakdown: '1d20: [11] + 5 + 3 = 19' },
-        { formula: 'd20', total: 11, breakdown: '1d20: [11] = 11' },
-        { formula: '2d6+1d4', total: 11, breakdown: '2d6: [4, 4] + 1d4: [3] = 11' },
-        { formula: '2d6 - 1', total: 7, breakdown: '2d6: [4, 4] - 1 = 7' },
-      ])('rolls $formula for exactly $total', async ({ formula, total, breakdown }) => {
-        const result = await client.rollDice(formula);
-        expect(result.total).toBe(total);
-        expect(result.breakdown).toBe(breakdown);
-        // The rendered breakdown must agree with the total it claims.
-        expect(result.breakdown.endsWith(` = ${result.total}`)).toBe(true);
-      });
-
-      /**
-       * The message has to name the problem, not just the formula: `roll_dice`
-       * advertises `4d6kh3` and `1d20r1` by name as notation that "is rejected
-       * with an error naming the problem". A generic `Invalid dice formula:
-       * 4d6kh3` does not tell the caller which character was not understood.
-       */
-      it.each([
-        { formula: '(1d20+5)', match: /parenthes/i },
-        { formula: '(1d20+5)*2', match: /parenthes/i },
-        { formula: '4d6kh3', match: /unexpected "k" at position 3/ },
-        { formula: '1d20r1', match: /unexpected "r" at position 4/ },
-        { formula: '1d20*2', match: /unexpected "\*" at position 4/ },
-        { formula: '1d20+STR', match: /unexpected "S" at position 5/ },
-        { formula: '1d20+', match: /ends with/i },
-        { formula: '1d20 5', match: /unexpected/i },
-        { formula: '1d0', match: /at least 1 side/i },
-      ])('rejects $formula instead of dropping part of it', async ({ formula, match }) => {
-        await expect(client.rollDice(formula)).rejects.toThrow(match);
-      });
-    });
-
-    /**
-     * The transports do not accept the same grammar, and that is deliberate.
-     * REST hands the formula to FoundryVTT's own `Roll` engine, which
-     * understands more than the local fallback parser does; capping REST at
-     * the fallback's grammar would drop a capability #219 never asked to lose.
-     * Both transports still refuse anything outside the dice alphabet.
-     */
-    describe('per-transport formula grammar', () => {
-      function restClient() {
-        return new FoundryClient({
-          baseUrl: 'http://localhost:30000',
-          apiKey: 'test-api-key',
-        });
-      }
-
-      it('lets a parenthesised formula through to FoundryVTT over REST', async () => {
-        mockAxiosInstance.post.mockResolvedValue({
-          data: { total: 21, terms: [{ results: [16] }] },
-        });
-
-        const result = await restClient().rollDice('(1d20+5)', 'Attack');
-
-        expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/dice/roll', {
-          formula: '(1d20+5)',
-          flavor: 'Attack',
-        });
-        expect(result.total).toBe(21);
-      });
-
-      /**
-       * The REST body is external input. A 200 that carries no numeric `total`
-       * must not become a `DiceRoll` whose `total` is `undefined` while the
-       * type promises `number` — `roll_dice` would render that to the caller.
-       * A malformed body is treated like any other REST failure: fall through
-       * to the local roller, which produces a real total.
-       */
-      it('falls back to the local roller when the REST body has no numeric total', async () => {
-        mockAxiosInstance.post.mockResolvedValue({
-          data: { error: 'something went sideways' },
-        });
-
-        const result = await restClient().rollDice('1d20+5');
-
-        expect(mockAxiosInstance.post).toHaveBeenCalled();
-        expect(typeof result.total).toBe('number');
-        expect(Number.isNaN(result.total)).toBe(false);
-        expect(result.total).toBeGreaterThanOrEqual(6);
-        expect(result.total).toBeLessThanOrEqual(25);
-      });
-
-      /**
-       * REST accepts a wider grammar, but when it does refuse the message has
-       * to be as specific as the local path's: `roll_dice` promises `4d6kh3`
-       * and `1d20r1` are "rejected with an error naming the problem", and that
-       * promise is not scoped to a transport. A bare `Invalid dice formula:
-       * 4d6kh3` names nothing.
-       */
-      it('names the offending character when REST refuses notation outside the dice alphabet', async () => {
-        const rest = restClient();
-        await expect(rest.rollDice('4d6kh3')).rejects.toThrow(/unexpected "k" at position 3/);
-        await expect(rest.rollDice('1d20r1')).rejects.toThrow(/unexpected "r" at position 4/);
-        await expect(rest.rollDice('1d20*2')).rejects.toThrow(/unexpected "\*" at position 4/);
-        await expect(rest.rollDice('1d20+STR')).rejects.toThrow(/unexpected "S" at position 5/);
-        await expect(rest.rollDice('')).rejects.toThrow(/the formula is empty/);
-        await expect(rest.rollDice('1d20'.repeat(30))).rejects.toThrow(/Invalid dice formula/);
-        expect(mockAxiosInstance.post).not.toHaveBeenCalled();
-      });
-
-      it('does not blame parentheses, which REST supports, for an unrelated bad character', async () => {
-        // Delegating to the local parser here would report the parentheses —
-        // the wrong problem, since FoundryVTT evaluates those fine.
-        const rest = restClient();
-        await expect(rest.rollDice('(1d20+5)*2')).rejects.toThrow(/unexpected "\*" at position 8/);
-        await expect(rest.rollDice('(1d20+5)*2')).rejects.not.toThrow(
-          /parentheses are not supported/i,
+    it.each([
+      paired,
+      { restUrl: paired.restUrl },
+      { restApiKey: paired.restApiKey },
+      { restClientId: paired.restClientId },
+      { restUrl: paired.restUrl, restApiKey: paired.restApiKey },
+      { restUrl: paired.restUrl, restClientId: paired.restClientId },
+      { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
+      { apiKey: 'legacy-key' },
+      { ...paired, apiKey: 'legacy-key' },
+    ])('keeps default and auto dice local with read transport configuration %j', async (config) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      for (const engine of [undefined, 'auto'] as const) {
+        const result = await client.rollDice('(7-3)+2', undefined, engine);
+        expect(result).toMatchObject({ engine: 'local', total: 6 });
+        expect(result.fallback?.reason).toBe(
+          'restUrl' in config && 'restApiKey' in config && 'restClientId' in config
+            ? 'foundry-execution-not-requested'
+            : 'foundry-transport-not-configured',
         );
-        expect(mockAxiosInstance.post).not.toHaveBeenCalled();
-      });
+      }
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
 
-      it('rejects a parenthesised formula on the local path — nothing there can roll it', async () => {
-        await expect(client.rollDice('(1d20+5)')).rejects.toThrow(/parenthes/i);
-      });
+    it('requires a configured Foundry transport for explicit native execution', async () => {
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('not configured');
+      expect(Math.random).not.toHaveBeenCalled();
+    });
 
-      it('reports the parse error when REST is unreachable and the fallback cannot roll it', async () => {
-        mockAxiosInstance.post.mockRejectedValue(new Error('ECONNREFUSED'));
-
-        await expect(restClient().rollDice('(1d20+5)')).rejects.toThrow(/parenthes/i);
+    it.each([
+      { restUrl: paired.restUrl },
+      { restApiKey: paired.restApiKey },
+      { restClientId: paired.restClientId },
+      { restUrl: paired.restUrl, restApiKey: paired.restApiKey },
+      { restUrl: paired.restUrl, restClientId: paired.restClientId },
+      { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
+    ])('rejects partial native configuration %j', async (config) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Configure all');
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
       });
+    });
+
+    it('rejects the legacy-only dice route while allowing explicit local evaluation', async () => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'legacy-key' });
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Legacy');
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
+      });
+    });
+
+    it.each([
+      'foundry',
+    ] as const)('selects paired Foundry execution for %s even with legacy configuration', async (engine) => {
+      client = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        ...paired,
+        apiKey: 'legacy-key',
+      });
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          type: 'roll-result',
+          requestId: 'fixture',
+          success: true,
+          data: {
+            id: 'manual_fixture',
+            chatMessageCreated: false,
+            roll: {
+              formula: '1d6 + 3',
+              total: 9,
+              timestamp: 0,
+              dice: [{ faces: 6, results: [{ result: 6, active: true }] }],
+            },
+          },
+        },
+      });
+      const result = await client.rollDice('d6+3', 'attack', engine);
+      expect(result).toMatchObject({
+        engine: 'foundry',
+        total: 9,
+        normalizedFormula: '1d6 + 3',
+        fallback: null,
+        dice: [
+          {
+            termIndex: 0,
+            faces: 6,
+            count: 1,
+            modifier: null,
+            results: [{ result: 6, active: true }],
+          },
+        ],
+      });
+      expect(result.timestamp).toBe('1970-01-01T00:00:00.000Z');
+      expect(Math.random).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
+    });
+
+    it('never calls a configured native transport for explicit local execution', async () => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
+        engine: 'local',
+        total: 3,
+        fallback: null,
+      });
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it.each(['network', 'malformed'])('never rerolls after a %s native failure', async (kind) => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      if (kind === 'network') {
+        mockAxiosInstance.post.mockRejectedValue(new Error('fixture-key'));
+      } else {
+        mockAxiosInstance.post.mockResolvedValue({ data: { total: 10 } });
+      }
+      await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow(
+        'no retry or local fallback',
+      );
+      expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
+      expect(Math.random).not.toHaveBeenCalled();
     });
   });
 

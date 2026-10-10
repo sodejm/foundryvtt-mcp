@@ -9,7 +9,7 @@ import { worldReadMetadataSchema } from '../../src/foundry/freshness.js';
 import { createConnectedClient } from './setup.js';
 
 type Writer = {
-  modifyDocument(type: 'Actor' | 'User', action: 'create' | 'update' | 'delete', operation: Record<string, unknown>): Promise<Array<{ _id: string; name?: string }>>;
+  modifyDocument(type: 'Actor' | 'User' | 'Scene', action: 'create' | 'update' | 'delete', operation: Record<string, unknown>): Promise<Array<{ _id: string; name?: string }>>;
 };
 
 describe('live snapshot recovery through MCP stdio', () => {
@@ -26,6 +26,8 @@ describe('live snapshot recovery through MCP stdio', () => {
   const actors: string[] = [];
   let beforeActorId = '';
   let userId: string | undefined;
+  let sceneId: string | undefined;
+  let originalActiveSceneId: string | undefined;
   const userName = `${prefix} Player`;
 
   async function waitFor(assertion: () => unknown | Promise<unknown>) {
@@ -68,6 +70,17 @@ describe('live snapshot recovery through MCP stdio', () => {
     if (writer.getWorldData()?.world.id !== 'test1world') {
       throw new Error('Recovery fixture writes require the disposable test1world');
     }
+    originalActiveSceneId = writer.getWorldData()?.scenes.find(scene => scene.active)?._id;
+    [sceneId] = (await fixtureWriter().modifyDocument('Scene', 'create', {
+      data: [{ name: `${prefix} Scene`, active: false, width: 1000, height: 1000 }],
+    })).map(document => document._id);
+    if (!sceneId) throw new Error('Expected the owned recovery fixture scene in the create response');
+    await fixtureWriter().modifyDocument('Scene', 'update', {
+      updates: [
+        ...(originalActiveSceneId ? [{ _id: originalActiveSceneId, active: false }] : []),
+        { _id: sceneId, active: true },
+      ],
+    });
     const createdActors = await fixtureWriter().modifyDocument('Actor', 'create', {
       data: [{ name: `${prefix} Before`, type: 'npc' }, { name: `${prefix} Other`, type: 'npc' }],
     });
@@ -118,6 +131,7 @@ describe('live snapshot recovery through MCP stdio', () => {
     mcp = new Client({ name: 'live-recovery-integration', version: '1.0.0' });
     await mcp.connect(transport);
     await waitFor(async () => (await call('get_health_status')).structuredContent?.connected === true);
+    expect(text(await call('get_scene_info'))).toContain(`**ID:** ${sceneId}`);
   });
 
   afterAll(async () => {
@@ -125,6 +139,15 @@ describe('live snapshot recovery through MCP stdio', () => {
     await Promise.allSettled([mcp?.close(), transport?.close(), reader?.disconnect(), presence?.disconnect()]);
     try {
       if (writer) {
+        if (sceneId) {
+          await fixtureWriter().modifyDocument('Scene', 'update', {
+            updates: [
+              { _id: sceneId, active: false },
+              ...(originalActiveSceneId ? [{ _id: originalActiveSceneId, active: true }] : []),
+            ],
+          });
+          await fixtureWriter().modifyDocument('Scene', 'delete', { ids: [sceneId] });
+        }
         if (actors.length) await fixtureWriter().modifyDocument('Actor', 'delete', { ids: actors });
         if (userId) await fixtureWriter().modifyDocument('User', 'delete', { ids: [userId] });
       }

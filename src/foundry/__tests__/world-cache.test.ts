@@ -14,6 +14,7 @@ const JOURNAL_ID = 'cccccccccccccccc';
 const SCENE_ID = 'dddddddddddddddd';
 const TOKEN_ID = 'eeeeeeeeeeeeeeee';
 const COMBAT_ID = 'ffffffffffffffff';
+const PAGE_ID = 'gggggggggggggggg';
 
 /** Minimal WorldData with just the collections the tests touch. */
 const buildWorldData = (): WorldData =>
@@ -293,6 +294,112 @@ describe('applyDocumentBroadcast — embedded documents', () => {
         parentUuid: `Scene.${SCENE_ID}.Token.${TOKEN_ID}.Actor.${ACTOR_ID}`,
       }),
     ).toBe(false);
+  });
+});
+
+describe('applyDocumentBroadcast — journal pages', () => {
+  function journalWorld() {
+    const world = buildWorldData();
+    world.journal.push({
+      _id: JOURNAL_ID,
+      name: 'Journal',
+      pages: [
+        {
+          _id: PAGE_ID,
+          name: 'Page',
+          type: 'text',
+          sort: 10,
+          text: { content: 'Before', format: 1 },
+        },
+      ],
+    });
+    return world;
+  }
+
+  function pageBroadcast(overrides: Partial<DocumentBroadcast>): DocumentBroadcast {
+    return {
+      type: 'JournalEntryPage',
+      action: 'update',
+      result: [],
+      parentUuid: `JournalEntry.${JOURNAL_ID}`,
+      ...overrides,
+    };
+  }
+
+  it('creates pages idempotently in the parent journal', () => {
+    const world = journalWorld();
+    const created = { _id: 'newpage000000000', name: 'New page', type: 'text', sort: 20 };
+    const change = pageBroadcast({ action: 'create', result: [created] });
+    expect(applyDocumentBroadcast(world, change)).toBe(true);
+    expect(applyDocumentBroadcast(world, change)).toBe(true);
+    expect(world.journal[0].pages).toHaveLength(2);
+    expect(world.journal[0].pages?.[1]).toEqual(created);
+  });
+
+  it('merges content edits while preserving text format and page identity', () => {
+    const world = journalWorld();
+    expect(
+      applyDocumentBroadcast(
+        world,
+        pageBroadcast({ result: [{ _id: PAGE_ID, text: { content: 'After 😀' } }] }),
+      ),
+    ).toBe(true);
+    expect(world.journal[0].pages?.[0]).toMatchObject({
+      _id: PAGE_ID,
+      name: 'Page',
+      text: { content: 'After 😀', format: 1 },
+    });
+  });
+
+  it('updates page order and ownership without replacing content', () => {
+    const world = journalWorld();
+    expect(
+      applyDocumentBroadcast(
+        world,
+        pageBroadcast({ result: [{ _id: PAGE_ID, sort: 30, ownership: { default: 0 } }] }),
+      ),
+    ).toBe(true);
+    expect(world.journal[0].pages?.[0]).toMatchObject({
+      sort: 30,
+      ownership: { default: 0 },
+      text: { content: 'Before', format: 1 },
+    });
+  });
+
+  it('removes a deleted page and tolerates a repeated deletion', () => {
+    const world = journalWorld();
+    const change = pageBroadcast({ action: 'delete', result: [PAGE_ID] });
+    expect(applyDocumentBroadcast(world, change)).toBe(true);
+    expect(applyDocumentBroadcast(world, change)).toBe(false);
+    expect(world.journal[0].pages).toEqual([]);
+  });
+
+  it('creates an absent page collection', () => {
+    const world = journalWorld();
+    delete world.journal[0].pages;
+    expect(
+      applyDocumentBroadcast(
+        world,
+        pageBroadcast({
+          action: 'create',
+          result: [{ _id: PAGE_ID, name: 'First', type: 'text' }],
+        }),
+      ),
+    ).toBe(true);
+    expect(world.journal[0].pages).toHaveLength(1);
+  });
+
+  it.each([
+    { parentUuid: 'JournalEntry.missing000000000' },
+    { result: [{ _id: 'missing000000000', text: { content: 'No' } }] },
+    { type: 'UnknownPage' },
+  ])('ignores an uncached journal page target %j', (overrides) => {
+    const world = journalWorld();
+    const before = structuredClone(world.journal);
+    expect(
+      applyDocumentBroadcast(world, pageBroadcast({ result: [{ _id: PAGE_ID }], ...overrides })),
+    ).toBe(false);
+    expect(world.journal).toEqual(before);
   });
 });
 

@@ -1,6 +1,17 @@
 /** Actor world-document search and detail handlers. */
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import {
+  actorItemInputSchema,
+  actorItemListInputSchema,
+  actorItemListOutputSchema,
+  actorItemOutputSchema,
+  actorSectionInputSchema,
+  actorSectionOutputSchema,
+  actorSheetInputSchema,
+  actorSheetOutputSchema,
+} from '../../foundry/actor-sheet-contract.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import { PaginationCursorError } from '../../foundry/pagination.js';
 import {
   actorDetailsSchema,
   actorReadRecord,
@@ -15,6 +26,77 @@ import {
   readMetadataText,
 } from '../../foundry/read-contract.js';
 import { availableReadMetadata, withToolError } from './utils.js';
+
+function actorStructuredResponse<T extends Record<string, unknown>>(structuredContent: T) {
+  return boundedReadResponse({
+    structuredContent,
+    content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }],
+  });
+}
+
+export async function handleGetActorSheet(args: unknown, foundryClient: FoundryClient) {
+  const { actorId } = parseReadInput(actorSheetInputSchema, args);
+  return withToolError(
+    'get actor sheet',
+    async () =>
+      actorStructuredResponse(actorSheetOutputSchema.parse(foundryClient.getActorSheet(actorId))),
+    foundryClient,
+  );
+}
+
+export async function handleGetActorSection(args: unknown, foundryClient: FoundryClient) {
+  const { actorId, section } = parseReadInput(actorSectionInputSchema, args);
+  return withToolError(
+    'get actor section',
+    async () =>
+      actorStructuredResponse(
+        actorSectionOutputSchema.parse(foundryClient.getActorSection(actorId, section)),
+      ),
+    foundryClient,
+  );
+}
+
+export async function handleListActorItems(args: unknown, foundryClient: FoundryClient) {
+  const input = parseReadInput(actorItemListInputSchema, args);
+  const params = {
+    actorId: input.actorId,
+    ...(input.query !== undefined ? { query: input.query } : {}),
+    ...(input.type !== undefined ? { type: input.type } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+  };
+  return withToolError(
+    'list actor items',
+    async () => {
+      try {
+        return actorStructuredResponse(
+          actorItemListOutputSchema.parse(foundryClient.listActorItems(params)),
+        );
+      } catch (error) {
+        if (error instanceof PaginationCursorError) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            foundryClient.isDelegatedMode?.() ? 'Pagination cursor unavailable' : error.message,
+          );
+        }
+        throw error;
+      }
+    },
+    foundryClient,
+  );
+}
+
+export async function handleGetActorItem(args: unknown, foundryClient: FoundryClient) {
+  const { actorId, itemId } = parseReadInput(actorItemInputSchema, args);
+  return withToolError(
+    'get actor item',
+    async () =>
+      actorStructuredResponse(
+        actorItemOutputSchema.parse(foundryClient.getActorItem(actorId, itemId)),
+      ),
+    foundryClient,
+  );
+}
 
 export async function handleSearchActors(
   args: { query?: string; type?: string; limit?: number; cursor?: string },
