@@ -1,5 +1,6 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import type { WorldReadMetadata } from '../freshness.js';
 
 import {
   type CollectionRecord,
@@ -85,9 +86,23 @@ describe('SnapshotPaginator', () => {
     expect(second.consistency).toBe('snapshot');
   });
 
+  it('supports the legacy numeric default-limit argument', () => {
+    const paginator = new SnapshotPaginator({ secret: 'test-secret' });
+
+    expect(paginator.paginate([1, 2, 3], {}, 'context', 2)).toMatchObject({
+      records: [1, 2],
+      limit: 2,
+      returnedCount: 2,
+      complete: false,
+    });
+  });
+
   it('supports deterministic cursor replay and isolates the snapshot from mutations', () => {
     const source = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
-    const paginator = new SnapshotPaginator({ secret: 'test-secret' });
+    const paginator = new SnapshotPaginator({
+      secret: 'test-secret',
+      now: () => Date.parse('2026-01-01T00:00:00.000Z'),
+    });
     const first = paginator.paginate(source, { limit: 1 }, { query: '' });
     source[1].name = 'changed';
     source.push({ name: 'd' });
@@ -111,6 +126,97 @@ describe('SnapshotPaginator', () => {
         { query: '' },
       ).records,
     ).toEqual([{ name: 'b' }]);
+  });
+
+  it('preserves source metadata across pages and marks an older revision stale', () => {
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const paginator = new SnapshotPaginator({ secret: 'test-secret', now: () => now });
+    const source: WorldReadMetadata = {
+      source: 'socket',
+      freshness: 'current',
+      worldId: 'world-1',
+      sessionId: 'session-1',
+      snapshotId: 'world-snapshot-1',
+      revision: 1,
+      capturedAt: '2025-12-31T23:59:58.000Z',
+      observedAt: '2025-12-31T23:59:59.000Z',
+      respondedAt: '2025-12-31T23:59:59.500Z',
+    };
+    const first = paginator.paginate([1, 2], { limit: 1 }, 'context', source);
+
+    now += 1_000;
+    const second = paginator.paginate<number>(
+      undefined,
+      { cursor: requireCursor(first.nextCursor) },
+      'context',
+      { ...source, snapshotId: 'world-snapshot-2', revision: 2 },
+    );
+
+    expect(first.snapshotId).not.toBe(source.snapshotId);
+    expect(second.snapshotId).toBe(first.snapshotId);
+    expect(second.readMetadata).toEqual({
+      ...source,
+      freshness: 'stale',
+      respondedAt: '2026-01-01T00:00:01.000Z',
+    });
+  });
+
+  it.each([
+    'string',
+    'object',
+  ] as const)('keeps credential-bearing %s contexts private and bound to the paginator secret', (representation) => {
+    const contextData = {
+      kind: 'actors',
+      filters: { query: 'all' },
+      world: 'test-world',
+      caller: 'http://localhost:30001|low-entropy-test-key',
+    };
+    const serialized = JSON.stringify(contextData);
+    const context = representation === 'string' ? serialized : contextData;
+    const contextHash = (cursor: string | null): string => {
+      const [encoded] = requireCursor(cursor).split('.');
+      return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')).contextHash;
+    };
+    const paginator = new SnapshotPaginator({
+      secret: 'private-first-secret',
+      now: () => Date.parse('2026-01-01T00:00:00.000Z'),
+    });
+    const first = paginator.paginate([1, 2, 3], { limit: 1 }, context);
+    const repeated = paginator.paginate([1, 2, 3], { limit: 1 }, context);
+    const other = new SnapshotPaginator({ secret: 'private-second-secret' }).paginate(
+      [1, 2, 3],
+      { limit: 1 },
+      context,
+    );
+
+    expect(contextHash(first.nextCursor)).not.toBe(
+      createHash('sha256').update(serialized).digest('base64url'),
+    );
+    expect(contextHash(first.nextCursor)).not.toBe(contextHash(other.nextCursor));
+    expect(contextHash(first.nextCursor)).toBe(contextHash(repeated.nextCursor));
+    const next = paginator.paginate<number>(
+      undefined,
+      { cursor: requireCursor(first.nextCursor) },
+      context,
+    );
+    expect(next.records).toEqual([2]);
+    expect(
+      paginator.paginate<number>(undefined, { cursor: requireCursor(first.nextCursor) }, context),
+    ).toEqual(next);
+
+    for (const changed of [
+      { ...contextData, filters: { query: 'different' } },
+      { ...contextData, world: 'different-world' },
+      { ...contextData, caller: 'http://localhost:30001|different-test-key' },
+    ]) {
+      expect(() =>
+        paginator.paginate(
+          undefined,
+          { cursor: requireCursor(first.nextCursor) },
+          representation === 'string' ? JSON.stringify(changed) : changed,
+        ),
+      ).toThrow(/query, world, or caller/);
+    }
   });
 
   it('binds cursors to context and limit and rejects corrupt cursors', () => {

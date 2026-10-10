@@ -5,13 +5,72 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
+import type {
+  ActorItemListOutput,
+  ActorItemOutput,
+  ActorItemSummary,
+  ActorSectionName,
+  ActorSectionOutput,
+  ActorSheetOutput,
+} from './actor-sheet-contract.js';
+import { ACTOR_SECTION_NAMES } from './actor-sheet-contract.js';
+import {
+  actorItemFields,
+  actorSectionFields,
+  actorSystemIdentity,
+  isActorSectionSupported,
+  publicActorIdentity,
+  publicActorItemSummary,
+} from './actor-sheet-profile.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
-import { evaluateDiceFormula } from './dice-formula.js';
+import {
+  type AuthorizationMode,
+  type AuthorizedCallerState,
+  CallerAuthorizationError,
+  CallerContextStorage,
+  DELEGATED_READ_SURFACES,
+  type ReadSurface,
+  type TrustedCallerContext,
+  validateTrustedCallerContext,
+} from './caller-context.js';
+import {
+  type CapabilityReport,
+  CONTENT_GENERATION_UNAVAILABLE,
+  DIAGNOSTICS_UNAVAILABLE,
+  RULES_LOOKUP_UNAVAILABLE,
+} from './capabilities.js';
+import { parseChatLimit } from './chat-contract.js';
+import { compendiumParamsSchema } from './compendium-contract.js';
+import { type DiceRollInput, diceRollOutputSchema, parseDiceRollInput } from './dice-contract.js';
+import {
+  evaluateParsedDiceFormula,
+  InvalidDiceFormulaError,
+  parseDiceFormula,
+} from './dice-formula.js';
+import type { WorldReadMetadata } from './freshness.js';
+import { redactHtmlSecrets } from './html-secret-redaction.js';
+import type { ItemEconomy } from './item-economy-contract.js';
+import { itemEconomyAliases, restItemSystemIdentity } from './item-economy-read.js';
+import {
+  assertItemRarityFilter,
+  type ItemEconomyIdentity,
+  itemMatchesRarity,
+  normalizeItemEconomy,
+} from './item-normalization.js';
+import {
+  JOURNAL_DEFAULT_PAGE_LIMIT,
+  JOURNAL_MAX_PAGE_LIMIT,
+  JournalReadUnavailableError,
+  journalContentChunks,
+  journalPageSummary,
+  prepareJournalRead,
+} from './journal-read.js';
 import {
   type CollectionPage,
   type CollectionRecord,
@@ -20,7 +79,23 @@ import {
   sortCollectionRecords,
   validateBoundedText,
 } from './pagination.js';
-import { actorDocumentSchema, FOUNDRY_ID_PATTERN, itemDocumentSchema } from './read-contract.js';
+import {
+  actorDocumentSchema,
+  availableWorldReadMetadataSchema,
+  FOUNDRY_ID_PATTERN,
+  itemDocumentSchema,
+} from './read-contract.js';
+import { CompendiumRestAdapter } from './rest-compendium.js';
+import { DiceRestAdapter } from './rest-dice.js';
+import {
+  projectSceneSpatial,
+  type SceneIdentity,
+  type SceneSpatialOutput,
+  type SceneSpatialProjection,
+  type SceneTokenListOutput,
+  type SceneTokenOutput,
+  type SceneTokenSummary,
+} from './scene-spatial-contract.js';
 import type {
   ActorAttributeUpdateResult,
   ActorItemCreateSource,
@@ -33,7 +108,11 @@ import type {
   FoundryScene,
   FoundryWorld,
   ItemSearchResult,
+  JournalPageContent,
+  JournalPageContentParams,
   JournalPageCreateSource,
+  JournalSummaryPage,
+  JournalSummaryPageParams,
   WorldActor,
   WorldCombat,
   WorldData,
@@ -48,9 +127,34 @@ import { VISIBILITY_LEVELS } from './types.js';
 import {
   applyDocumentBroadcast,
   applyUserActivity,
+  type DocumentBroadcast,
+  documentBroadcastRequiresRefresh,
   parseDocumentBroadcast,
   parseUserActivity,
+  type UserActivity,
 } from './world-cache.js';
+
+const WORLD_DATA_UNAVAILABLE_MESSAGE = 'World data unavailable — no valid snapshot has been loaded';
+
+const journalSummaryPageParamsSchema = z.strictObject({
+  journalId: z.unknown(),
+  limit: z.number().int().min(1).max(JOURNAL_MAX_PAGE_LIMIT).optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+});
+
+const journalPageContentParamsSchema = z.strictObject({
+  journalId: z.unknown(),
+  pageId: z.unknown(),
+  format: z.enum(['text', 'source']).optional(),
+  limit: z.number().int().min(1).max(JOURNAL_MAX_PAGE_LIMIT).optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+});
+
+function assertJournalReadId(id: unknown): asserts id is string {
+  if (typeof id !== 'string' || !FOUNDRY_ID_PATTERN.test(id)) {
+    throw new JournalReadUnavailableError();
+  }
+}
 
 /** Validate identity before any detail lookup, including callers outside MCP. */
 function assertReadId(id: unknown, field: string): asserts id is string {
@@ -74,14 +178,36 @@ const restActorPageSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
 
+const restItemWireSchema = itemDocumentSchema.omit({ economy: true, price: true, rarity: true });
+type NormalizedFoundryItem = FoundryItem & { economy: ItemEconomy };
 const restItemPageSchema = z.object({
-  items: z.array(itemDocumentSchema),
+  items: z.array(restItemWireSchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   limit: z.number().int().min(1).max(100),
+  snapshotId: z.string().min(1).max(1024).optional(),
 });
+
+/** Accept raw documents and the bridge's successful detail envelope. Identity
+ * aliases must agree; a failed envelope must never become a document. */
+function restDetailDocument(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const envelope = value as Record<string, unknown>;
+  const document =
+    'success' in envelope
+      ? z.object({ success: z.literal(true), data: z.record(z.string(), z.unknown()) }).parse(value)
+          .data
+      : envelope;
+  if (document.id !== undefined && document._id !== undefined && document.id !== document._id) {
+    throw new Error('REST document identity aliases disagree');
+  }
+  return { ...document, _id: document._id ?? document.id };
+}
 
 /** REST module payloads do not establish UUID scope. Preserve existing internal
  * fields for other client callers, but remove unverified UUIDs before display. */
@@ -92,51 +218,23 @@ function restActor(value: unknown, expectedId?: string): FoundryActor {
   }
   return actor as FoundryActor;
 }
-function restItem(value: unknown, expectedId?: string): FoundryItem {
-  const { uuid: _uuid, ...item } = itemDocumentSchema.parse(value);
+function restItem(
+  value: unknown,
+  identity: ItemEconomyIdentity = { id: 'unknown' },
+  expectedId?: string,
+): NormalizedFoundryItem {
+  const {
+    uuid: _uuid,
+    economy: _economy,
+    price: _price,
+    rarity: _rarity,
+    ...item
+  } = restItemWireSchema.parse(value);
   if (expectedId !== undefined && item._id !== expectedId) {
     throw new Error('Item response ID mismatch');
   }
-  return item as FoundryItem;
-}
-
-/**
- * Characters a dice formula may contain. A cheap sanity gate, not a grammar:
- * it rejects Foundry modifier syntax (`4d6kh3`), attribute references
- * (`1d20+STR`) and arithmetic this server never forwards (`*`, `/`), while
- * still allowing parentheses through to FoundryVTT's own `Roll` engine on the
- * REST transport. See {@link FoundryClient.rollDice}.
- */
-const DICE_FORMULA_ALPHABET = /^[0-9d\s+\-()]+$/;
-
-/** Single-character form of {@link DICE_FORMULA_ALPHABET}, for locating a violation. */
-const DICE_FORMULA_CHARACTER = /[0-9d\s+\-()]/;
-
-/** Upper bound on formula length, common to both transports. */
-const MAX_DICE_FORMULA_LENGTH = 100;
-
-/**
- * Builds the REST-path rejection for a formula outside the dice alphabet.
- *
- * The local parser cannot be borrowed for this: it rejects parentheses, which
- * REST *does* support, so for `(1d20+5)*2` it would name the wrong problem.
- * This scans for the first character the alphabet does not admit and reports
- * it by name and position, so the REST path is as specific about what it
- * refused as the local one (#219).
- */
-function alphabetViolation(formula: string): Error {
-  if (formula === '') {
-    return new Error('Invalid dice formula: the formula is empty.');
-  }
-  const index = [...formula].findIndex((char) => !DICE_FORMULA_CHARACTER.test(char));
-  if (index === -1) {
-    return new Error(`Invalid dice formula: ${formula}`);
-  }
-  return new Error(
-    `Invalid dice formula "${formula}": unexpected "${formula[index]}" at position ${index}. ` +
-      'Supported syntax: dice terms (NdS, or dS for a single die) and whole numbers, joined by ' +
-      '+ or -, optionally grouped in parentheses.',
-  );
+  const economy = normalizeItemEconomy(item, identity);
+  return { ...item, economy, ...itemEconomyAliases(economy) } as NormalizedFoundryItem;
 }
 
 /**
@@ -153,6 +251,15 @@ function hasHttpResponse(error: unknown): boolean {
   }
   const response = Reflect.get(error, 'response');
   return response !== undefined && response !== null;
+}
+
+/** Normalizes Foundry timestamps without inventing a new observation time on reads. */
+function normalizeTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
 }
 
 /**
@@ -172,43 +279,289 @@ const TOKEN_ACTOR_UUID_PATTERN =
   /^(Actor\.[a-zA-Z0-9]{16}|Scene\.[a-zA-Z0-9]{16}\.Token\.[a-zA-Z0-9]{16}\.Actor\.[a-zA-Z0-9]{16})$/;
 
 /**
- * Minimal Zod schema for the `/api/dice/roll` REST response.
- *
- * The REST module is external input, so the body is validated rather than read
- * off an `any`: a 200 whose payload carries no numeric `total` would otherwise
- * produce a `DiceRoll` with `total: undefined` while the type claims `number`,
- * and `roll_dice` would render that straight to the caller. A body that does
- * not match is treated like any other REST failure and falls through to the
- * local roller.
- */
-const RestDiceRollSchema = z.object({
-  total: z.number(),
-  terms: z.array(z.object({ results: z.array(z.number()).optional() })).optional(),
-});
-
-/**
  * Minimal Zod schema for the WorldData Socket.IO payload.
  * Validates the required top-level array fields; extra fields pass through.
  */
-const WorldDataSchema = z.object({
-  userId: z.string(),
-  actors: z.array(z.unknown()),
-  scenes: z.array(z.unknown()),
-  items: z.array(z.unknown()),
-  journal: z.array(z.unknown()),
-  messages: z.array(z.unknown()),
-  combats: z.array(z.unknown()),
-  users: z.array(z.unknown()),
-  activeUsers: z.array(z.string()),
-  macros: z.array(z.unknown()),
-  playlists: z.array(z.unknown()),
-  tables: z.array(z.unknown()),
-  folders: z.array(z.unknown()),
-});
+const WorldDataSchema = z
+  .object({
+    userId: z.string().min(1),
+    release: z.record(z.string(), z.unknown()),
+    world: z.object({ id: z.string().min(1) }).passthrough(),
+    system: z.object({ id: z.string().min(1) }).passthrough(),
+    modules: z.array(z.record(z.string(), z.unknown())),
+    demoMode: z.boolean(),
+    actors: z.array(z.unknown()),
+    scenes: z.array(z.unknown()),
+    items: z.array(z.unknown()),
+    journal: z.array(z.unknown()),
+    messages: z.array(z.unknown()),
+    combats: z.array(z.unknown()),
+    users: z.array(z.unknown()),
+    activeUsers: z.array(z.string()),
+    settings: z.array(z.unknown()),
+    macros: z.array(z.unknown()),
+    playlists: z.array(z.unknown()),
+    tables: z.array(z.unknown()),
+    folders: z.array(z.unknown()),
+    cards: z.array(z.unknown()),
+    packs: z.array(z.unknown()),
+  })
+  .passthrough();
+
+const MAX_REFRESH_EVENT_BUFFER = 1000;
+const OBSERVER_PERMISSION = 2;
+const GAMEMASTER_ROLE = 3;
+const INHERIT_PERMISSION = -1;
+
+function cloneValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  Object.freeze(value);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(child);
+  }
+  return value;
+}
+
+function permissionLevel(ownership: unknown, userId: string, inheritedLevel?: number): number {
+  if (ownership === undefined) {
+    return inheritedLevel ?? 0;
+  }
+  if (typeof ownership !== 'object' || ownership === null || Array.isArray(ownership)) {
+    return 0;
+  }
+  const record = ownership as Record<string, unknown>;
+  const raw = Object.hasOwn(record, userId)
+    ? record[userId]
+    : Object.hasOwn(record, 'default')
+      ? record.default
+      : INHERIT_PERMISSION;
+  if (!Number.isInteger(raw) || (raw as number) < INHERIT_PERMISSION || (raw as number) > 3) {
+    return 0;
+  }
+  return raw === INHERIT_PERMISSION ? (inheritedLevel ?? 0) : (raw as number);
+}
+
+function ownershipIsValid(ownership: unknown): boolean {
+  if (ownership === undefined) {
+    return true;
+  }
+  if (typeof ownership !== 'object' || ownership === null || Array.isArray(ownership)) {
+    return false;
+  }
+  return Object.entries(ownership).every(
+    ([key, level]) =>
+      key.length > 0 &&
+      Number.isInteger(level) &&
+      (level as number) >= INHERIT_PERMISSION &&
+      (level as number) <= 3,
+  );
+}
+
+function canObserve(ownership: unknown, user: WorldUser, inheritedLevel?: number): boolean {
+  if (ownership === undefined && inheritedLevel === undefined) {
+    return false;
+  }
+  if (!ownershipIsValid(ownership)) {
+    return false;
+  }
+  return (
+    user.role >= GAMEMASTER_ROLE ||
+    permissionLevel(ownership, user._id, inheritedLevel) >= OBSERVER_PERMISSION
+  );
+}
+
+function sanitizeUser(user: WorldUser, visibleActorIds: ReadonlySet<string>): WorldUser {
+  const sanitized: WorldUser = {
+    _id: user._id,
+    name: user.name,
+    role: user.role,
+    color: user.color,
+  };
+  if (user.avatar !== undefined) {
+    sanitized.avatar = user.avatar;
+  }
+  if (user.character !== undefined && visibleActorIds.has(user.character)) {
+    sanitized.character = user.character;
+  }
+  if (user.pronouns !== undefined) {
+    sanitized.pronouns = user.pronouns;
+  }
+  return sanitized;
+}
+
+function canReadChatMessage(message: WorldMessage, user: WorldUser): boolean {
+  const author = message.author ?? message.user;
+  if (typeof author !== 'string' || author.length === 0) {
+    return false;
+  }
+  if (message.blind !== undefined && typeof message.blind !== 'boolean') {
+    return false;
+  }
+  let whisper: string[];
+  if (message.whisper === undefined) {
+    whisper = [];
+  } else if (
+    !Array.isArray(message.whisper) ||
+    message.whisper.some((entry) => typeof entry !== 'string' || entry.length === 0)
+  ) {
+    return false;
+  } else {
+    whisper = message.whisper;
+  }
+  if (author === user._id) {
+    return message.blind !== true || user.role >= GAMEMASTER_ROLE;
+  }
+  return message.blind === true
+    ? whisper.includes(user._id)
+    : whisper.length === 0 || whisper.includes(user._id);
+}
+
+function canReadItemIdentity(item: WorldItem, user: WorldUser): boolean {
+  if (user.role >= GAMEMASTER_ROLE) {
+    return true;
+  }
+  if (item.system.identified === false) {
+    return false;
+  }
+  const identification = item.system.identification;
+  if (typeof identification === 'object' && identification !== null) {
+    const status = Reflect.get(identification, 'status');
+    if (status !== undefined && status !== 'identified') {
+      return false;
+    }
+  }
+  return true;
+}
+
+function projectItem(item: WorldItem, user: WorldUser): WorldItem {
+  const result = cloneValue(item);
+  if (user.role < GAMEMASTER_ROLE) {
+    const description = result.system.description;
+    if (typeof description === 'object' && description !== null && !Array.isArray(description)) {
+      const value = Reflect.get(description, 'value');
+      if (typeof value === 'string') {
+        Reflect.set(description, 'value', redactHtmlSecrets(value));
+      }
+    }
+  }
+  return result;
+}
+
+function projectWorldData(source: WorldData, user: WorldUser, surface: ReadSurface): WorldData {
+  const includes = (requested: ReadSurface) => surface === 'search' || surface === requested;
+  const actors = (includes('actors') ? source.actors : [])
+    .filter((actor) => canObserve(actor.ownership, user))
+    .map((actor) => {
+      const actorLevel = permissionLevel(actor.ownership, user._id);
+      const result = cloneValue(actor);
+      if (user.role < GAMEMASTER_ROLE) {
+        const details = result.system.details;
+        if (typeof details === 'object' && details !== null && !Array.isArray(details)) {
+          const biography = Reflect.get(details, 'biography');
+          if (typeof biography === 'object' && biography !== null && !Array.isArray(biography)) {
+            const value = Reflect.get(biography, 'value');
+            if (typeof value === 'string') {
+              Reflect.set(biography, 'value', redactHtmlSecrets(value));
+            }
+          }
+        }
+      }
+      if (Array.isArray(result.items)) {
+        result.items = result.items
+          .filter(
+            (item) =>
+              canObserve(item.ownership, user, actorLevel) && canReadItemIdentity(item, user),
+          )
+          .map((item) => projectItem(item, user));
+      }
+      return result;
+    });
+  const items = (includes('items') ? source.items : [])
+    .filter((item) => canObserve(item.ownership, user) && canReadItemIdentity(item, user))
+    .map((item) => projectItem(item, user));
+  const journal = (includes('journals') ? source.journal : [])
+    .filter((entry) => canObserve(entry.ownership, user))
+    .map((entry) => {
+      const entryLevel = permissionLevel(entry.ownership, user._id);
+      const result = cloneValue(entry);
+      if (Array.isArray(result.pages)) {
+        result.pages = result.pages.filter((page) => canObserve(page.ownership, user, entryLevel));
+        if (user.role < GAMEMASTER_ROLE) {
+          for (const page of result.pages) {
+            if (page.text) {
+              for (const field of ['content', 'markdown'] as const) {
+                const source = page.text[field];
+                if (typeof source === 'string') {
+                  page.text[field] = redactHtmlSecrets(source);
+                }
+              }
+            }
+          }
+        }
+      }
+      return result;
+    });
+  const messages = (includes('chat') ? source.messages : [])
+    .filter((message) => canReadChatMessage(message, user))
+    .map((message) => {
+      const result = cloneValue(message);
+      result.user = message.author ?? message.user;
+      return result;
+    });
+  const ownUser = sanitizeUser(
+    user,
+    new Set(
+      source.actors.filter((actor) => canObserve(actor.ownership, user)).map((actor) => actor._id),
+    ),
+  );
+  return {
+    userId: user._id,
+    release: cloneValue(source.release),
+    world: cloneValue(source.world),
+    system: cloneValue(source.system),
+    modules: [],
+    demoMode: source.demoMode,
+    actors,
+    scenes: [],
+    items,
+    journal,
+    messages,
+    combats: [],
+    users: [ownUser],
+    activeUsers: source.activeUsers.includes(user._id) ? [user._id] : [],
+    settings: [],
+    macros: [],
+    playlists: [],
+    tables: [],
+    folders: [],
+    cards: [],
+    packs: [],
+  };
+}
+
+type BufferedWorldEvent =
+  | { kind: 'document'; value: DocumentBroadcast }
+  | { kind: 'activity'; value: UserActivity };
+
+interface RefreshBuffer {
+  generation: number;
+  epoch: number;
+  events: BufferedWorldEvent[];
+  overflowed: boolean;
+}
 
 export interface FoundryClientConfig {
   baseUrl: string;
   apiKey?: string;
+  restUrl?: string;
+  restApiKey?: string;
+  restClientId?: string;
   username?: string;
   password?: string;
   userId?: string;
@@ -218,6 +571,8 @@ export interface FoundryClientConfig {
   socketPath?: string;
   /** Opt-in gate for game-state mutations (FOUNDRY_WRITE_ENABLED). Default false. */
   writeEnabled?: boolean;
+  /** Authorization boundary for public reads. Default preserves service-identity behavior. */
+  authorizationMode?: AuthorizationMode;
 }
 
 /** Minimal shape of FoundryVTT's `modifyDocument` Socket.IO acknowledgement. */
@@ -244,6 +599,21 @@ export interface SearchItemsParams {
   cursor?: string;
 }
 
+export interface ListActorItemsParams {
+  actorId: string;
+  query?: string;
+  type?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListSceneTokensParams {
+  sceneId?: string;
+  query?: string;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface SearchCollectionParams {
   query?: string | undefined;
   limit?: number | undefined;
@@ -251,15 +621,15 @@ export interface SearchCollectionParams {
 }
 
 export interface CompendiumSearchParams {
-  query?: string;
-  packType?: string;
-  itemType?: string;
-  spellLevel?: number;
-  source?: string;
-  compendiumId?: string;
-  limit?: number;
+  query?: string | undefined;
+  packType?: string | undefined;
+  itemType?: string | undefined;
+  spellLevel?: number | undefined;
+  source?: string | undefined;
+  compendiumId?: string | undefined;
+  limit?: number | undefined;
   /** Opaque pagination cursor from a prior result's `nextCursor`. */
-  cursor?: string;
+  cursor?: string | undefined;
 }
 
 /**
@@ -285,8 +655,38 @@ export class FoundryClient {
    */
   private restLinkLive = true;
   private readonly paginator = new SnapshotPaginator();
+  private readonly compendiumPaginator = new SnapshotPaginator();
+  private compendiumRelayIdentity = randomUUID();
+  private compendiumRelayConfig: {
+    restUrl: string | undefined;
+    restClientId: string | undefined;
+    restApiKey: string | undefined;
+  } | null = null;
+  private readonly sceneTokenPaginator = new SnapshotPaginator();
+  private readonly compendiumAdapter: CompendiumRestAdapter;
   private paginationSession = randomUUID();
   private restStatusIdentity = 'not-connected';
+  private readSessionId = randomUUID();
+  private snapshotId: string | null = null;
+  private snapshotRevision = 0;
+  private snapshotCapturedAt: string | null = null;
+  private snapshotObservedAt: string | null = null;
+  private snapshotWorldId: string | null = null;
+  private restRevision = 0;
+  private restObservedAt: string | null = null;
+  private restWorldId: string | null = null;
+  private socketGeneration = 0;
+  private socketEpoch = 0;
+  private socketUserId: string | null = null;
+  private refreshInFlight: {
+    socket: Socket;
+    generation: number;
+    epoch: number;
+    promise: Promise<void>;
+  } | null = null;
+  private refreshBuffer: RefreshBuffer | null = null;
+  private readonly pendingWorldRequests = new Set<(error: Error) => void>();
+  private readonly callerContext = new CallerContextStorage();
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -304,9 +704,19 @@ export class FoundryClient {
       retryAttempts: 3,
       retryDelay: 1000,
       socketPath: '/socket.io/',
+      authorizationMode: 'service-identity',
       ...config,
     };
+    if (!['service-identity', 'delegated'].includes(this.config.authorizationMode ?? '')) {
+      throw new Error('authorizationMode must be service-identity or delegated');
+    }
 
+    this.compendiumAdapter = new CompendiumRestAdapter({
+      baseUrl: this.config.restUrl,
+      clientId: this.config.restClientId,
+      apiKey: this.config.restApiKey,
+      timeout: this.config.timeout,
+    });
     this.http = axios.create({
       baseURL: this.config.baseUrl,
       timeout: this.config.timeout || 30000,
@@ -331,10 +741,14 @@ export class FoundryClient {
       this.http.interceptors.response.use(
         (response) => {
           this.restLinkLive = true;
+          this.observeRestResponse(response.data);
           return response;
         },
         (error: unknown) => {
           this.restLinkLive = hasHttpResponse(error);
+          if (this.restLinkLive) {
+            this.observeRestResponse(Reflect.get(error as object, 'response'));
+          }
           return Promise.reject(error);
         },
       );
@@ -342,6 +756,150 @@ export class FoundryClient {
 
     const mode = this.config.apiKey ? 'REST API' : 'Socket.IO';
     logger.info(`FoundryVTT client initialized (${mode} mode)`);
+  }
+
+  isDelegatedMode(): boolean {
+    return this.config.authorizationMode === 'delegated';
+  }
+
+  assertReadSurfaceAllowed(surface: ReadSurface): void {
+    if (!this.isDelegatedMode()) {
+      return;
+    }
+    if (!DELEGATED_READ_SURFACES.has(surface)) {
+      throw new CallerAuthorizationError();
+    }
+    this.requireDelegatedState();
+  }
+
+  private requireDelegatedState(): AuthorizedCallerState {
+    const state = this.callerContext.getStore();
+    if (!state || !this.connectionIsLive()) {
+      throw new CallerAuthorizationError();
+    }
+    return state;
+  }
+
+  private readWorld(surface: ReadSurface): WorldData {
+    if (!this.isDelegatedMode()) {
+      return this.requireWorldData();
+    }
+    if (!DELEGATED_READ_SURFACES.has(surface)) {
+      throw new CallerAuthorizationError();
+    }
+    return this.requireDelegatedState().getWorldView(surface) as WorldData;
+  }
+
+  async runWithCaller<T>(
+    context: TrustedCallerContext,
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    if (!this.isDelegatedMode()) {
+      return await operation();
+    }
+    let state: AuthorizedCallerState;
+    try {
+      const validated = validateTrustedCallerContext(context);
+      if (this.config.apiKey) {
+        throw new CallerAuthorizationError();
+      }
+      const socket = this.socket;
+      if (!socket?.connected || !this._isConnected) {
+        throw new CallerAuthorizationError();
+      }
+      const generation = this.socketGeneration;
+      const epoch = this.socketEpoch;
+      const parsed = WorldDataSchema.safeParse(
+        await this.requestWorldSnapshot(socket, generation, epoch),
+      );
+      if (
+        !parsed.success ||
+        !this.isCurrentSocket(socket, generation, epoch) ||
+        !socket.connected
+      ) {
+        throw new CallerAuthorizationError();
+      }
+      const snapshot = cloneValue(parsed.data) as unknown as WorldData;
+      if (snapshot.userId !== this.socketUserId || snapshot.world.id !== validated.worldId) {
+        throw new CallerAuthorizationError();
+      }
+      const matchingUsers = snapshot.users.filter((entry) => entry._id === validated.userId);
+      const caller = matchingUsers.length === 1 ? matchingUsers[0] : undefined;
+      if (
+        !caller ||
+        !Number.isInteger(caller.role) ||
+        caller.role <= 0 ||
+        caller.role > 4 ||
+        typeof caller.name !== 'string' ||
+        caller.name.length === 0 ||
+        typeof caller.color !== 'string'
+      ) {
+        throw new CallerAuthorizationError();
+      }
+      const views = new Map<ReadSurface, Readonly<WorldData>>();
+      const fingerprints = new Map<ReadSurface, string>();
+      let spatialView: Readonly<SceneSpatialProjection> | undefined;
+      const project = <V>(operation: () => V): V => {
+        try {
+          return operation();
+        } catch {
+          throw new CallerAuthorizationError();
+        }
+      };
+      const getWorldView = (surface: ReadSurface): Readonly<WorldData> =>
+        project(() => {
+          let view = views.get(surface);
+          if (!view) {
+            view = deepFreeze(projectWorldData(snapshot, caller, surface));
+            views.set(surface, view);
+          }
+          return view;
+        });
+      const getSpatialView = (): Readonly<SceneSpatialProjection> =>
+        project(() => {
+          spatialView ??= deepFreeze(projectSceneSpatial(snapshot, caller));
+          return spatialView;
+        });
+      state = Object.freeze({
+        context: validated,
+        getWorldView,
+        getSpatialView,
+        fingerprintFor: (surface: ReadSurface) =>
+          project(() => {
+            let fingerprint = fingerprints.get(surface);
+            if (!fingerprint) {
+              const view = surface === 'scene-spatial' ? getSpatialView() : getWorldView(surface);
+              fingerprint = createHash('sha256')
+                .update(JSON.stringify({ context: validated, surface, view }))
+                .digest('hex');
+              fingerprints.set(surface, fingerprint);
+            }
+            return fingerprint;
+          }),
+        getSummary: () =>
+          project(() =>
+            Object.freeze({
+              actors: snapshot.actors.filter((actor) => canObserve(actor.ownership, caller)).length,
+              items: snapshot.items.filter(
+                (item) => canObserve(item.ownership, caller) && canReadItemIdentity(item, caller),
+              ).length,
+              journals: snapshot.journal.filter((entry) => canObserve(entry.ownership, caller))
+                .length,
+              users: 1,
+              messages: snapshot.messages.filter((message) => canReadChatMessage(message, caller))
+                .length,
+            }),
+          ),
+        snapshotId: randomUUID(),
+        capturedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof CallerAuthorizationError) {
+        throw error;
+      }
+      throw new CallerAuthorizationError();
+    }
+    return await this.callerContext.run(state, operation);
   }
 
   /**
@@ -374,15 +932,11 @@ export class FoundryClient {
 
     const { session } = await authenticateFoundry(this.config.baseUrl, user, this.config.password);
 
-    // Connect authenticated socket and load world data
-    this.worldData = await this.connectAndLoadWorld(session);
-    this.resetPaginationSession();
-    this.worldDataStale = false;
-    this._isConnected = true;
+    const worldData = await this.connectAndLoadWorld(session);
     logger.info('Connected to FoundryVTT via Socket.IO', {
-      actors: this.worldData.actors.length,
-      scenes: this.worldData.scenes.length,
-      items: this.worldData.items.length,
+      actors: worldData.actors.length,
+      scenes: worldData.scenes.length,
+      items: worldData.items.length,
     });
   }
 
@@ -390,64 +944,135 @@ export class FoundryClient {
    * Connects Socket.IO with an authenticated session and loads worldData.
    */
   private connectAndLoadWorld(session: string): Promise<WorldData> {
-    // A previous socket must not outlive its replacement (see `detachSocket`).
     this.detachSocket();
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
 
     return new Promise((resolve, reject) => {
-      this.socket = io(this.config.baseUrl, sessionSocketOptions(session));
+      const socket = io(this.config.baseUrl, sessionSocketOptions(session));
+      this.socket = socket;
+      const generation = ++this.socketGeneration;
+      const epoch = ++this.socketEpoch;
+      let settled = false;
 
       const cleanup = () => {
-        this.socket?.off('session', onSession);
-        this.socket?.off('connect_error', onConnectError);
+        socket.off('session', onSession);
+        socket.off('connect_error', onConnectError);
+      };
+
+      const fail = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        cleanup();
+        if (this.socket === socket) {
+          this.detachSocket();
+        }
+        reject(error);
       };
 
       const timeout = setTimeout(() => {
-        cleanup();
-        this.socket?.disconnect();
-        reject(new Error('Timeout waiting for world data (15s)'));
-      }, 15000);
+        fail(new Error(`Timeout waiting for authenticated session (${this.config.timeout}ms)`));
+      }, this.config.timeout);
 
-      const onSession = (data: { userId?: string } | null) => {
+      const onSession = async (data: { userId?: string } | null) => {
+        if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
+          return;
+        }
         if (!data?.userId) {
-          clearTimeout(timeout);
-          cleanup();
-          this.socket?.disconnect();
-          return reject(new Error('Authentication failed — session event returned no userId'));
+          fail(new Error('Authentication failed — session event returned no userId'));
+          return;
         }
 
-        this.socket?.emit('world', (worldData: WorldData) => {
-          clearTimeout(timeout);
-          cleanup();
-          const parsed = WorldDataSchema.safeParse(worldData);
-          if (!parsed.success) {
-            logger.warn('WorldData failed schema validation — proceeding with raw data', {
-              issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
-            });
+        clearTimeout(timeout);
+        cleanup();
+        this.socketUserId = data.userId;
+        this._isConnected = true;
+        this.attachSocketListeners(socket);
+        try {
+          await this.refreshWorldDataInternal();
+          if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
+            return;
           }
-          // Keep the snapshot live from here on (#205). Attached only after a
-          // successful handshake so the reject paths have no listener to leak.
-          this.socket?.on('modifyDocument', this.onDocumentBroadcast);
-          // Presence (#218): `activeUsers` is not a document collection, so it
-          // only moves on this event.
-          this.socket?.on('userActivity', this.onUserActivity);
-          // Liveness (#217): a socket that drops on its own must stop reading
-          // as connected, and one that socket.io reconnects must read as
-          // connected again. Both are removed in `disconnect()`.
-          this.socket?.on('connect', this.onSocketConnect);
-          this.socket?.on('disconnect', this.onSocketDisconnect);
-          resolve(worldData);
-        });
+          settled = true;
+          resolve(this.requireWorldData());
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
       };
 
       const onConnectError = (err: Error) => {
-        clearTimeout(timeout);
-        cleanup();
-        reject(new Error(`Socket.IO connection failed: ${err.message}`));
+        fail(new Error(`Socket.IO connection failed: ${err.message}`));
       };
 
-      this.socket.on('session', onSession);
-      this.socket.on('connect_error', onConnectError);
+      socket.on('session', onSession);
+      socket.on('connect_error', onConnectError);
     });
+  }
+
+  private attachSocketListeners(socket: Socket): void {
+    socket.on('modifyDocument', this.onDocumentBroadcast);
+    socket.on('userActivity', this.onUserActivity);
+    socket.on('connect', this.onSocketConnect);
+    socket.on('disconnect', this.onSocketDisconnect);
+    socket.on('session', this.onSocketSession);
+  }
+
+  private isCurrentSocket(socket: Socket, generation: number, epoch: number): boolean {
+    return (
+      this.socket === socket && this.socketGeneration === generation && this.socketEpoch === epoch
+    );
+  }
+
+  private cancelWorldRequests(error: Error): void {
+    for (const cancel of this.pendingWorldRequests) {
+      cancel(error);
+    }
+    this.pendingWorldRequests.clear();
+  }
+
+  private clearSocketSnapshot(): void {
+    this.worldData = null;
+    this.worldDataStale = false;
+    this.snapshotId = null;
+    this.snapshotRevision = 0;
+    this.snapshotCapturedAt = null;
+    this.snapshotObservedAt = null;
+    this.snapshotWorldId = null;
+  }
+
+  private requireWorldData(): WorldData {
+    if (!this.worldData) {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
+    return this.worldData;
+  }
+
+  private publishWorldData(data: WorldData): void {
+    const nextWorldId = data.world.id;
+    if (this.snapshotWorldId !== null && this.snapshotWorldId !== nextWorldId) {
+      this.rotateReadSession();
+      this.snapshotRevision = 0;
+    }
+    const now = new Date().toISOString();
+    this.worldData = data;
+    this.worldDataStale = false;
+    this.snapshotWorldId = nextWorldId;
+    this.snapshotId = randomUUID();
+    this.snapshotRevision += 1;
+    this.snapshotCapturedAt = now;
+    this.snapshotObservedAt = now;
+  }
+
+  private noteSnapshotMutation(): void {
+    if (!this.worldData || !this.snapshotId) {
+      return;
+    }
+    this.snapshotId = randomUUID();
+    this.snapshotRevision += 1;
+    this.snapshotObservedAt = new Date().toISOString();
   }
 
   /**
@@ -455,26 +1080,33 @@ export class FoundryClient {
    *
    * Bound field rather than a method so the same reference can be passed to
    * `socket.off()` on teardown. Never throws: a malformed or unmodelled payload
-   * leaves the cache untouched (and stale) rather than taking the connection down.
+   * leaves the cache untouched rather than taking the connection down.
    */
   private onDocumentBroadcast = (payload: unknown): void => {
-    if (!this.worldData) {
-      return;
-    }
-
     const broadcast = parseDocumentBroadcast(payload);
     if (!broadcast) {
+      return;
+    }
+    this.bufferRefreshEvent({ kind: 'document', value: broadcast });
+    if (!this.worldData) {
       return;
     }
 
     try {
       const applied = applyDocumentBroadcast(this.worldData, broadcast);
+      if (documentBroadcastRequiresRefresh(this.worldData, broadcast)) {
+        this.worldDataStale = true;
+      }
+      if (applied) {
+        this.noteSnapshotMutation();
+      }
       logger.debug(
         applied
           ? `Applied ${broadcast.action} ${broadcast.type} broadcast to cached worldData`
           : `Ignored ${broadcast.action} ${broadcast.type} broadcast (not cached)`,
       );
     } catch (error) {
+      this.worldDataStale = true;
       logger.warn('Failed to apply document broadcast to cached worldData', {
         type: broadcast.type,
         action: broadcast.action,
@@ -496,38 +1128,24 @@ export class FoundryClient {
    * Never throws: an unrecognized payload leaves presence as it was.
    */
   private onUserActivity = (userId: unknown, activityData?: unknown): void => {
-    if (!this.worldData) {
-      return;
-    }
-
     const activity = parseUserActivity(userId, activityData);
     if (!activity) {
       logger.debug('Ignored unrecognized userActivity payload');
       return;
     }
+    this.bufferRefreshEvent({ kind: 'activity', value: activity });
+    if (!this.worldData) {
+      return;
+    }
 
     if (applyUserActivity(this.worldData, activity)) {
+      this.noteSnapshotMutation();
       logger.debug(
         `User ${activity.userId} is now ${activity.active ? 'active' : 'inactive'} (userActivity)`,
       );
     }
   };
 
-  /**
-   * Reacts to the socket dropping on its own — server restart, network loss,
-   * an idle timeout (#217).
-   *
-   * Clears the connected flag so `isConnected()` and `get_health_status` stop
-   * claiming a live link, and marks the cached snapshot stale: nothing is
-   * applying `modifyDocument` broadcasts while the socket is down, so whatever
-   * is in `worldData` from here on is a point-in-time copy, not live state.
-   * The cache is deliberately *kept* rather than dropped — a stale answer with
-   * an honest connection line beats no answer at all — and Socket.IO's own
-   * reconnect logic may bring the link back, at which point `refreshWorldData()`
-   * resyncs it.
-   *
-   * Bound field rather than a method so the same reference reaches `socket.off()`.
-   */
   /**
    * Reacts to socket.io bringing the link back up on its own (#217).
    *
@@ -539,19 +1157,36 @@ export class FoundryClient {
    * latched off for the rest of the process while writes and broadcasts were
    * demonstrably working again.
    *
-   * `worldDataStale` is deliberately *not* cleared: broadcasts emitted while
-   * the socket was down were never delivered and are not replayed, so the
-   * cache stays flagged until an explicit `refreshWorldData()`.
+   * Retained data stays stale while automatic snapshot recovery runs. Only a
+   * validated snapshot with buffered events replayed restores current reads.
    *
    * Bound field rather than a method so the same reference reaches `socket.off()`.
    */
   private onSocketConnect = (): void => {
+    if (!this.socket) {
+      return;
+    }
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket connection epoch changed'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
     this.resetPaginationSession();
     this._isConnected = true;
-    logger.info('FoundryVTT socket reconnected — cached world data is still stale until refreshed');
+    this.worldDataStale = this.worldData !== null;
+    void this.refreshWorldDataInternal().catch((error: unknown) => {
+      logger.warn('Automatic world snapshot recovery failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    logger.info('FoundryVTT socket reconnected — refreshing cached world data');
   };
 
+  /** Retain stale data during an outage and invalidate traversal and pending ACKs. */
   private onSocketDisconnect = (reason?: unknown): void => {
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket disconnected during world refresh'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
     this.resetPaginationSession();
     this._isConnected = false;
     this.worldDataStale = this.worldData !== null;
@@ -559,6 +1194,42 @@ export class FoundryClient {
       reason: typeof reason === 'string' ? reason : undefined,
     });
   };
+
+  private onSocketSession = (data: { userId?: string } | null): void => {
+    if (!data?.userId || data.userId === this.socketUserId) {
+      return;
+    }
+    this.socketUserId = data.userId;
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Authenticated socket session changed'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
+    if (this.socket?.connected) {
+      void this.refreshWorldDataInternal().catch((error: unknown) => {
+        logger.warn('World snapshot load after session change failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  };
+
+  private bufferRefreshEvent(event: BufferedWorldEvent): void {
+    const buffer = this.refreshBuffer;
+    if (
+      !buffer ||
+      buffer.generation !== this.socketGeneration ||
+      buffer.epoch !== this.socketEpoch
+    ) {
+      return;
+    }
+    if (buffer.events.length >= MAX_REFRESH_EVENT_BUFFER) {
+      buffer.overflowed = true;
+      return;
+    }
+    buffer.events.push(event);
+  }
 
   /**
    * Closes the current socket and removes every persistent listener bound to
@@ -569,22 +1240,29 @@ export class FoundryClient {
    * client, so this is reachable in-repo).
    */
   private detachSocket(): void {
-    if (!this.socket) {
+    const socket = this.socket;
+    this.socketGeneration += 1;
+    this.socketEpoch += 1;
+    this.cancelWorldRequests(new Error('Socket retired'));
+    this.refreshInFlight = null;
+    this.refreshBuffer = null;
+    this.socketUserId = null;
+    if (!socket) {
       return;
     }
-    this.socket.off('modifyDocument', this.onDocumentBroadcast);
-    this.socket.off('userActivity', this.onUserActivity);
-    this.socket.off('connect', this.onSocketConnect);
-    this.socket.off('disconnect', this.onSocketDisconnect);
-    this.socket.disconnect();
+    socket.off('modifyDocument', this.onDocumentBroadcast);
+    socket.off('userActivity', this.onUserActivity);
+    socket.off('connect', this.onSocketConnect);
+    socket.off('disconnect', this.onSocketDisconnect);
+    socket.off('session', this.onSocketSession);
+    socket.disconnect();
     this.socket = null;
   }
 
   async disconnect(): Promise<void> {
     this.detachSocket();
-    this.resetPaginationSession();
-    this.worldData = null;
-    this.worldDataStale = false;
+    this.rotateReadSession();
+    this.clearSocketSnapshot();
     this._isConnected = false;
     this.restLinkLive = true;
     logger.info('FoundryVTT client disconnected');
@@ -592,7 +1270,101 @@ export class FoundryClient {
 
   private resetPaginationSession(): void {
     this.paginator.clear();
+    this.compendiumPaginator.clear();
+    this.sceneTokenPaginator.clear();
     this.paginationSession = randomUUID();
+  }
+
+  private rotateReadSession(): void {
+    this.readSessionId = randomUUID();
+    this.resetPaginationSession();
+  }
+
+  private observeRestResponse(value: unknown): void {
+    this.restObservedAt = new Date().toISOString();
+    this.restRevision += 1;
+    const candidate =
+      typeof value === 'object' && value !== null && 'data' in value
+        ? Reflect.get(value, 'data')
+        : value;
+    if (typeof candidate !== 'object' || candidate === null) {
+      return;
+    }
+    const world = Reflect.get(candidate, 'world');
+    const directWorldId = Reflect.get(candidate, 'worldId');
+    const nestedWorldId =
+      typeof world === 'object' && world !== null ? Reflect.get(world, 'id') : undefined;
+    const nextWorldId =
+      typeof directWorldId === 'string'
+        ? directWorldId
+        : typeof nestedWorldId === 'string'
+          ? nestedWorldId
+          : null;
+    if (nextWorldId && this.restWorldId && nextWorldId !== this.restWorldId) {
+      this.rotateReadSession();
+    }
+    if (nextWorldId) {
+      this.restWorldId = nextWorldId;
+    }
+  }
+
+  /** Non-throwing diagnostics for the source snapshot used by world reads. */
+  getReadMetadata(): WorldReadMetadata {
+    const respondedAt = new Date().toISOString();
+    if (this.isDelegatedMode()) {
+      const state = this.requireDelegatedState();
+      return {
+        source: 'socket',
+        freshness: 'current',
+        worldId: state.context.worldId,
+        sessionId: state.context.sessionId,
+        snapshotId: state.snapshotId,
+        revision: 1,
+        capturedAt: state.capturedAt,
+        observedAt: state.capturedAt,
+        respondedAt,
+      };
+    }
+    if (this.config.apiKey) {
+      return {
+        source: 'rest',
+        freshness:
+          this.restObservedAt === null ? 'unavailable' : this.isConnected() ? 'current' : 'stale',
+        worldId: this.restWorldId,
+        sessionId: this.readSessionId,
+        snapshotId: null,
+        revision: this.restRevision,
+        capturedAt: null,
+        observedAt: this.restObservedAt,
+        respondedAt,
+      };
+    }
+    return {
+      source: 'socket',
+      freshness:
+        this.snapshotId === null
+          ? 'unavailable'
+          : this.worldDataStale || !this.isConnected()
+            ? 'stale'
+            : 'current',
+      worldId: this.snapshotWorldId,
+      sessionId: this.readSessionId,
+      snapshotId: this.snapshotId,
+      revision: this.snapshotRevision,
+      capturedAt: this.snapshotCapturedAt,
+      observedAt: this.snapshotObservedAt,
+      respondedAt,
+    };
+  }
+
+  private getAvailableReadMetadata(): WorldReadMetadata & {
+    freshness: 'current' | 'stale';
+  } {
+    const metadata = this.getReadMetadata();
+    if (metadata.freshness === 'unavailable') {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
+    return { ...metadata, freshness: metadata.freshness };
   }
 
   /**
@@ -615,6 +1387,13 @@ export class FoundryClient {
    * I/O of its own, because this accessor is synchronous and widely called.
    */
   isConnected(): boolean {
+    if (this.isDelegatedMode()) {
+      this.assertReadSurfaceAllowed('diagnostics');
+    }
+    return this.connectionIsLive();
+  }
+
+  private connectionIsLive(): boolean {
     if (this.config.apiKey) {
       return this._isConnected && this.restLinkLive;
     }
@@ -627,6 +1406,7 @@ export class FoundryClient {
    * the cache; this flags that the answer is a point-in-time copy.
    */
   isWorldDataStale(): boolean {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.worldDataStale;
   }
 
@@ -634,6 +1414,7 @@ export class FoundryClient {
    * Returns true if worldData is available (Socket.IO mode connected).
    */
   hasWorldData(): boolean {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.worldData !== null;
   }
 
@@ -641,64 +1422,180 @@ export class FoundryClient {
   // World data accessors
   // ==========================================================================
 
-  /**
-   * Re-emits 'world' on the existing socket to refresh the cached snapshot.
-   *
-   * Registers a one-shot 'world' listener and cleans it up on every exit
-   * path (success, error, timeout) via `socket.off()` so that repeated
-   * refreshes over a long-running session do not leak listener handles.
-   */
   async refreshWorldData(): Promise<void> {
-    if (!this.socket?.connected) {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
+    }
+    return this.refreshWorldDataInternal();
+  }
+
+  private async refreshWorldDataInternal(): Promise<void> {
+    const socket = this.socket;
+    if (!socket?.connected) {
       throw new Error('Not connected — cannot refresh world data');
     }
+    const generation = this.socketGeneration;
+    const epoch = this.socketEpoch;
+    if (
+      this.refreshInFlight &&
+      this.refreshInFlight.socket === socket &&
+      this.refreshInFlight.generation === generation &&
+      this.refreshInFlight.epoch === epoch
+    ) {
+      return this.refreshInFlight.promise;
+    }
 
-    this.worldData = await new Promise<WorldData>((resolve, reject) => {
-      const cleanup = () => {
-        this.socket?.off('world', onWorld);
-      };
+    if (this.worldData) {
+      this.worldDataStale = true;
+    }
+    const buffer: RefreshBuffer = { generation, epoch, events: [], overflowed: false };
+    this.refreshBuffer = buffer;
+    const promise = this.runWorldRefresh(socket, generation, epoch, buffer);
+    this.refreshInFlight = { socket, generation, epoch, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.refreshInFlight?.promise === promise) {
+        this.refreshInFlight = null;
+      }
+      if (this.refreshBuffer === buffer) {
+        this.refreshBuffer = null;
+      }
+    }
+  }
 
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error('Refresh timeout'));
-      }, this.config.timeout ?? 15000);
-
-      const onWorld = (data: WorldData) => {
-        cleanup();
-        clearTimeout(timeoutId);
-        try {
-          const parsed = WorldDataSchema.safeParse(data);
-          if (!parsed.success) {
-            logger.warn('WorldData refresh failed schema validation — proceeding with raw data', {
-              issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
-            });
+  private async runWorldRefresh(
+    socket: Socket,
+    generation: number,
+    epoch: number,
+    buffer: RefreshBuffer,
+  ): Promise<void> {
+    const attempts = Math.max(1, (this.config.retryAttempts ?? 0) + 1);
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const raw = await this.requestWorldSnapshot(socket, generation, epoch);
+        const parsed = WorldDataSchema.safeParse(raw);
+        if (!parsed.success) {
+          throw new Error(
+            `World snapshot validation failed: ${parsed.error.issues
+              .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+              .join('; ')}`,
+          );
+        }
+        const candidate = parsed.data as unknown as WorldData;
+        if (candidate.userId !== this.socketUserId) {
+          throw new Error('World snapshot identity does not match authenticated socket session');
+        }
+        if (!this.isCurrentSocket(socket, generation, epoch)) {
+          throw new Error('World snapshot arrived for a retired socket session');
+        }
+        if (buffer.overflowed) {
+          throw new Error('World snapshot event buffer overflowed during refresh');
+        }
+        for (const event of buffer.events) {
+          if (event.kind === 'document') {
+            applyDocumentBroadcast(candidate, event.value);
+            if (documentBroadcastRequiresRefresh(candidate, event.value)) {
+              throw new Error('World snapshot contains an unapplied document broadcast');
+            }
+          } else {
+            applyUserActivity(candidate, event.value);
           }
-          resolve(data);
-        } catch (err) {
-          reject(err as Error);
+        }
+        if (!this.isCurrentSocket(socket, generation, epoch)) {
+          throw new Error('World snapshot session changed before publication');
+        }
+        this.publishWorldData(candidate);
+        logger.info('World data refreshed', {
+          actors: candidate.actors.length,
+          items: candidate.items.length,
+          replayedEvents: buffer.events.length,
+        });
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (
+          buffer.overflowed ||
+          !this.isCurrentSocket(socket, generation, epoch) ||
+          !socket.connected
+        ) {
+          break;
+        }
+        if (attempt < attempts && (this.config.retryDelay ?? 0) > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, this.config.retryDelay));
+        }
+      }
+    }
+    this.worldDataStale = this.worldData !== null;
+    throw lastError ?? new Error('World snapshot refresh failed');
+  }
+
+  private requestWorldSnapshot(
+    socket: Socket,
+    generation: number,
+    epoch: number,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error, value?: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        this.pendingWorldRequests.delete(cancel);
+        if (error) {
+          reject(error);
+        } else {
+          resolve(value);
         }
       };
-
-      this.socket?.once('world', onWorld);
-      this.socket?.emit('world');
-    });
-
-    this.worldDataStale = false;
-    logger.info('World data refreshed', {
-      actors: this.worldData.actors.length,
-      items: this.worldData.items.length,
+      const cancel = (error: Error) => finish(error);
+      const timeoutId = setTimeout(
+        () => finish(new Error(`World snapshot ACK timed out after ${this.config.timeout}ms`)),
+        this.config.timeout,
+      );
+      this.pendingWorldRequests.add(cancel);
+      try {
+        socket.emit('world', (value: unknown) => {
+          if (!this.isCurrentSocket(socket, generation, epoch)) {
+            finish(new Error('World snapshot ACK belongs to a retired socket session'));
+            return;
+          }
+          finish(undefined, value);
+        });
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
   getWorldData(): WorldData | null {
-    return this.worldData;
+    return this.isDelegatedMode() ? this.readWorld('search') : this.worldData;
   }
 
   // ==========================================================================
   // Actor methods
   // ==========================================================================
 
-  private paginationContext(kind: string, filters: Record<string, unknown>): string {
+  private paginationContext(
+    kind: string,
+    filters: Record<string, unknown>,
+    surface: ReadSurface,
+  ): string {
+    if (this.isDelegatedMode()) {
+      const state = this.requireDelegatedState();
+      return JSON.stringify({
+        kind,
+        filters,
+        callerId: state.context.callerId,
+        userId: state.context.userId,
+        worldId: state.context.worldId,
+        sessionId: state.context.sessionId,
+        authorizationFingerprint: state.fingerprintFor(surface),
+      });
+    }
     const world = this.config.apiKey
       ? this.restStatusIdentity
       : JSON.stringify(this.worldData?.world ?? null);
@@ -709,11 +1606,15 @@ export class FoundryClient {
   }
 
   private assertSocketPaginationAuthorized(): void {
+    if (this.isDelegatedMode()) {
+      this.requireDelegatedState();
+      return;
+    }
     if (this.config.apiKey) {
       return;
     }
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
     const caller = this.worldData.users.find((user) => user._id === this.worldData?.userId);
     if (!caller || typeof caller.role !== 'number' || caller.role < 4) {
@@ -751,11 +1652,22 @@ export class FoundryClient {
     const records: FoundryActor[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/actors', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/actors', {
+          params: {
+            ...requestFilters,
+            page,
+            limit: 100,
+            ...(snapshotId === undefined ? {} : { snapshotId }),
+          },
+        }),
       );
       const result = restActorPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST actor pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST actor pagination ignored requested page ${page}`);
       }
@@ -790,26 +1702,41 @@ export class FoundryClient {
       if (result.actors.length === 0) {
         throw new Error('REST actor pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST actor pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST actor pagination exceeded the maximum supported page count');
   }
 
-  private async fetchAllRestItems(filters: {
-    query?: string | undefined;
-    type?: string | undefined;
-    rarity?: string | undefined;
-  }): Promise<FoundryItem[]> {
-    const requestFilters = Object.fromEntries(
-      Object.entries(filters).filter((entry) => entry[1] !== undefined),
-    );
+  private async restItemIdentity(): Promise<ItemEconomyIdentity> {
+    try {
+      const response = await this.executeWithRetry(() => this.http.get('/api/world'));
+      return restItemSystemIdentity(response.data);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return { id: 'unknown' };
+      }
+      throw error;
+    }
+  }
+
+  private async fetchAllRestItems(): Promise<FoundryItem[]> {
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
+    let snapshotId: string | undefined;
     for (let page = 1; page <= 10_000; page += 1) {
       const response = await this.executeWithRetry(() =>
-        this.http.get('/api/items', { params: { ...requestFilters, page, limit: 100 } }),
+        this.http.get('/api/items', {
+          params: { page, limit: 100, ...(snapshotId === undefined ? {} : { snapshotId }) },
+        }),
       );
       const result = restItemPageSchema.parse(response.data);
+      if (page > 1 && result.snapshotId !== snapshotId) {
+        throw new Error('REST item pagination snapshot changed or was omitted');
+      }
       if (result.page !== page) {
         throw new Error(`REST item pagination ignored requested page ${page}`);
       }
@@ -844,24 +1771,26 @@ export class FoundryClient {
       if (result.items.length === 0) {
         throw new Error('REST item pagination made no progress before reaching its total');
       }
+      if (result.snapshotId === undefined) {
+        throw new Error('REST item pagination requires a backend snapshotId for multiple pages');
+      }
+      snapshotId = result.snapshotId;
     }
     throw new Error('REST item pagination exceeded the maximum supported page count');
   }
 
   async searchActors(params: SearchActorsParams): Promise<ActorSearchResult> {
+    this.assertReadSurfaceAllowed('actors');
     const filters = { query: params.query, type: params.type };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
-    const context = this.paginationContext('actor-search', filters);
+    const context = this.paginationContext('actor-search', filters, 'actors');
     let records: FoundryActor[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
         records = await this.fetchAllRestActors(filters);
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error('Not connected — no world data available');
-        }
+        const worldData = this.readWorld('actors');
         records = worldData.actors
           .filter(
             (actor) =>
@@ -872,23 +1801,20 @@ export class FoundryClient {
       }
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context);
+    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     const { records: actors, ...metadata } = page;
     return { actors, ...metadata };
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
+    this.assertReadSurfaceAllowed('actors');
     assertReadId(actorId, 'actorId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
-      return restActor(response.data, actorId);
+      return restActor(restDetailDocument(response.data), actorId);
     }
 
-    if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
-    }
-
-    const actor = this.worldData.actors.find((a) => a._id === actorId);
+    const actor = this.readWorld('actors').actors.find((a) => a._id === actorId);
     if (!actor) {
       throw new Error(`Actor not found: ${actorId}`);
     }
@@ -896,11 +1822,166 @@ export class FoundryClient {
     return worldActorToFoundry(actor);
   }
 
+  private actorReadWorld(
+    actorId: unknown,
+    unavailableMessage = 'Actor read unavailable',
+  ): { world: WorldData; actor: WorldActor } {
+    assertReadId(actorId, 'actorId');
+    if (this.config.apiKey) {
+      throw new Error('Structured actor-sheet reads are unsupported by the REST backend');
+    }
+    const world = this.readWorld('actors');
+    const actor = world.actors.find((candidate) => candidate._id === actorId);
+    if (!actor) {
+      throw new Error(unavailableMessage);
+    }
+    const system = actorSystemIdentity(world);
+    if (system.profile === 'generic' && this.isDelegatedMode()) {
+      throw new Error(unavailableMessage);
+    }
+    return { world, actor };
+  }
+
+  getActorSheet(actorId: string): ActorSheetOutput {
+    this.assertReadSurfaceAllowed('actors');
+    const { world, actor } = this.actorReadWorld(actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorSheet',
+      actor: publicActorIdentity(actor),
+      system,
+      sections: ACTOR_SECTION_NAMES.map((name) => {
+        const supported = isActorSectionSupported(system.profile, name, delegated);
+        return {
+          name,
+          supported,
+          fieldCount: supported
+            ? actorSectionFields(actor, system.profile, name, delegated).length
+            : 0,
+        };
+      }),
+      itemCount: Array.isArray(actor.items) ? actor.items.length : 0,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  getActorSection(actorId: string, section: ActorSectionName): ActorSectionOutput {
+    this.assertReadSurfaceAllowed('actors');
+    const { world, actor } = this.actorReadWorld(actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    const supported = isActorSectionSupported(system.profile, section, delegated);
+    return {
+      schemaVersion: 1,
+      documentType: 'ActorSection',
+      actor: publicActorIdentity(actor),
+      system,
+      section,
+      supported,
+      fields: supported ? actorSectionFields(actor, system.profile, section, delegated) : [],
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  listActorItems(params: ListActorItemsParams): ActorItemListOutput {
+    this.assertReadSurfaceAllowed('actors');
+    assertReadId(params.actorId, 'actorId');
+    this.validateSearchFilters({ query: params.query, type: params.type });
+    this.assertSocketPaginationAuthorized();
+    const { world, actor } = this.actorReadWorld(params.actorId);
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    const items = Array.isArray(actor.items) ? actor.items : [];
+    const visibleProjection = items.map((item) => ({
+      summary: publicActorItemSummary(actor._id, item, system),
+      fields: actorItemFields(item, system.profile, delegated),
+      sort: typeof item.sort === 'number' ? item.sort : null,
+    }));
+    const contentFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          actor: publicActorIdentity(actor),
+          items: visibleProjection,
+        }),
+      )
+      .digest('hex');
+    const filters = {
+      actorId: actor._id,
+      query: params.query,
+      type: params.type,
+      contentFingerprint,
+    };
+    const context = this.paginationContext('actor-item-list', filters, 'actors');
+    let records: ActorItemSummary[] | undefined;
+    if (params.cursor === undefined) {
+      const query = params.query?.toLocaleLowerCase();
+      const type = params.type?.toLocaleLowerCase();
+      records = visibleProjection
+        .map(({ summary }) => summary)
+        .filter(
+          (item) =>
+            (!query || item.name.toLocaleLowerCase().includes(query)) &&
+            (!type || item.type.toLocaleLowerCase() === type),
+        )
+        .sort(
+          (left, right) =>
+            left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+            left.id.localeCompare(right.id),
+        );
+    }
+    const page = this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getAvailableReadMetadata(),
+    );
+    if (page.readMetadata.freshness === 'unavailable') {
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
+    }
+    const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
+    return {
+      schemaVersion: 2,
+      documentType: 'ActorItemCollection',
+      actor: publicActorIdentity(actor),
+      ...page,
+      readMetadata,
+    };
+  }
+
+  getActorItem(actorId: string, itemId: string): ActorItemOutput {
+    this.assertReadSurfaceAllowed('actors');
+    assertReadId(actorId, 'actorId');
+    assertReadId(itemId, 'itemId');
+    const { world, actor } = this.actorReadWorld(actorId, 'Actor item read unavailable');
+    const item = (Array.isArray(actor.items) ? actor.items : []).find(
+      (candidate) => candidate._id === itemId,
+    );
+    if (!item) {
+      throw new Error('Actor item read unavailable');
+    }
+    const system = actorSystemIdentity(world);
+    const delegated = this.isDelegatedMode();
+    return {
+      schemaVersion: 2,
+      documentType: 'ActorItem',
+      actor: publicActorIdentity(actor),
+      item: {
+        ...publicActorItemSummary(actor._id, item, system),
+        parentActorId: actor._id,
+        fields: actorItemFields(item, system.profile, delegated),
+        systemFieldsSupported: system.profile !== 'generic' || !delegated,
+      },
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
   /**
    * Returns the raw WorldActor with the full system data (game-system specific).
    */
   getRawActor(actorId: string): WorldActor | undefined {
-    return this.worldData?.actors.find((a) => a._id === actorId);
+    return this.readWorld('actors').actors.find((a) => a._id === actorId);
   }
 
   /**
@@ -970,96 +2051,177 @@ export class FoundryClient {
   // ==========================================================================
 
   async searchItems(params: SearchItemsParams): Promise<ItemSearchResult> {
+    this.assertReadSurfaceAllowed('items');
     const filters = { query: params.query, type: params.type, rarity: params.rarity };
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
-    const context = this.paginationContext('item-search', filters);
-    let records: FoundryItem[] | undefined;
+    const context = this.paginationContext('item-search', filters, 'items');
+    let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
+      let identity: ItemEconomyIdentity;
       if (this.config.apiKey) {
-        records = await this.fetchAllRestItems(filters);
+        const rawItems = await this.fetchAllRestItems();
+        identity =
+          rawItems.some((item) => item.system !== undefined) || params.rarity
+            ? await this.restItemIdentity()
+            : { id: 'unknown' };
+        records = rawItems
+          .filter(
+            (item) =>
+              (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
+              (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
+          )
+          .map((item) => restItem(item, identity));
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error('Not connected — no world data available');
-        }
+        const worldData = this.readWorld('items');
+        identity = actorSystemIdentity(worldData);
         records = worldData.items
           .filter(
             (item) =>
               (!params.query || item.name.toLowerCase().includes(params.query.toLowerCase())) &&
               (!params.type || item.type.toLowerCase() === params.type.toLowerCase()),
           )
-          .map(worldItemToFoundry)
-          .filter(
-            (item) => !params.rarity || item.rarity?.toLowerCase() === params.rarity.toLowerCase(),
-          );
+          .map((item) => worldItemToFoundry(item, identity));
       }
+      assertItemRarityFilter(identity, params.rarity);
+      records = records.filter((item) => itemMatchesRarity(item.economy, params.rarity));
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context);
+    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     const { records: items, ...metadata } = page;
     return { items, ...metadata };
   }
 
   /** Read one world item only; actor-owned and compendium items are excluded. */
   async getItem(itemId: string): Promise<FoundryItem> {
+    this.assertReadSurfaceAllowed('items');
     assertReadId(itemId, 'itemId');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
-      return restItem(response.data, itemId);
+      const raw = restItemWireSchema.parse(restDetailDocument(response.data));
+      const identity = raw.system !== undefined ? await this.restItemIdentity() : { id: 'unknown' };
+      return restItem(raw, identity, itemId);
     }
-    if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
-    }
-    const item = this.worldData.items.find((entry) => entry._id === itemId);
+    const world = this.readWorld('items');
+    const item = world.items.find((entry) => entry._id === itemId);
     if (!item) {
       throw new Error(`Item not found: ${itemId}`);
     }
-    return worldItemToFoundry(item);
+    return worldItemToFoundry(item, actorSystemIdentity(world));
   }
 
   // ==========================================================================
   // Compendium methods
   // ==========================================================================
 
-  /**
-   * Searches FoundryVTT compendium packs by name and metadata.
-   *
-   * Compendium data is not present in the cached worldData snapshot, so this
-   * read requires the REST API module (FOUNDRY_API_KEY). When the key is
-   * absent it returns a graceful empty result with `restAvailable: false`
-   * rather than throwing, mirroring the no-worldData behaviour of
-   * {@link searchItems}/{@link searchActors}; the handler surfaces a note
-   * explaining why no results were returned.
-   */
-  async searchCompendium(params: CompendiumSearchParams): Promise<CompendiumSearchResult> {
-    const limit = params.limit ?? 20;
-    const offset = decodeCursor(params.cursor);
-
-    if (this.config.apiKey) {
-      return this.executeWithRetry(async () => {
-        // Translate the opaque cursor into a wire offset for the bridge.
-        const { cursor: _cursor, ...rest } = params;
-        const response = await this.http.get('/api/compendium/search', {
-          params: { ...rest, limit, offset },
-        });
-        const data = (
-          isRecord(response.data) ? response.data : {}
-        ) as Partial<CompendiumSearchResult>;
-        const results = data.results ?? [];
-        const total = typeof data.total === 'number' ? data.total : results.length;
-        const nextOffset = offset + results.length;
-        return {
-          results,
-          total,
-          page: Math.floor(offset / limit) + 1,
-          limit,
-          restAvailable: true,
-          nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
-        };
-      });
+  /** Actively verify compendium support and report other Foundry integrations honestly. */
+  async getCapabilities(): Promise<CapabilityReport> {
+    this.assertReadSurfaceAllowed('compendia');
+    const compendium = await this.compendiumAdapter.probe();
+    const verifiedAt = new Date().toISOString();
+    if (compendium.status !== 'available') {
+      this.compendiumPaginator.clear();
     }
-    return { results: [], total: 0, page: 1, limit, restAvailable: false, nextCursor: null };
+    return {
+      schemaVersion: 1,
+      capabilities: [
+        compendium,
+        {
+          ...RULES_LOOKUP_UNAVAILABLE,
+          verifiedAt,
+          transport: 'rest',
+        },
+        {
+          ...DIAGNOSTICS_UNAVAILABLE,
+          verifiedAt,
+          transport: 'rest',
+        },
+        {
+          ...CONTENT_GENERATION_UNAVAILABLE,
+          verifiedAt,
+          transport: 'rest',
+        },
+      ],
+    };
+  }
+
+  private getCompendiumRelayIdentity(): string {
+    const previous = this.compendiumRelayConfig;
+    const { restUrl, restClientId, restApiKey } = this.config;
+    if (
+      !previous ||
+      previous.restUrl !== restUrl ||
+      previous.restClientId !== restClientId ||
+      previous.restApiKey !== restApiKey
+    ) {
+      this.compendiumRelayConfig = { restUrl, restClientId, restApiKey };
+      this.compendiumRelayIdentity = randomUUID();
+      this.compendiumPaginator.clear();
+    }
+    return this.compendiumRelayIdentity;
+  }
+
+  /** Search the optional authenticated relay, preserving the core Socket.IO session. */
+  async searchCompendium(input: CompendiumSearchParams): Promise<CompendiumSearchResult> {
+    this.assertReadSurfaceAllowed('compendia');
+    const params = compendiumParamsSchema.parse(input);
+    const { limit, cursor, ...filters } = params;
+    const response =
+      cursor !== undefined
+        ? { capability: await this.compendiumAdapter.probe(), entries: undefined }
+        : await this.compendiumAdapter.search(params);
+    const capability = response.capability;
+    if (capability.status !== 'available') {
+      this.compendiumPaginator.clear();
+      return {
+        schemaVersion: 1,
+        capability: { ...capability, status: capability.status },
+        restAvailable: false,
+        results: null,
+        total: null,
+        page: null,
+        limit: limit ?? 20,
+        nextCursor: null,
+      };
+    }
+    const context = {
+      filters,
+      session: this.paginationSession,
+      world: this.snapshotWorldId ?? this.restWorldId,
+      relayIdentity: this.getCompendiumRelayIdentity(),
+    };
+    const now = new Date().toISOString();
+    const metadata: WorldReadMetadata = {
+      source: 'rest',
+      freshness: 'current',
+      worldId: this.snapshotWorldId ?? this.restWorldId,
+      sessionId: this.readSessionId,
+      snapshotId: null,
+      revision: 0,
+      capturedAt: null,
+      observedAt: now,
+      respondedAt: now,
+    };
+    const entries = response.entries?.sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        left.compendiumId.localeCompare(right.compendiumId) ||
+        (left.itemId < right.itemId ? -1 : left.itemId > right.itemId ? 1 : 0),
+    );
+    const { records, ...page } = this.compendiumPaginator.paginate(
+      entries,
+      this.paginationParams(params),
+      context,
+      metadata,
+      20,
+    );
+    return {
+      schemaVersion: 1,
+      capability: { ...capability, status: 'available' },
+      restAvailable: true,
+      results: records,
+      ...page,
+    };
   }
 
   // ==========================================================================
@@ -1072,6 +2234,9 @@ export class FoundryClient {
    * Throws a clear, actionable error otherwise.
    */
   private assertWriteable(): void {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
+    }
     if (!this.config.writeEnabled) {
       throw new Error(
         'Write operations are disabled. Set FOUNDRY_WRITE_ENABLED=true to allow game-state mutation.',
@@ -1125,6 +2290,9 @@ export class FoundryClient {
     action: 'create' | 'update' | 'delete',
     operation: Record<string, unknown>,
   ): Promise<unknown[]> {
+    const socket = this.socket;
+    const generation = this.socketGeneration;
+    const epoch = this.socketEpoch;
     const request = {
       type,
       action,
@@ -1136,7 +2304,19 @@ export class FoundryClient {
         `FoundryVTT rejected ${action} ${type}: ${response.error.message || 'unknown error'}`,
       );
     }
-    return Array.isArray(response?.result) ? response.result : [];
+    const result = Array.isArray(response?.result) ? response.result : [];
+    if (socket && this.isCurrentSocket(socket, generation, epoch) && this.worldData) {
+      const acknowledged = parseDocumentBroadcast({
+        type,
+        action,
+        result,
+        operation: request.operation,
+      });
+      if (acknowledged && applyDocumentBroadcast(this.worldData, acknowledged)) {
+        this.noteSnapshotMutation();
+      }
+    }
+    return result;
   }
 
   // ==========================================================================
@@ -1370,6 +2550,7 @@ export class FoundryClient {
     tokenId: string,
     sceneId?: string,
   ): { scene: WorldScene; token: Record<string, unknown> } | null {
+    this.assertReadSurfaceAllowed('tokens');
     if (!this.worldData) {
       return null;
     }
@@ -1488,7 +2669,135 @@ export class FoundryClient {
   // Scene methods
   // ==========================================================================
 
+  private sceneSpatialProjection(): SceneSpatialProjection {
+    this.assertReadSurfaceAllowed('scene-spatial');
+    if (this.config.apiKey) {
+      throw new Error('Structured scene spatial reads are unsupported by the REST backend');
+    }
+    if (this.isDelegatedMode()) {
+      return this.requireDelegatedState().getSpatialView();
+    }
+    const source = this.requireWorldData();
+    const callers = source.users.filter((candidate) => candidate._id === source.userId);
+    const caller = callers.length === 1 ? callers[0] : undefined;
+    if (
+      !caller ||
+      !Number.isInteger(caller.role) ||
+      caller.role <= 0 ||
+      caller.role > 4 ||
+      typeof caller.name !== 'string' ||
+      caller.name.length === 0 ||
+      typeof caller.color !== 'string'
+    ) {
+      throw new Error('Scene spatial read unavailable');
+    }
+    return projectSceneSpatial(source, caller);
+  }
+
+  private selectSpatialScene(
+    projection: SceneSpatialProjection,
+    sceneId: string | undefined,
+  ): SceneSpatialProjection['scenes'][number] {
+    const selected = sceneId
+      ? projection.scenes.find((entry) => entry.scene.id === sceneId)
+      : projection.scenes.find((entry) => entry.scene.active);
+    if (!selected) {
+      throw new Error('Scene spatial read unavailable');
+    }
+    return selected;
+  }
+
+  private sceneIdentity(scene: SceneSpatialProjection['scenes'][number]['scene']): SceneIdentity {
+    return { id: scene.id, uuid: scene.uuid, name: scene.name, active: scene.active };
+  }
+
+  getSceneSpatial(sceneId?: string): SceneSpatialOutput {
+    if (sceneId !== undefined) {
+      assertReadId(sceneId, 'sceneId');
+    }
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), sceneId);
+    return {
+      schemaVersion: 1,
+      documentType: 'Scene',
+      scene: selected.scene,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
+  listSceneTokens(params: ListSceneTokensParams): SceneTokenListOutput {
+    if (params.sceneId !== undefined) {
+      assertReadId(params.sceneId, 'sceneId');
+    }
+    validateBoundedText(params.query, 'query');
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), params.sceneId);
+    const identity = this.sceneIdentity(selected.scene);
+    const contentFingerprint = createHash('sha256')
+      .update(JSON.stringify({ scene: selected.scene, tokens: selected.tokens }))
+      .digest('hex');
+    const context = this.paginationContext(
+      'scene-token-list',
+      {
+        sceneSelector: params.sceneId === undefined ? 'active' : 'explicit',
+        requestedSceneId: params.sceneId,
+        resolvedSceneId: selected.scene.id,
+        query: params.query,
+        contentFingerprint,
+      },
+      'scene-spatial',
+    );
+    let records: SceneTokenSummary[] | undefined;
+    if (params.cursor === undefined) {
+      const query = params.query?.normalize('NFKC').toLowerCase();
+      records = selected.tokens
+        .filter((token) => !query || token.name.normalize('NFKC').toLowerCase().includes(query))
+        .sort((left, right) => {
+          const leftName = left.name.normalize('NFKC').toLowerCase();
+          const rightName = right.name.normalize('NFKC').toLowerCase();
+          return leftName < rightName
+            ? -1
+            : leftName > rightName
+              ? 1
+              : left.id.localeCompare(right.id);
+        })
+        .map(({ texture: _texture, ...summary }) => summary);
+    }
+    const page = this.sceneTokenPaginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getAvailableReadMetadata(),
+    );
+    const readMetadata = availableWorldReadMetadataSchema.parse(page.readMetadata);
+    return {
+      schemaVersion: 1,
+      documentType: 'Token',
+      scene: identity,
+      ...page,
+      readMetadata,
+    };
+  }
+
+  getSceneToken(sceneId: string | undefined, tokenId: string): SceneTokenOutput {
+    if (sceneId !== undefined) {
+      assertReadId(sceneId, 'sceneId');
+    }
+    assertReadId(tokenId, 'tokenId');
+    const selected = this.selectSpatialScene(this.sceneSpatialProjection(), sceneId);
+    const token = selected.tokens.find((candidate) => candidate.id === tokenId);
+    if (!token) {
+      throw new Error('Scene token read unavailable');
+    }
+    return {
+      schemaVersion: 1,
+      documentType: 'Token',
+      scene: this.sceneIdentity(selected.scene),
+      token,
+      readMetadata: this.getAvailableReadMetadata(),
+    };
+  }
+
   async getCurrentScene(sceneId?: string): Promise<FoundryScene> {
+    this.assertReadSurfaceAllowed('scenes');
     if (sceneId !== undefined && !FOUNDRY_ID_PATTERN.test(sceneId)) {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
@@ -1501,7 +2810,7 @@ export class FoundryClient {
     }
 
     if (!this.worldData) {
-      throw new Error('Not connected — no world data available');
+      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
     }
 
     let scene: WorldScene | undefined;
@@ -1523,7 +2832,8 @@ export class FoundryClient {
   }
 
   getScenes(): WorldScene[] {
-    return this.worldData?.scenes || [];
+    this.assertReadSurfaceAllowed('scenes');
+    return this.requireWorldData().scenes;
   }
 
   // ==========================================================================
@@ -1531,6 +2841,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async getWorldInfo(): Promise<FoundryWorld> {
+    this.assertReadSurfaceAllowed('world-summary');
     if (this.config.apiKey) {
       return this.executeWithRetry(async () => {
         const response = await this.http.get('/api/world');
@@ -1538,23 +2849,16 @@ export class FoundryClient {
       });
     }
 
-    if (!this.worldData) {
-      return {
-        id: 'unknown',
-        title: 'Not connected',
-        description: 'Connect to FoundryVTT to retrieve world information',
-        system: 'unknown',
-        coreVersion: 'unknown',
-        systemVersion: 'unknown',
-        playtime: 0,
-        created: new Date().toISOString(),
-        modified: new Date().toISOString(),
-      };
+    const worldData = this.readWorld('world-summary');
+    const metadata = this.getReadMetadata();
+    const w = worldData.world as Record<string, unknown>;
+    const s = worldData.system as Record<string, unknown>;
+    const r = worldData.release as Record<string, unknown>;
+    const created = normalizeTimestamp(w.created) ?? metadata.capturedAt;
+    const modified = normalizeTimestamp(w.modified) ?? metadata.observedAt ?? metadata.capturedAt;
+    if (!created || !modified) {
+      throw new Error('World data unavailable — snapshot timestamps are missing');
     }
-
-    const w = this.worldData.world as Record<string, unknown>;
-    const s = this.worldData.system as Record<string, unknown>;
-    const r = this.worldData.release as Record<string, unknown>;
 
     return {
       id: (w.id as string) || 'unknown',
@@ -1564,8 +2868,8 @@ export class FoundryClient {
       coreVersion: (r.version as string) || (r.generation as string) || 'unknown',
       systemVersion: (s.version as string) || 'unknown',
       playtime: 0,
-      created: new Date().toISOString(),
-      modified: new Date().toISOString(),
+      created,
+      modified,
     };
   }
 
@@ -1574,10 +2878,8 @@ export class FoundryClient {
   // ==========================================================================
 
   getCombatState(): WorldCombat | null {
-    if (!this.worldData) {
-      return null;
-    }
-    return this.worldData.combats.find((c) => c.active) ?? null;
+    this.assertReadSurfaceAllowed('combat');
+    return this.requireWorldData().combats.find((c) => c.active) ?? null;
   }
 
   // ==========================================================================
@@ -1585,10 +2887,8 @@ export class FoundryClient {
   // ==========================================================================
 
   getChatMessages(limit = 20): WorldMessage[] {
-    if (!this.worldData) {
-      return [];
-    }
-    return this.worldData.messages.slice(-limit);
+    const boundedLimit = parseChatLimit(limit);
+    return this.readWorld('chat').messages.slice(-boundedLimit);
   }
 
   // ==========================================================================
@@ -1596,12 +2896,10 @@ export class FoundryClient {
   // ==========================================================================
 
   getUsers(): { users: WorldUser[]; activeUsers: string[] } {
-    if (!this.worldData) {
-      return { users: [], activeUsers: [] };
-    }
+    const worldData = this.readWorld('users');
     return {
-      users: this.worldData.users,
-      activeUsers: this.worldData.activeUsers,
+      users: worldData.users,
+      activeUsers: worldData.activeUsers,
     };
   }
 
@@ -1610,20 +2908,20 @@ export class FoundryClient {
   // ==========================================================================
 
   getJournals(): WorldJournal[] {
-    return this.worldData?.journal || [];
+    return this.readWorld('journals').journal;
   }
 
   searchJournals(query: string): WorldJournal[] {
-    if (!this.worldData) {
-      return [];
-    }
+    const worldData = this.readWorld('journals');
     const q = query.toLowerCase();
-    return this.worldData.journal.filter((j) => {
+    return worldData.journal.filter((j) => {
       if (j.name.toLowerCase().includes(q)) {
         return true;
       }
       return j.pages?.some(
-        (p) => p.name.toLowerCase().includes(q) || p.text?.content?.toLowerCase().includes(q),
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.text?.format === 2 ? p.text.markdown : p.text?.content)?.toLowerCase().includes(q),
       );
     });
   }
@@ -1637,7 +2935,7 @@ export class FoundryClient {
     }
     this.assertSocketPaginationAuthorized();
     const filters = { query: params.query };
-    const context = this.paginationContext('journal-search', filters);
+    const context = this.paginationContext('journal-search', filters, 'journals');
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       records = sortCollectionRecords(
@@ -1649,11 +2947,109 @@ export class FoundryClient {
         })),
       );
     }
-    return this.paginator.paginate(records, this.paginationParams(params), context);
+    return this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getReadMetadata(),
+    );
   }
 
   getJournal(journalId: string): WorldJournal | undefined {
-    return this.worldData?.journal.find((j) => j._id === journalId);
+    return this.readWorld('journals').journal.find((j) => j._id === journalId);
+  }
+
+  async getJournalSummaryPage(params: JournalSummaryPageParams): Promise<JournalSummaryPage> {
+    const validated = journalSummaryPageParamsSchema.parse(params);
+    assertJournalReadId(validated.journalId);
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST journal page reads are unsupported because no authenticated endpoint is available',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const journal = this.readWorld('journals').journal.find(
+      (candidate) => candidate._id === validated.journalId,
+    );
+    if (!journal) {
+      throw new JournalReadUnavailableError();
+    }
+    const prepared = prepareJournalRead(journal);
+    const result = this.paginator.paginate(
+      prepared.pages.map(journalPageSummary),
+      this.paginationParams(validated),
+      this.paginationContext(
+        'journal-summary',
+        {
+          journalId: prepared.id,
+          digest: prepared.digest,
+        },
+        'journals',
+      ),
+      this.getReadMetadata(),
+      JOURNAL_DEFAULT_PAGE_LIMIT,
+    );
+    const { records: pages, ...pagination } = result;
+    return {
+      id: prepared.id,
+      uuid: prepared.uuid,
+      name: prepared.name,
+      pages,
+      ...pagination,
+    };
+  }
+
+  async getJournalPageContent(params: JournalPageContentParams): Promise<JournalPageContent> {
+    const validated = journalPageContentParamsSchema.parse(params);
+    assertJournalReadId(validated.journalId);
+    assertJournalReadId(validated.pageId);
+    if (this.config.apiKey) {
+      throw new Error(
+        'REST journal page reads are unsupported because no authenticated endpoint is available',
+      );
+    }
+    this.assertSocketPaginationAuthorized();
+    const journal = this.readWorld('journals').journal.find(
+      (candidate) => candidate._id === validated.journalId,
+    );
+    if (!journal) {
+      throw new JournalReadUnavailableError();
+    }
+    const prepared = prepareJournalRead(journal);
+    const page = prepared.pages.find((candidate) => candidate.metadata.id === validated.pageId);
+    if (!page) {
+      throw new JournalReadUnavailableError();
+    }
+    const format = validated.format ?? 'text';
+    const content = journalContentChunks(page, format);
+    const result = this.paginator.paginate(
+      content.chunks,
+      this.paginationParams(validated),
+      this.paginationContext(
+        'journal-page-content',
+        {
+          journalId: prepared.id,
+          pageId: page.metadata.id,
+          format,
+          digest: prepared.digest,
+        },
+        'journals',
+      ),
+      this.getReadMetadata(),
+      JOURNAL_DEFAULT_PAGE_LIMIT,
+    );
+    const { records: chunks, complete, page: paginationPage, ...pagination } = result;
+    return {
+      journalId: prepared.id,
+      page: page.metadata,
+      paginationPage,
+      format,
+      contentLength: content.contentLength,
+      chunks,
+      contentTruncated: !complete,
+      complete,
+      ...pagination,
+    };
   }
 
   // ==========================================================================
@@ -1730,17 +3126,15 @@ export class FoundryClient {
     scenes: WorldScene[];
     journals: WorldJournal[];
   } {
-    if (!this.worldData) {
-      return { actors: [], items: [], scenes: [], journals: [] };
-    }
+    const worldData = this.readWorld('search');
 
     const q = query.toLowerCase();
 
     return {
-      actors: this.worldData.actors.filter((a) => a.name.toLowerCase().includes(q)),
-      items: this.worldData.items.filter((i) => i.name.toLowerCase().includes(q)),
-      scenes: this.worldData.scenes.filter((s) => s.name.toLowerCase().includes(q)),
-      journals: this.worldData.journal.filter((j) => j.name.toLowerCase().includes(q)),
+      actors: worldData.actors.filter((a) => a.name.toLowerCase().includes(q)),
+      items: worldData.items.filter((i) => i.name.toLowerCase().includes(q)),
+      scenes: worldData.scenes.filter((s) => s.name.toLowerCase().includes(q)),
+      journals: worldData.journal.filter((j) => j.name.toLowerCase().includes(q)),
     };
   }
 
@@ -1752,12 +3146,9 @@ export class FoundryClient {
       );
     }
     this.assertSocketPaginationAuthorized();
-    const worldData = this.worldData;
-    if (!worldData) {
-      throw new Error('Not connected — no world data available');
-    }
+    const worldData = this.readWorld('search');
     const filters = { query: params.query };
-    const context = this.paginationContext('world-search', filters);
+    const context = this.paginationContext('world-search', filters, 'search');
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       const query = (params.query ?? '').toLowerCase();
@@ -1796,13 +3187,20 @@ export class FoundryClient {
           })),
       ]);
     }
-    return this.paginator.paginate(records, this.paginationParams(params), context);
+    return this.paginator.paginate(
+      records,
+      this.paginationParams(params),
+      context,
+      this.getReadMetadata(),
+    );
   }
 
   async getCollectionPage(
     collection: 'actors' | 'items' | 'scenes' | 'journals' | 'users',
     params: PaginationParams,
   ): Promise<CollectionPage> {
+    const surface: ReadSurface = collection === 'scenes' ? 'scenes' : collection;
+    this.assertReadSurfaceAllowed(surface);
     this.assertSocketPaginationAuthorized();
     if (this.config.apiKey && !['actors', 'items'].includes(collection)) {
       throw new Error(
@@ -1810,7 +3208,7 @@ export class FoundryClient {
       );
     }
 
-    const context = this.paginationContext('collection', { collection });
+    const context = this.paginationContext('collection', { collection }, surface);
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
@@ -1823,7 +3221,7 @@ export class FoundryClient {
             type: record.type,
           }));
         } else {
-          const items = await this.fetchAllRestItems({});
+          const items = await this.fetchAllRestItems();
           records = items.map((record) => ({
             id: record._id,
             name: record.name,
@@ -1832,10 +3230,7 @@ export class FoundryClient {
           }));
         }
       } else {
-        const worldData = this.worldData;
-        if (!worldData) {
-          throw new Error('Not connected — no world data available');
-        }
+        const worldData = this.readWorld(surface);
         switch (collection) {
           case 'actors':
             records = worldData.actors.map((record) => ({
@@ -1882,7 +3277,7 @@ export class FoundryClient {
       }
       records = sortCollectionRecords(records);
     }
-    return this.paginator.paginate(records, params, context);
+    return this.paginator.paginate(records, params, context, this.getReadMetadata());
   }
 
   // ==========================================================================
@@ -1890,21 +3285,22 @@ export class FoundryClient {
   // ==========================================================================
 
   getWorldSummary(): Record<string, number> {
-    if (!this.worldData) {
-      return {};
+    if (this.isDelegatedMode()) {
+      return { ...this.requireDelegatedState().getSummary() };
     }
+    const worldData = this.readWorld('world-summary');
     return {
-      actors: this.worldData.actors.length,
-      items: this.worldData.items.length,
-      scenes: this.worldData.scenes.length,
-      journals: this.worldData.journal.length,
-      combats: this.worldData.combats.length,
-      users: this.worldData.users.length,
-      messages: this.worldData.messages.length,
-      macros: this.worldData.macros.length,
-      playlists: this.worldData.playlists.length,
-      tables: this.worldData.tables.length,
-      folders: this.worldData.folders.length,
+      actors: worldData.actors.length,
+      items: worldData.items.length,
+      scenes: worldData.scenes.length,
+      journals: worldData.journal.length,
+      combats: worldData.combats.length,
+      users: worldData.users.length,
+      messages: worldData.messages.length,
+      macros: worldData.macros.length,
+      playlists: worldData.playlists.length,
+      tables: worldData.tables.length,
+      folders: worldData.folders.length,
     };
   }
 
@@ -1912,87 +3308,84 @@ export class FoundryClient {
   // Dice rolling
   // ==========================================================================
 
-  /**
-   * Rolls a dice formula.
-   *
-   * Validation is deliberately **per transport**, because the two transports
-   * are not equally capable (#219):
-   *
-   *  - **REST (`FOUNDRY_API_KEY`)** posts the formula to `/api/dice/roll`,
-   *    where FoundryVTT's own `Roll` engine evaluates it. That engine
-   *    understands more than this module does — parentheses, for one — so only
-   *    the `DICE_FORMULA_ALPHABET` check applies here. Imposing the local
-   *    parser's narrower grammar would take away a capability the transport
-   *    has. What the alphabet does refuse is refused by name and position
-   *    (`unexpected "k" at position 3`, via `alphabetViolation`), so the
-   *    two transports are equally specific about what they would not evaluate.
-   *  - **Socket.IO / no API key** has no remote evaluator: `fallbackDiceRoll`
-   *    is the roller, so the grammar its parser can represent is the grammar
-   *    accepted, and that parser is the *only* gate. No alphabet pre-check runs
-   *    ahead of it, so its specific message (`unexpected "k" at position 3`)
-   *    reaches the caller instead of a generic `Invalid dice formula: 4d6kh3`.
-   *    Nothing is ever dropped from a total in silence.
-   *
-   * The length cap is common to both. A REST roll that cannot reach FoundryVTT
-   * falls through to the local roller, which then applies the strict grammar —
-   * a formula only Foundry could evaluate errors out rather than being
-   * mis-totalled locally.
-   */
-  async rollDice(formula: string, reason?: string): Promise<DiceRoll> {
-    if (typeof formula !== 'string' || formula.length > MAX_DICE_FORMULA_LENGTH) {
-      throw new Error(`Invalid dice formula: ${formula}`);
+  /** Validates the whole bounded formula before choosing exactly one evaluator. */
+  async rollDice(
+    formula: string,
+    reason?: string,
+    engine: DiceRollInput['engine'] = 'auto',
+  ): Promise<DiceRoll> {
+    if (this.isDelegatedMode()) {
+      throw new CallerAuthorizationError();
     }
-
-    if (this.config.apiKey) {
-      if (!formula || !DICE_FORMULA_ALPHABET.test(formula)) {
-        throw alphabetViolation(formula);
-      }
-
-      try {
-        const response = await this.http.post('/api/dice/roll', {
-          formula,
-          flavor: reason,
-        });
-
-        const rolled = RestDiceRollSchema.parse(response.data);
-
-        const result: DiceRoll = {
-          formula,
-          total: rolled.total,
-          breakdown: rolled.terms?.map((term) => term.results?.join(', ')).join(' + ') || formula,
-          timestamp: new Date().toISOString(),
-        };
-        if (reason) {
-          result.reason = reason;
-        }
-        return result;
-      } catch {
-        // Fall through to local roll
-      }
-    }
-
-    return this.fallbackDiceRoll(formula, reason);
-  }
-
-  /**
-   * Rolls locally, when FoundryVTT is not doing it for us.
-   *
-   * Delegates the whole formula to {@link evaluateDiceFormula}, which consumes
-   * the input end to end and throws on any leftover it cannot represent (#219).
-   */
-  private fallbackDiceRoll(formula: string, reason?: string): DiceRoll {
-    const { total, breakdown } = evaluateDiceFormula(formula);
-
-    const result: DiceRoll = {
+    const input = parseDiceRollInput({
       formula,
-      total,
-      breakdown,
-      timestamp: new Date().toISOString(),
-    };
-    if (reason) {
-      result.reason = reason;
+      engine,
+      ...(reason === undefined ? {} : { reason }),
+    });
+    let parsed: ReturnType<typeof parseDiceFormula>;
+    try {
+      parsed = parseDiceFormula(input.formula);
+    } catch (error) {
+      if (error instanceof InvalidDiceFormulaError) {
+        throw new McpError(ErrorCode.InvalidParams, error.message);
+      }
+      throw error;
     }
-    return result;
+
+    const { restUrl, restApiKey, restClientId } = this.config;
+    const configured = [restUrl, restApiKey, restClientId];
+    const complete =
+      typeof restUrl === 'string' &&
+      restUrl.trim().length > 0 &&
+      typeof restApiKey === 'string' &&
+      restApiKey.trim().length > 0 &&
+      typeof restClientId === 'string' &&
+      restClientId.trim().length > 0;
+    const partial = configured.some((value) => value !== undefined) && !complete;
+    if (input.engine === 'foundry') {
+      if (partial) {
+        throw new Error(
+          'Configure all FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID for dice.',
+        );
+      }
+      if (!complete && this.config.apiKey !== undefined) {
+        throw new Error(
+          'Legacy dice REST transport is unsupported; configure FOUNDRY_REST_URL, FOUNDRY_REST_API_KEY, and FOUNDRY_REST_CLIENT_ID.',
+        );
+      }
+      if (!complete && input.engine === 'foundry') {
+        throw new Error('Foundry dice REST transport is not configured.');
+      }
+    }
+    const native = input.engine === 'foundry' && complete;
+    const result = native
+      ? await new DiceRestAdapter({
+          baseUrl: restUrl,
+          apiKey: restApiKey,
+          clientId: restClientId,
+          userId: this.config.userId,
+          timeout: this.config.timeout,
+        }).roll(parsed, input.reason)
+      : { ...evaluateParsedDiceFormula(parsed), timestamp: new Date().toISOString() };
+    return diceRollOutputSchema.parse({
+      schemaVersion: 1,
+      engine: native ? 'foundry' : 'local',
+      normalizedFormula: result.normalizedFormula,
+      dice: result.dice.map((die, termIndex) => ({ ...die, termIndex })),
+      total: result.total,
+      breakdown: result.breakdown,
+      timestamp: result.timestamp,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      fallback:
+        input.engine === 'auto' && !native
+          ? {
+              requestedEngine: 'auto',
+              reason: complete
+                ? 'foundry-execution-not-requested'
+                : 'foundry-transport-not-configured',
+            }
+          : null,
+    });
   }
 
   // ==========================================================================
@@ -2000,6 +3393,7 @@ export class FoundryClient {
   // ==========================================================================
 
   async testConnection(): Promise<boolean> {
+    this.assertReadSurfaceAllowed('diagnostics');
     try {
       const user = this.config.userId || this.config.username;
       if (this.config.apiKey || (user && this.config.password !== undefined)) {
@@ -2052,6 +3446,7 @@ export class FoundryClient {
   }
 
   async get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    this.assertReadSurfaceAllowed('diagnostics');
     return this.executeWithRetry(() => this.http.get(url, config));
   }
 
@@ -2060,6 +3455,7 @@ export class FoundryClient {
     data?: unknown,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.post(url, data, config));
   }
 
@@ -2068,10 +3464,12 @@ export class FoundryClient {
     data?: unknown,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.put(url, data, config));
   }
 
   async delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    this.assertWriteable();
     return this.executeWithRetry(() => this.http.delete(url, config));
   }
 }
@@ -2173,9 +3571,17 @@ function worldActorToFoundry(a: WorldActor): FoundryActor {
   return actor;
 }
 
-function worldItemToFoundry(i: WorldItem): FoundryItem {
+function worldItemToFoundry(i: WorldItem, identity: ItemEconomyIdentity): NormalizedFoundryItem {
   worldReadDocumentSchema.parse(i);
-  const item: FoundryItem = { _id: i._id, uuid: `Item.${i._id}`, name: i.name, type: i.type };
+  const economy = normalizeItemEconomy(i, identity);
+  const item: NormalizedFoundryItem = {
+    _id: i._id,
+    uuid: `Item.${i._id}`,
+    name: i.name,
+    type: i.type,
+    economy,
+    ...itemEconomyAliases(economy),
+  };
   if (i.img !== undefined) {
     item.img = i.img;
   }
@@ -2183,12 +3589,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
   if (desc !== null) {
     item.description = desc;
   }
-  const rarity = extractString(i.system, 'rarity');
-  if (rarity !== null) {
-    item.rarity = rarity;
-  }
-  // Preserve existing common world-item values without normalizing game systems
-  // or changing the transport-specific rarity-filter behavior (#13).
   for (const key of ['weight', 'quantity'] as const) {
     const value =
       key === 'weight'
@@ -2203,14 +3603,6 @@ function worldItemToFoundry(i: WorldItem): FoundryItem {
     if (typeof value === 'boolean') {
       item[key] = value;
     }
-  }
-  const price = i.system.price;
-  if (
-    isRecord(price) &&
-    typeof price.value === 'number' &&
-    typeof price.denomination === 'string'
-  ) {
-    item.price = { value: price.value, denomination: price.denomination };
   }
   itemDocumentSchema.parse(item);
   return item;
@@ -2258,23 +3650,6 @@ function systemOf(obj: unknown): Record<string, unknown> | undefined {
     return obj.system;
   }
   return undefined;
-}
-
-/**
- * Compendium pagination cursors are opaque base64-encoded result offsets.
- * `encodeCursor` turns an offset into a cursor; `decodeCursor` reads it back,
- * returning 0 when the cursor is absent or malformed.
- */
-function encodeCursor(offset: number): string {
-  return Buffer.from(String(offset), 'utf8').toString('base64');
-}
-
-function decodeCursor(cursor: string | undefined): number {
-  if (!cursor) {
-    return 0;
-  }
-  const decoded = Number.parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10);
-  return Number.isFinite(decoded) && decoded >= 0 ? decoded : 0;
 }
 
 function extractNested(obj: Record<string, unknown>, ...keys: string[]): unknown {

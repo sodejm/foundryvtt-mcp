@@ -2,6 +2,8 @@
  * Resource definitions for FoundryVTT MCP Server
  */
 
+import { isDelegatedResource } from './authorization.js';
+
 export const resourceDefinitions = [
   {
     uri: 'foundry://actors',
@@ -64,16 +66,19 @@ export const resourceDefinitions = [
   },
 ];
 
-export function getAllResources() {
-  return resourceDefinitions;
+export function getAllResources(delegated = false) {
+  return delegated
+    ? resourceDefinitions.filter((resource) => isDelegatedResource(resource.uri))
+    : resourceDefinitions;
 }
 
-export function getAllResourceTemplates() {
-  return ['actors', 'items', 'scenes', 'journals', 'users'].map((collection) => ({
-    uriTemplate: `foundry://${collection}{?limit,cursor}`,
-    name: `${collection} pages`,
-    description:
-      'Version 2 snapshot pages with stable IDs, total, returnedCount, complete, nextCursor and nextUri. Limit 1–100; cursors expire after five minutes. Socket requires a GM; REST supports actors/items only.',
-    mimeType: 'application/json',
-  }));
+export function getAllResourceTemplates(delegated = false) {
+  return ['actors', 'items', 'scenes', 'journals', 'users']
+    .filter((collection) => !delegated || isDelegatedResource(`foundry://${collection}`))
+    .map((collection) => ({
+      uriTemplate: `foundry://${collection}{?limit,cursor}`,
+      name: `${collection} pages`,
+      description: `Version 3 snapshot pages with stable IDs, total, returnedCount, complete, nextCursor, nextUri and readMetadata. Limit 1–100; cursors expire after five minutes. ${delegated ? 'Delegated pages require trusted caller context and fresh authorization; totals and cursors are scoped to readable records.' : 'Service mode uses the backend identity. Socket pagination requires a GM; REST supports actors/items only.'}`,
+      mimeType: 'application/json',
+    }));
 }

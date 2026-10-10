@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsClient } from '../../diagnostics/client.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import type { DiagnosticSystem } from '../../utils/diagnostics.js';
+import { readMetadata } from '../handlers/__tests__/pagination-fixture.js';
 import { routeToolRequest as routeNewToolRequest } from '../new-router.js';
 import { routeToolRequest } from '../router.js';
 
@@ -13,7 +14,7 @@ for (const route of [routeToolRequest, routeNewToolRequest]) {
     it('routes world item detail to the common validated handler', async () => {
       const item = { _id: 'Item000000000001', name: 'Twin', type: 'loot' };
       const getItem = vi.fn().mockResolvedValue(item);
-      const client = { getItem } as unknown as FoundryClient;
+      const client = { getItem, getReadMetadata: () => readMetadata() } as unknown as FoundryClient;
       const result = await route(
         'get_item_details',
         { itemId: item._id },
@@ -22,7 +23,7 @@ for (const route of [routeToolRequest, routeNewToolRequest]) {
         system,
       );
       expect(result.structuredContent).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 3,
         documentType: 'Item',
         record: { id: item._id },
       });

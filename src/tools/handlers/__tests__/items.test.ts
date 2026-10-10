@@ -4,8 +4,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
+import { normalizeItemEconomy } from '../../../foundry/item-normalization.js';
 import { handleSearchItems } from '../items.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 interface MockItem {
   _id: string;
@@ -13,6 +14,7 @@ interface MockItem {
   type: string;
   rarity?: string;
   price?: { value: number; denomination: string };
+  economy?: ReturnType<typeof normalizeItemEconomy>;
 }
 
 interface MockSearchParams {
@@ -30,6 +32,7 @@ function mockFoundryClient(result: {
 }): { client: FoundryClient; calls: { params: MockSearchParams[] } } {
   const calls = { params: [] as MockSearchParams[] };
   const client = {
+    getReadMetadata: () => readMetadata(),
     searchItems: vi.fn(async (params: MockSearchParams) => {
       calls.params.push(params);
       return { ...result, ...paginationMetadata(result.items.length, result.total, result.limit) };
@@ -51,15 +54,25 @@ describe('handleSearchItems', () => {
             _id: 'Item000000000001',
             name: 'Longsword',
             type: 'weapon',
-            rarity: 'Common',
-            price: { value: 15, denomination: 'gp' },
+            economy: normalizeItemEconomy(
+              {
+                type: 'weapon',
+                system: { rarities: ['common'], price: { value: 15, denomination: 'gp' } },
+              },
+              { id: 'dnd5e', version: '6.0.6' },
+            ),
           },
           {
             _id: 'Item000000000002',
             name: 'Potion of Healing',
             type: 'consumable',
-            rarity: 'Common',
-            price: { value: 50, denomination: 'gp' },
+            economy: normalizeItemEconomy(
+              {
+                type: 'consumable',
+                system: { rarities: ['common'], price: { value: 50, denomination: 'gp' } },
+              },
+              { id: 'dnd5e', version: '6.0.6' },
+            ),
           },
         ],
         total: 2,
@@ -78,8 +91,8 @@ describe('handleSearchItems', () => {
       expect(text).toContain('**Type Filter:** weapon');
       expect(text).toContain('**Rarity Filter:** Common');
       expect(text).toContain('**Results:** 2/2 total');
-      expect(text).toContain('**Longsword** (weapon) - Common - 15 gp');
-      expect(text).toContain('**Potion of Healing** (consumable) - Common - 50 gp');
+      expect(text).toContain('**Longsword** (weapon) - common - 15 gp');
+      expect(text).toContain('**Potion of Healing** (consumable) - common - 50 gp');
       expect(text).toContain('**Page:** 1 | **Limit:** 10');
 
       // Verify filters were forwarded
@@ -143,7 +156,9 @@ describe('handleSearchItems', () => {
       const result = await handleSearchItems({ query: 'box' }, client);
       const text = getText(result);
 
-      expect(text).toContain('**Mystery Box** (misc) - Unknown rarity - Unknown price');
+      expect(text).toContain(
+        '**Mystery Box** (misc) - Unknown rarity (unsupported) - Unknown price (unsupported)',
+      );
     });
   });
 });

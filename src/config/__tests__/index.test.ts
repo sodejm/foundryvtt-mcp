@@ -82,6 +82,7 @@ describe('Config', () => {
       expect(config.foundry.timeout).toBe(10000);
       expect(config.foundry.retryAttempts).toBe(3);
       expect(config.foundry.retryDelay).toBe(1000);
+      expect(config.foundry.authorizationMode).toBe('service-identity');
       expect(config.cache.enabled).toBe(true);
       expect(config.cache.ttlSeconds).toBe(300);
       expect(config.cache.maxSize).toBe(1000);
@@ -89,6 +90,20 @@ describe('Config', () => {
   });
 
   describe('configuration validation', () => {
+    it('accepts delegated authorization mode', async () => {
+      process.env = { ...mockEnv, FOUNDRY_AUTHORIZATION_MODE: 'delegated' };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.authorizationMode).toBe('delegated');
+    });
+
+    it('rejects unknown authorization modes', async () => {
+      process.env = { ...mockEnv, FOUNDRY_AUTHORIZATION_MODE: 'player' };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(() => config.foundry.authorizationMode).toThrow();
+    });
+
     it('should throw error when FOUNDRY_URL is missing in test environment', async () => {
       process.env = { NODE_ENV: 'test' };
 
@@ -143,6 +158,43 @@ describe('Config', () => {
       resetConfig(); // Reset any cached config
 
       expect(() => config.nodeEnv).toThrow();
+    });
+  });
+
+  describe('optional REST relay configuration', () => {
+    it('keeps REST relay credentials separate from legacy core credentials', async () => {
+      process.env = {
+        ...mockEnv,
+        FOUNDRY_REST_URL: 'https://relay.example.test/foundry',
+        FOUNDRY_REST_API_KEY: 'relay-key',
+        FOUNDRY_REST_CLIENT_ID: 'client-1',
+      };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.apiKey).toBe('test-api-key');
+      expect(config.foundry.restUrl).toBe('https://relay.example.test/foundry');
+      expect(config.foundry.restApiKey).toBe('relay-key');
+      expect(config.foundry.restClientId).toBe('client-1');
+    });
+    it('does not default optional support to the core Foundry URL or key', async () => {
+      process.env = { ...mockEnv };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.restUrl).toBeUndefined();
+      expect(config.foundry.restApiKey).toBeUndefined();
+      expect(config.foundry.restClientId).toBeUndefined();
+    });
+    it.each([
+      'invalid-url',
+      'ftp://relay.test',
+      'https://user:secret@relay.test',
+      'https://relay.test?apiKey=secret',
+      'https://relay.test#secret',
+    ])('rejects unsafe or invalid REST URLs', async (url) => {
+      process.env = { ...mockEnv, FOUNDRY_REST_URL: url };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(() => config.foundry.restUrl).toThrow();
     });
   });
 

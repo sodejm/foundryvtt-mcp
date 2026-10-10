@@ -16,36 +16,42 @@ import {
   resourcePageInputSchema,
 } from '../../foundry/read-contract.js';
 import { logger } from '../../utils/logger.js';
+import { assertResourceAllowed } from '../authorization.js';
 import { getTurnOrder } from './combat-order.js';
-import { withToolError } from './utils.js';
+import { availableReadMetadata, withToolError } from './utils.js';
 
 export async function handleReadResource(
   uri: string,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
 ) {
-  return withToolError('read resource', async () => {
-    const collection = parseCollectionUri(uri);
-    if (collection) {
-      return getCollectionResource(uri, collection.name, collection.params, foundryClient);
-    }
-    switch (uri) {
-      case 'foundry://scenes/current':
-        return await getCurrentSceneResource(foundryClient);
+  assertResourceAllowed(uri, foundryClient);
+  return withToolError(
+    'read resource',
+    async () => {
+      const collection = parseCollectionUri(uri);
+      if (collection) {
+        return getCollectionResource(uri, collection.name, collection.params, foundryClient);
+      }
+      switch (uri) {
+        case 'foundry://scenes/current':
+          return await getCurrentSceneResource(foundryClient);
 
-      case 'foundry://world/settings':
-        return await getWorldSettingsResource(foundryClient);
+        case 'foundry://world/settings':
+          return await getWorldSettingsResource(foundryClient);
 
-      case 'foundry://combat':
-        return await getCombatResource(foundryClient);
+        case 'foundry://combat':
+          return await getCombatResource(foundryClient);
 
-      case 'foundry://system/diagnostics':
-        return await getSystemDiagnosticsResource(diagnosticsClient);
+        case 'foundry://system/diagnostics':
+          return await getSystemDiagnosticsResource(diagnosticsClient);
 
-      default:
-        throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI: ${uri}`);
-    }
-  });
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI: ${uri}`);
+      }
+    },
+    foundryClient,
+  );
 }
 
 type CollectionName = 'actors' | 'items' | 'scenes' | 'journals' | 'users';
@@ -117,59 +123,42 @@ async function getCollectionResource(
     metadata.nextCursor === null
       ? null
       : `foundry://${collection}?limit=${metadata.limit}&cursor=${encodeURIComponent(metadata.nextCursor)}`;
-  const text = JSON.stringify({ schemaVersion: 2, collection, records, ...metadata, nextUri });
+  const text = JSON.stringify({ schemaVersion: 3, collection, records, ...metadata, nextUri });
   return boundedReadResponse({ contents: [{ uri, mimeType: 'application/json', text }] });
 }
 
+function worldResource(uri: string, data: Record<string, unknown>, client: FoundryClient) {
+  const readMetadata = availableReadMetadata(client);
+  return {
+    contents: [
+      { uri, mimeType: 'application/json', text: JSON.stringify({ ...data, readMetadata }) },
+    ],
+  };
+}
+
 async function getCurrentSceneResource(foundryClient: FoundryClient) {
+  let currentScene: Awaited<ReturnType<FoundryClient['getCurrentScene']>>;
   try {
-    const scene = await foundryClient.getCurrentScene();
-    return {
-      contents: [
-        {
-          uri: 'foundry://scenes/current',
-          mimeType: 'application/json',
-          text: JSON.stringify(
-            { currentScene: scene, lastUpdated: new Date().toISOString() },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    currentScene = await foundryClient.getCurrentScene();
   } catch (error) {
-    logger.debug('getCurrentSceneResource: no active scene', { error });
-    return {
-      contents: [
-        {
-          uri: 'foundry://scenes/current',
-          mimeType: 'application/json',
-          text: JSON.stringify(
-            {
-              currentScene: null,
-              message: 'No active scene',
-              lastUpdated: new Date().toISOString(),
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    if (!(error instanceof Error) || error.message !== 'No active scene') {
+      throw error;
+    }
+    return worldResource(
+      'foundry://scenes/current',
+      {
+        currentScene: null,
+        message: 'No active scene',
+      },
+      foundryClient,
+    );
   }
+  return worldResource('foundry://scenes/current', { currentScene }, foundryClient);
 }
 
 async function getWorldSettingsResource(foundryClient: FoundryClient) {
   const world = await foundryClient.getWorldInfo();
-  return {
-    contents: [
-      {
-        uri: 'foundry://world/settings',
-        mimeType: 'application/json',
-        text: JSON.stringify({ world, lastUpdated: new Date().toISOString() }, null, 2),
-      },
-    ],
-  };
+  return worldResource('foundry://world/settings', { world }, foundryClient);
 }
 
 /**
@@ -188,15 +177,7 @@ async function getWorldSettingsResource(foundryClient: FoundryClient) {
 async function getCombatResource(foundryClient: FoundryClient) {
   const cached = foundryClient.getCombatState();
   const combat = cached ? { ...cached, combatants: getTurnOrder(cached) } : cached;
-  return {
-    contents: [
-      {
-        uri: 'foundry://combat',
-        mimeType: 'application/json',
-        text: JSON.stringify({ combat, lastUpdated: new Date().toISOString() }, null, 2),
-      },
-    ],
-  };
+  return worldResource('foundry://combat', { combat }, foundryClient);
 }
 
 async function getSystemDiagnosticsResource(diagnosticsClient: DiagnosticsClient) {
@@ -208,7 +189,14 @@ async function getSystemDiagnosticsResource(diagnosticsClient: DiagnosticsClient
           uri: 'foundry://system/diagnostics',
           mimeType: 'application/json',
           text: JSON.stringify(
-            { systemHealth: health, lastUpdated: new Date().toISOString() },
+            {
+              systemHealth: health,
+              source: 'rest',
+              freshness: 'current',
+              capturedAt: health.timestamp,
+              observedAt: new Date().toISOString(),
+              respondedAt: new Date().toISOString(),
+            },
             null,
             2,
           ),
@@ -225,7 +213,11 @@ async function getSystemDiagnosticsResource(diagnosticsClient: DiagnosticsClient
           text: JSON.stringify(
             {
               message: 'Diagnostics require REST API module',
-              lastUpdated: new Date().toISOString(),
+              source: 'rest',
+              freshness: 'unavailable',
+              capturedAt: null,
+              observedAt: null,
+              respondedAt: new Date().toISOString(),
             },
             null,
             2,

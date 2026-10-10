@@ -10,40 +10,44 @@ import {
   parseReadInput,
   worldSearchInputSchema,
 } from '../../foundry/read-contract.js';
-import { withToolError } from './utils.js';
+import { withToolError, withWorldRead } from './utils.js';
 
 export async function handleSearchWorld(
   args: { query?: string; limit?: number; cursor?: string },
   foundryClient: FoundryClient,
 ) {
   const params = parseReadInput(worldSearchInputSchema, args);
-  return withToolError('search world', async () => {
-    const page = await foundryClient.searchWorldPage(params);
-    const structuredContent = collectionSearchSchema.parse({
-      schemaVersion: 2,
-      scope: 'world',
-      ...page,
-    });
-    const formatted = structuredContent.records
-      .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
-      .join('\n');
-    return boundedReadResponse({
-      structuredContent,
-      content: [
-        {
-          type: 'text' as const,
-          text: `**World Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
-        },
-      ],
-    });
-  });
+  return withToolError(
+    'search world',
+    async () => {
+      const page = await foundryClient.searchWorldPage(params);
+      const structuredContent = collectionSearchSchema.parse({
+        schemaVersion: 3,
+        scope: 'world',
+        ...page,
+      });
+      const formatted = structuredContent.records
+        .map((record) => `- **${record.name}** (${record.documentType}) — ID: ${record.id}`)
+        .join('\n');
+      return boundedReadResponse({
+        structuredContent,
+        content: [
+          {
+            type: 'text' as const,
+            text: `**World Search** — "${params.query ?? 'All'}"\n\n${formatted || 'No results found.'}\n\n${paginationText(structuredContent)}`,
+          },
+        ],
+      });
+    },
+    foundryClient,
+  );
 }
 
 export async function handleGetWorldSummary(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('get world summary', async () => {
+  return withWorldRead('get world summary', foundryClient, async () => {
     const worldInfo = await foundryClient.getWorldInfo();
     const counts = foundryClient.getWorldSummary();
 
@@ -71,7 +75,7 @@ export async function handleRefreshWorldData(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
 ) {
-  return withToolError('refresh world data', async () => {
+  return withWorldRead('refresh world data', foundryClient, async () => {
     await foundryClient.refreshWorldData();
     const counts = foundryClient.getWorldSummary();
 

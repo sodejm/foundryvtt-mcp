@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
 import type { FoundryWorld } from '../../../foundry/types.js';
 import { handleGetWorldSummary, handleRefreshWorldData, handleSearchWorld } from '../world.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 function getText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -27,7 +27,7 @@ describe('handleSearchWorld', () => {
     } as unknown as FoundryClient);
     expect(searchWorldPage).toHaveBeenCalledWith({ query: 'w' });
     expect(result.structuredContent).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       scope: 'world',
       records,
       returnedCount: 4,
@@ -77,6 +77,7 @@ describe('handleGetWorldSummary', () => {
     };
     const client = {
       getWorldInfo: vi.fn().mockResolvedValue(worldInfo),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({ actors: 12, items: 50 }),
     } as unknown as FoundryClient;
 
@@ -104,6 +105,7 @@ describe('handleGetWorldSummary', () => {
     };
     const client = {
       getWorldInfo: vi.fn().mockResolvedValue(worldInfo),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -116,6 +118,7 @@ describe('handleGetWorldSummary', () => {
   it('wraps getWorldInfo errors in McpError', async () => {
     const client = {
       getWorldInfo: vi.fn().mockRejectedValue(new Error('offline')),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -128,6 +131,7 @@ describe('handleRefreshWorldData', () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const client = {
       refreshWorldData: refresh,
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({ actors: 3, items: 7 }),
     } as unknown as FoundryClient;
 
@@ -143,6 +147,7 @@ describe('handleRefreshWorldData', () => {
   it('wraps refresh errors in McpError', async () => {
     const client = {
       refreshWorldData: vi.fn().mockRejectedValue(new Error('socket lost')),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 
@@ -152,6 +157,7 @@ describe('handleRefreshWorldData', () => {
   it('produces a result even when getWorldSummary returns no entries', async () => {
     const client = {
       refreshWorldData: vi.fn().mockResolvedValue(undefined),
+      getReadMetadata: () => readMetadata(),
       getWorldSummary: vi.fn().mockReturnValue({}),
     } as unknown as FoundryClient;
 

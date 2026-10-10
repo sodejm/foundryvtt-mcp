@@ -1,4 +1,9 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import type { WorldReadMetadata } from './freshness.js';
+
+export class PaginationCursorError extends Error {
+  override readonly name = 'PaginationCursorError';
+}
 
 export interface PaginationParams {
   limit?: number;
@@ -15,6 +20,7 @@ export interface PaginationMetadata {
   snapshotId: string;
   expiresAt: string;
   consistency: 'snapshot';
+  readMetadata: WorldReadMetadata;
 }
 
 export interface CollectionRecord {
@@ -55,6 +61,7 @@ interface Snapshot<T> {
   contextHash: string;
   expiresAt: number;
   bytes: number;
+  readMetadata: WorldReadMetadata;
 }
 
 export interface SnapshotPaginatorOptions {
@@ -122,11 +129,29 @@ export class SnapshotPaginator {
     records: readonly T[] | undefined,
     params: PaginationParams,
     context: unknown,
+    readMetadataOrDefaultLimit?: WorldReadMetadata | number,
     defaultLimit = DEFAULT_PAGE_LIMIT,
   ): PaginationMetadata & { records: T[] } {
     validateBoundedText(params.cursor, 'cursor', MAX_CURSOR_LENGTH);
     const contextHash = this.hashContext(context);
     const now = this.now();
+    const suppliedMetadata =
+      typeof readMetadataOrDefaultLimit === 'object' ? readMetadataOrDefaultLimit : undefined;
+    const effectiveDefaultLimit =
+      typeof readMetadataOrDefaultLimit === 'number' ? readMetadataOrDefaultLimit : defaultLimit;
+    const currentMetadata: WorldReadMetadata = suppliedMetadata
+      ? structuredClone(suppliedMetadata)
+      : {
+          source: 'socket',
+          freshness: 'unavailable',
+          worldId: null,
+          sessionId: 'standalone-paginator',
+          snapshotId: null,
+          revision: 0,
+          capturedAt: null,
+          observedAt: null,
+          respondedAt: new Date(now).toISOString(),
+        };
     this.evictExpired(now);
 
     let snapshot: Snapshot<T>;
@@ -135,20 +160,24 @@ export class SnapshotPaginator {
     if (params.cursor !== undefined) {
       const payload = this.decodeCursor(params.cursor);
       if (payload.expiresAt <= now) {
-        throw new Error('Pagination cursor has expired');
+        throw new PaginationCursorError('Pagination cursor has expired');
       }
       const stored = this.snapshots.get(payload.snapshotId) as Snapshot<T> | undefined;
       if (!stored) {
-        throw new Error('Pagination snapshot is no longer available');
+        throw new PaginationCursorError('Pagination snapshot is no longer available');
       }
       if (stored.expiresAt !== payload.expiresAt) {
-        throw new Error('Pagination cursor does not match its snapshot');
+        throw new PaginationCursorError('Pagination cursor does not match its snapshot');
       }
       if (payload.contextHash !== contextHash || stored.contextHash !== contextHash) {
-        throw new Error('Pagination cursor does not match the current query, world, or caller');
+        throw new PaginationCursorError(
+          'Pagination cursor does not match the current query, world, or caller',
+        );
       }
       if (params.limit !== undefined && params.limit !== stored.limit) {
-        throw new Error('Pagination cursor limit does not match the original request');
+        throw new PaginationCursorError(
+          'Pagination cursor limit does not match the original request',
+        );
       }
       this.validateLimit(stored.limit);
       if (
@@ -156,12 +185,12 @@ export class SnapshotPaginator {
         payload.offset <= 0 ||
         payload.offset >= stored.records.length
       ) {
-        throw new Error('Pagination cursor contains an invalid offset');
+        throw new PaginationCursorError('Pagination cursor contains an invalid offset');
       }
       snapshot = stored;
       offset = payload.offset;
     } else {
-      const limit = params.limit ?? defaultLimit;
+      const limit = params.limit ?? effectiveDefaultLimit;
       this.validateLimit(limit);
       if (!records) {
         throw new Error('Pagination records are required for the first page');
@@ -186,6 +215,7 @@ export class SnapshotPaginator {
         contextHash,
         expiresAt: now + SNAPSHOT_TTL_MS,
         bytes,
+        readMetadata: currentMetadata,
       };
       this.snapshots.set(snapshot.id, snapshot as Snapshot<unknown>);
       this.cachedBytes += bytes;
@@ -204,6 +234,7 @@ export class SnapshotPaginator {
       snapshotId: snapshot.id,
       expiresAt: new Date(snapshot.expiresAt).toISOString(),
       consistency: 'snapshot',
+      readMetadata: this.pageReadMetadata(snapshot.readMetadata, currentMetadata, now),
     };
     const result = { records: pageRecords, ...metadata };
     const resultBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
@@ -211,6 +242,31 @@ export class SnapshotPaginator {
       throw new Error(`Pagination page exceeds the maximum size of ${MAX_PAGE_BYTES} bytes`);
     }
     return result;
+  }
+
+  private pageReadMetadata(
+    snapshot: WorldReadMetadata,
+    current: WorldReadMetadata,
+    now: number,
+  ): WorldReadMetadata {
+    const sessionChanged =
+      snapshot.sessionId !== current.sessionId || snapshot.worldId !== current.worldId;
+    const newerSnapshot =
+      current.revision > snapshot.revision || current.snapshotId !== snapshot.snapshotId;
+    const freshness =
+      snapshot.freshness === 'unavailable'
+        ? 'unavailable'
+        : snapshot.freshness === 'stale' ||
+            current.freshness !== 'current' ||
+            sessionChanged ||
+            newerSnapshot
+          ? 'stale'
+          : 'current';
+    return {
+      ...structuredClone(snapshot),
+      freshness,
+      respondedAt: new Date(now).toISOString(),
+    };
   }
 
   private validateLimit(limit: number): void {
@@ -221,7 +277,10 @@ export class SnapshotPaginator {
 
   private hashContext(context: unknown): string {
     const serialized = typeof context === 'string' ? context : JSON.stringify(context);
-    return createHash('sha256').update(serialized).digest('base64url');
+    return createHmac('sha256', this.secret)
+      .update('foundryvtt-mcp:pagination-context:v1\0')
+      .update(serialized)
+      .digest('base64url');
   }
 
   private encodeCursor(snapshot: Snapshot<unknown>, offset: number): string {
@@ -240,15 +299,15 @@ export class SnapshotPaginator {
   private decodeCursor(cursor: string): CursorPayload {
     const parts = cursor.split('.');
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      throw new Error('Pagination cursor is malformed');
+      throw new PaginationCursorError('Pagination cursor is malformed');
     }
     const expected = createHmac('sha256', this.secret).update(parts[0]).digest();
     if (!/^[A-Za-z0-9_-]+$/.test(parts[1])) {
-      throw new Error('Pagination cursor is malformed');
+      throw new PaginationCursorError('Pagination cursor is malformed');
     }
     const supplied = Buffer.from(parts[1], 'base64url');
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-      throw new Error('Pagination cursor signature is invalid');
+      throw new PaginationCursorError('Pagination cursor signature is invalid');
     }
     try {
       const payload = JSON.parse(
@@ -265,7 +324,7 @@ export class SnapshotPaginator {
       }
       return payload;
     } catch {
-      throw new Error('Pagination cursor payload is invalid');
+      throw new PaginationCursorError('Pagination cursor payload is invalid');
     }
   }
 

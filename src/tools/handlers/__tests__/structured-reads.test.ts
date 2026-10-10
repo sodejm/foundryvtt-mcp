@@ -2,10 +2,11 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
 import { describe, expect, it, vi } from 'vitest';
 import type { FoundryClient } from '../../../foundry/client.js';
+import { normalizeItemEconomy } from '../../../foundry/item-normalization.js';
 import { getAllTools } from '../../definitions.js';
 import { handleGetActorDetails, handleSearchActors } from '../actors.js';
 import { handleGetItemDetails, handleSearchItems } from '../items.js';
-import { paginationMetadata } from './pagination-fixture.js';
+import { paginationMetadata, readMetadata } from './pagination-fixture.js';
 
 const A = 'Actor00000000001';
 const B = 'Actor00000000002';
@@ -24,15 +25,18 @@ const item = {
   name: 'Twin',
   type: 'loot',
   description: '',
-  rarity: '',
-  price: { value: 0, denomination: '' },
+  price: { value: 0, denomination: 'gp' },
+  economy: normalizeItemEconomy(
+    { type: 'loot', system: { price: { value: 0, denomination: 'gp' }, rarities: [] } },
+    { id: 'dnd5e', version: '6.0.6' },
+  ),
   weight: 0,
   quantity: 0,
   equipped: false,
   identified: false,
 };
 function clientStub(data: Record<string, unknown>): FoundryClient {
-  return data as unknown as FoundryClient;
+  return { getReadMetadata: () => readMetadata(), ...data } as unknown as FoundryClient;
 }
 const surfaces = [
   {
@@ -78,7 +82,7 @@ for (const surface of surfaces) {
       });
       const search = await surface.search({}, client);
       expect(search.structuredContent).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: surface.name === 'actor' ? 3 : 4,
         documentType: surface.documentType,
         records: [{ id: surface.sample._id }, { id: surface.second }],
       });
@@ -124,7 +128,7 @@ for (const surface of surfaces) {
       ).toBe(false);
       expect(validate({ ...search.structuredContent, total: -1 })).toBe(false);
       expect(search.content[0]?.text).toContain(
-        surface.name === 'actor' ? 'Level 0 - HP: 0/0' : '(loot) -  - 0 ',
+        surface.name === 'actor' ? 'Level 0 - HP: 0/0' : '(loot) - No rarity - 0 gp',
       );
 
       expect(
@@ -221,6 +225,9 @@ for (const surface of surfaces) {
         documentType: surface.documentType,
         name: '',
         type: '',
+        ...(surface.name === 'item'
+          ? { economy: normalizeItemEconomy({ type: '' }, { id: 'unknown' }) }
+          : {}),
       });
     });
     it.each([
@@ -287,7 +294,13 @@ for (const surface of surfaces) {
       const invalid =
         surface.name === 'actor'
           ? { ...surface.sample, hp: { value: '0', max: 0 } }
-          : { ...surface.sample, price: { value: '0', denomination: '' } };
+          : {
+              ...surface.sample,
+              economy: {
+                ...item.economy,
+                price: { ...item.economy.price, currencies: [{ value: '0', denomination: 'gp' }] },
+              },
+            };
       await expect(
         surface.detail(
           surface.sample._id,
@@ -388,14 +401,14 @@ describe('zero, false and empty display values', () => {
     );
     expect(result.structuredContent.record).toMatchObject({
       description: '',
-      rarity: '',
-      price: { value: 0, denomination: '' },
+      price: { value: 0, denomination: 'gp' },
+      economy: { rarity: { status: 'known', values: [] } },
       weight: 0,
       quantity: 0,
       equipped: false,
       identified: false,
     });
-    expect(result.content[0]?.text).toContain('**Price:** 0 ');
+    expect(result.content[0]?.text).toContain('**Price:** 0 gp');
     expect(result.content[0]?.text).toContain('**Weight:** 0');
     expect(result.content[0]?.text).toContain('**Quantity:** 0');
     expect(result.content[0]?.text).toContain('**Equipped:** false');

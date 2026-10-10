@@ -6,6 +6,39 @@
  */
 
 import {
+  actorItemInputJsonSchema,
+  actorItemListInputJsonSchema,
+  actorItemListOutputJsonSchema,
+  actorItemOutputJsonSchema,
+  actorSectionInputJsonSchema,
+  actorSectionOutputJsonSchema,
+  actorSheetInputJsonSchema,
+  actorSheetOutputJsonSchema,
+} from '../foundry/actor-sheet-contract.js';
+import {
+  capabilitiesInputJsonSchema,
+  capabilitiesOutputSchema,
+  compendiumSearchInputJsonSchema,
+  compendiumSearchOutputSchema,
+} from '../foundry/compendium-contract.js';
+import {
+  errorDiagnosisInputJsonSchema,
+  errorDiagnosisOutputJsonSchema,
+} from '../foundry/diagnosis-contract.js';
+import { diceRollInputJsonSchema, diceRollOutputJsonSchema } from '../foundry/dice-contract.js';
+import {
+  lootGenerationInputJsonSchema,
+  lootGenerationOutputJsonSchema,
+  npcGenerationInputJsonSchema,
+  npcGenerationOutputJsonSchema,
+} from '../foundry/generation-contract.js';
+import {
+  journalPageInputJsonSchema,
+  journalPageOutputSchema,
+  journalSummaryInputJsonSchema,
+  journalSummaryOutputSchema,
+} from '../foundry/journal-contract.js';
+import {
   actorDetailsOutputSchema,
   actorSearchInputJsonSchema,
   actorSearchOutputSchema,
@@ -15,6 +48,16 @@ import {
   itemSearchOutputSchema,
   worldSearchInputJsonSchema,
 } from '../foundry/read-contract.js';
+import { ruleLookupInputJsonSchema, ruleLookupOutputJsonSchema } from '../foundry/rule-contract.js';
+import {
+  sceneSpatialInputJsonSchema,
+  sceneSpatialOutputJsonSchema,
+  sceneTokenInputJsonSchema,
+  sceneTokenListInputJsonSchema,
+  sceneTokenListOutputJsonSchema,
+  sceneTokenOutputJsonSchema,
+} from '../foundry/scene-spatial-contract.js';
+import { delegatedTools } from './authorization.js';
 
 /**
  * Shared write-safety clause appended to every mutation tool description.
@@ -42,29 +85,15 @@ const CONFIRM_FIRST =
  * *listed*, so a divergence would be invisible.
  */
 export const ROLL_DICE_DESCRIPTION =
-  'Roll dice and return the total with a per-term breakdown. Dice terms and whole numbers joined by + or -, with whitespace allowed anywhere ("1d20+5", "1d20 + 5", "1d20+5+3", "2d6 + 1d4", "3d6"; a count-less "d20" means one die), always work and every term counts towards the total - that is the portable grammar, safe on either transport. Multiplication and Foundry modifier syntax such as "4d6kh3" or "1d20r1" are rejected on both transports, with an error naming the offending character and its position, never dropped from the total in silence. Parentheses are the one difference: with FOUNDRY_API_KEY set the formula goes to FoundryVTT\'s own Roll engine, which evaluates them, while the default Socket.IO transport rolls locally and rejects them by name - and a REST roll that cannot reach the server falls back to that same local roller, so a parenthesised formula can still fail there. Prefer the expanded form when it matters. Use when: the user asks for a check, save, attack, damage, or any random result.';
+  'Roll a bounded formula with dice (NdS or dS), whole numbers, +/-, unary signs, parentheses, and kh/kl/dh/dl keep/drop modifiers. Input is limited to 100 characters, 999 dice per term, 1000 dice overall, 1000000 sides, constants through 1000000000, and 10 parenthesis levels. Other modifiers, references, scripting, multiplication, and division are rejected before rolling. Select engine auto (default), local, or foundry. Auto (default) and local always use the local evaluator. Foundry requires complete paired Foundry REST configuration; partial or legacy REST configuration fails for that engine. Foundry rolls once without creating chat; transport or verification failures never retry or fall back. Results include normalizedFormula, engine, ordered active/inactive die outcomes, verified total, breakdown, timestamp, and explicit fallback metadata.';
 
-/**
- * Dice rolling tool definitions
- */
+/** Dice rolling tool definitions. */
 export const diceTools = [
   {
     name: 'roll_dice',
     description: ROLL_DICE_DESCRIPTION,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        formula: {
-          type: 'string',
-          description: 'Dice formula (e.g., "1d20+5", "3d6")',
-        },
-        reason: {
-          type: 'string',
-          description: 'Optional reason for the roll',
-        },
-      },
-      required: ['formula'],
-    },
+    inputSchema: diceRollInputJsonSchema,
+    outputSchema: diceRollOutputJsonSchema,
   },
 ];
 
@@ -76,14 +105,14 @@ export const actorTools = [
     name: 'search_actors',
     outputSchema: actorSearchOutputSchema,
     description:
-      'Search world actors by name and type. Returns version 2 structuredContent with stable IDs, mapped stats and bounded snapshot pagination. Follow nextCursor with the same query/type/limit until complete. Default limit 10; maximum 100. Snapshots expire after five minutes; start a new search after expiry. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_actor_details. Missing stats are omitted; zero is preserved.',
+      'Search world actors by name and type. Returns version 3 structuredContent with stable IDs, mapped stats, bounded snapshot pagination and readMetadata freshness/source timestamps. Follow nextCursor with the same query/type/limit until complete. Default limit 10; maximum 100. Snapshots expire after five minutes; start a new search after expiry. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_actor_details. Missing stats are omitted; zero is preserved.',
     inputSchema: actorSearchInputJsonSchema,
   },
   {
     name: 'get_actor_details',
     outputSchema: actorDetailsOutputSchema,
     description:
-      'Read one world actor by its 16-character alphanumeric actorId from search_actors. Returns version 1 structuredContent and text with ID, type and available level, HP, AC, ability scores and biography. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified. Use for a read-before-write step; actor-owned items and full sheets are outside this read.',
+      'Read one world actor by its 16-character alphanumeric actorId from search_actors. Returns version 2 structuredContent and text with ID, type and available level, HP, AC, ability scores and biography. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps. Use for a read-before-write step; actor-owned items and full sheets are outside this read.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -95,6 +124,34 @@ export const actorTools = [
       },
       required: ['actorId'],
     },
+  },
+  {
+    name: 'get_actor_sheet',
+    outputSchema: actorSheetOutputJsonSchema,
+    description:
+      'Read a bounded version 1 actor-sheet index for a 16-character actorId. Returns public actor and system identity, supported section names with field counts, owned-item count and read metadata. Follow with get_actor_section or list_actor_items. The REST backend rejects this read when it cannot prove field permissions.',
+    inputSchema: actorSheetInputJsonSchema,
+  },
+  {
+    name: 'get_actor_section',
+    outputSchema: actorSectionOutputJsonSchema,
+    description:
+      'Read one bounded version 1 actor-sheet section. Normalized profile fields use stable keys; conservative fallback fields are labeled system-path. Missing fields remain present=false and numeric zero values remain zero. Supported sections are attributes, abilities, skills, details, currency, resources and system.',
+    inputSchema: actorSectionInputJsonSchema,
+  },
+  {
+    name: 'list_actor_items',
+    outputSchema: actorItemListOutputJsonSchema,
+    description:
+      'List version 2 permission-projected items embedded in one actor with bounded snapshot pagination and typed item economy. Sorts by name then item ID, preserves duplicate names, and returns parent-bound Actor.<actorId>.Item.<itemId> UUIDs. Economy reports exact system adapter, bounded source candidates, price currencies/quantity and rarity statuses without guessed defaults. Follow nextCursor with the same actorId, query, type and limit. Any visible inventory or permission change invalidates the cursor.',
+    inputSchema: actorItemListInputJsonSchema,
+  },
+  {
+    name: 'get_actor_item',
+    outputSchema: actorItemOutputJsonSchema,
+    description:
+      'Read one version 2 permission-projected item embedded in the specified actor. Both IDs must be 16 alphanumeric characters. The item is resolved only within its parent actor and returns typed item economy plus bounded normalized or system-path primitive fields; missing, denied, deleted and wrong-parent targets share an unavailable error. Economy preserves zero and distinguishes missing, invalid, not-applicable and unsupported values.',
+    inputSchema: actorItemInputJsonSchema,
   },
 ];
 
@@ -140,14 +197,14 @@ export const itemTools = [
     name: 'search_items',
     outputSchema: itemSearchOutputSchema,
     description:
-      'Search world items by name, type and rarity. Returns version 2 structuredContent with stable IDs, mapped fields and bounded snapshot pagination. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
+      'Search world items by name, type and canonical rarity, applying all filters before pagination on both transports. Returns version 4 structuredContent with stable IDs, typed item economy, bounded snapshot pagination and readMetadata freshness/source timestamps. Economy includes exact system adapter, bounded source candidates and explicit price/rarity statuses. Unsupported system/version or invalid rarity filters fail with InvalidParams. Follow nextCursor with the same filters/limit until complete. Default limit 10; maximum 100; snapshots expire after five minutes. Socket reads require a GM; REST uses the authenticated backend view. Pass an ID to get_item_details. Excludes embedded and compendium items; zero and false are preserved.',
     inputSchema: itemSearchInputJsonSchema,
   },
   {
     name: 'get_item_details',
     outputSchema: itemDetailsOutputSchema,
     description:
-      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 1 structuredContent and text with identity and available description, rarity, price, weight, quantity, equipped and identified values. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified.',
+      'Read one world item by its 16-character alphanumeric itemId from search_items using the same backend/cache view. Returns version 3 structuredContent and text with identity, typed item economy and available description, weight, quantity, equipped and identified values. Economy preserves zero, separates bounded source candidates from normalized currencies and rarities, and distinguishes missing, invalid, not-applicable and unsupported values. Legacy price/rarity aliases appear only for an unambiguous known value. Excludes actor-owned and compendium items. Invalid IDs fail with InvalidParams before lookup; missing, removed, unavailable or malformed records fail with InternalError. Returned identity is verified; readMetadata labels current or retained stale data with source timestamps.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -169,53 +226,16 @@ export const compendiumTools = [
   {
     name: 'search_compendium',
     description:
-      'Search FoundryVTT compendium packs by name and metadata; searches all enabled packs unless compendiumId scopes it to one pack. Use when: looking up spells, monsters, or equipment that are not yet present in the world. Do not use when: the document already exists in the world - use search_items or search_world. Requires the REST API module (FOUNDRY_API_KEY); without it the search returns no results instead of failing.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for compendium entry names',
-        },
-        filters: {
-          type: 'object',
-          description: 'Optional metadata filters to narrow the search',
-          properties: {
-            compendiumId: {
-              type: 'string',
-              description: 'Scope the search to a single compendium pack',
-            },
-            packType: {
-              type: 'string',
-              description: 'Pack document type (Item, Actor, JournalEntry, Macro)',
-            },
-            itemType: {
-              type: 'string',
-              description: 'Item type filter (spell, weapon, feat, etc.)',
-            },
-            spellLevel: {
-              type: 'number',
-              description: 'Spell level filter',
-            },
-            source: {
-              type: 'string',
-              description: 'Source/rules filter (e.g. a sourcebook abbreviation)',
-            },
-          },
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results per page',
-          default: 20,
-        },
-        cursor: {
-          type: 'string',
-          description:
-            'Opaque pagination cursor from a prior result\'s "Next page" cursor; omit for the first page',
-        },
-      },
-      required: ['query'],
-    },
+      'Search compendium names and metadata through an optional authenticated Foundry REST relay. Returns verified capability status; unavailable results are null, while a verified zero-match search returns an empty array. Filters and cursors bind to an immutable snapshot. Requires FOUNDRY_REST_URL, FOUNDRY_REST_CLIENT_ID, and FOUNDRY_REST_API_KEY alongside the core Foundry connection.',
+    inputSchema: compendiumSearchInputJsonSchema,
+    outputSchema: compendiumSearchOutputSchema,
+  },
+  {
+    name: 'get_capabilities',
+    description:
+      'Actively verify optional Foundry integrations and return versioned, redacted status and remediation. Reports Foundry-backed rules, diagnostics, and content generation as unavailable until implemented and verified.',
+    inputSchema: capabilitiesInputJsonSchema,
+    outputSchema: capabilitiesOutputSchema,
   },
 ];
 
@@ -336,6 +356,27 @@ export const sceneTools = [
       },
     },
   },
+  {
+    name: 'get_scene_spatial',
+    description:
+      'Return bounded, versioned spatial metadata for an observable scene, including native canvas dimensions and origin, grid orientation and size, source pixel dimensions, padding, shifts, and explicit units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneSpatialInputJsonSchema,
+    outputSchema: sceneSpatialOutputJsonSchema,
+  },
+  {
+    name: 'list_scene_tokens',
+    description:
+      'List observable token summaries for an observable scene with stable snapshot pagination. Coordinates are canvas pixels, token width and height are grid spaces, rotation is degrees, and elevation uses scene distance units. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenListInputJsonSchema,
+    outputSchema: sceneTokenListOutputJsonSchema,
+  },
+  {
+    name: 'get_scene_token',
+    description:
+      'Return one observable token detail by tokenId within an observable scene, including texture scaling when available. Actor references are included only when the caller can observe the effective linked or synthetic actor. Omitting sceneId selects the currently active observable scene.',
+    inputSchema: sceneTokenInputJsonSchema,
+    outputSchema: sceneTokenOutputJsonSchema,
+  },
 ];
 
 /**
@@ -345,67 +386,23 @@ export const generationTools = [
   {
     name: 'generate_npc',
     description:
-      'Generate a random NPC (name, race, class, HP, ability scores, background) as text. Use when: the user needs a throwaway NPC on the spot. Do not use when: the NPC must exist in FoundryVTT - this creates no documents, and the result still has to be entered into the world by hand.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        level: {
-          type: 'number',
-          description: 'Character level (1-20)',
-          minimum: 1,
-          maximum: 20,
-          default: 1,
-        },
-        race: {
-          type: 'string',
-          description: 'Character race (optional)',
-        },
-        class: {
-          type: 'string',
-          description: 'Character class (optional)',
-        },
-      },
-    },
+      'Create a bounded, system-neutral NPC creative preview. Every option affects the preview; no Foundry document is created and no game-system rules are claimed.',
+    inputSchema: npcGenerationInputJsonSchema,
+    outputSchema: npcGenerationOutputJsonSchema,
   },
   {
     name: 'generate_loot',
     description:
-      "Generate random treasure for an encounter as text. Only the currency amounts vary: they scale with the challenge rating, while the item list is fixed (a Healing Potion and a Silver Ring) and the treasureType argument is accepted but not used. Use when: the user wants a quick coin total for an encounter. Do not use when: the loot should end up in an actor's inventory - this creates no documents; use create_actor_item for that.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        challengeRating: {
-          type: 'number',
-          description: 'Challenge rating for loot generation',
-          minimum: 0,
-          maximum: 30,
-        },
-        treasureType: {
-          type: 'string',
-          description:
-            'Type of treasure (hoard, individual, etc.). Accepted but not used - the generated result is the same whichever value is passed.',
-        },
-      },
-    },
+      'Create bounded fictional loot as a world-independent creative preview. Returns traceable fictional currency arithmetic and explicitly unknown item and overall values; no Foundry document is created.',
+    inputSchema: lootGenerationInputJsonSchema,
+    outputSchema: lootGenerationOutputJsonSchema,
   },
   {
     name: 'lookup_rule',
     description:
-      'Stub: builds a templated placeholder from the query and consults no rules source, so the text it returns carries no rules content. No tool in this server looks rules up.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Rule or mechanic to look up',
-        },
-        system: {
-          type: 'string',
-          description: 'Game system (D&D 5e, Pathfinder, etc.)',
-        },
-      },
-      required: ['query'],
-    },
+      'Validate a bounded rules query and report that rules lookup is unavailable because no verified rules provider is implemented. Returns no generated rule text or source claims.',
+    inputSchema: ruleLookupInputJsonSchema,
+    outputSchema: ruleLookupOutputJsonSchema,
   },
 ];
 
@@ -477,21 +474,14 @@ export const diagnosticsTools = [
   {
     name: 'diagnose_errors',
     description:
-      'Stub: returns a fixed "no errors detected" summary regardless of input; real diagnostic logic is not implemented, so the summary reflects nothing about the server. For actual log content use get_recent_logs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        category: {
-          type: 'string',
-          description: 'Error category to focus on',
-        },
-      },
-    },
+      'Report that evidence-based error diagnosis is unavailable because no verified diagnostic source is implemented. Returns a versioned unavailable capability without probing logs or Foundry, inferring health, or echoing the optional category. Use get_recent_logs for actual log content.',
+    inputSchema: errorDiagnosisInputJsonSchema,
+    outputSchema: errorDiagnosisOutputJsonSchema,
   },
   {
     name: 'get_health_status',
     description:
-      "Get a combined health report: MCP-to-FoundryVTT connection state, world title/system/core version, and the server's health status with its active/total user counts, uptime, heap memory and recent error/warning counts. The world section is prefixed with a stale marker when the cached snapshot stopped following live document changes - typically a dropped connection, whose missed updates are never replayed - and refresh_world_data resyncs it. The connection line is a live read of the socket on the default Socket.IO transport, so it follows a link that drops or comes back in both directions; with FOUNDRY_API_KEY set there is no socket and it reports the outcome of the last REST request instead, not a live probe, so a server that went away between requests still reads as connected until the next request fails. Uptime and memory are omitted when the server does not report them; CPU, disk and playtime are not reported at all. Degrades gracefully - sections that need the REST API module (FOUNDRY_API_KEY) report as unavailable rather than failing. Use when: first checking which world is loaded and whether the server reports itself healthy.",
+      "Get a combined health report: MCP-to-FoundryVTT connection state, world title/system/core version, and the server's health status with its active/total user counts, uptime, heap memory and recent error/warning counts. The world section reports current, stale, or unavailable data with source, world/session identity, snapshot revision, capture/observation times, and response time. Retained data stays stale during bounded automatic recovery after reconnect; refresh_world_data retries recovery manually. REST diagnostics are reported separately from socket snapshot freshness. The connection line is a live read of the socket on the default Socket.IO transport, so it follows a link that drops or comes back in both directions; with FOUNDRY_API_KEY set there is no socket and it reports the outcome of the last REST request instead, not a live probe, so a server that went away between requests still reads as connected until the next request fails. Uptime and memory are omitted when the server does not report them; CPU, disk and playtime are not reported at all. Degrades gracefully - sections that need the REST API module (FOUNDRY_API_KEY) report as unavailable rather than failing. Use when: first checking which world is loaded and whether the server reports itself healthy.",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -695,7 +685,7 @@ export const userTools = [
   {
     name: 'get_users',
     description:
-      "List the world's users with their roles and online status. Online status is live while the Socket.IO connection is up: FoundryVTT's userActivity broadcasts are applied to the cached presence list as users connect and disconnect. It stops tracking if that connection drops and the missed changes are not replayed - get_health_status shows the snapshot as stale, and refresh_world_data resyncs it. Use when: you need to know which user holds the GM role, or who is connected right now.",
+      "List the world's users with their roles and online status. Online status is live while the Socket.IO connection is up: FoundryVTT's userActivity broadcasts are applied to the cached presence list as users connect and disconnect. If the connection drops, retained presence is marked stale until automatic reconnect recovery or refresh_world_data validates a new snapshot. The response includes freshness and source timestamps; unavailable snapshots fail explicitly. Use when: you need to know which user holds the GM role, or who is connected right now.",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -711,23 +701,22 @@ export const journalTools = [
     name: 'search_journals',
     outputSchema: collectionSearchOutputSchema,
     description:
-      'Search journal names and page content. Returns version 2 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page text.',
+      'Search journal names and page content. Returns version 3 metadata records with stable IDs and bounded snapshot pagination, without page bodies. Omit query to enumerate. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported. Use get_journal for page IDs and previews, then get_journal_page for complete text or stored source.',
     inputSchema: worldSearchInputJsonSchema,
   },
   {
     name: 'get_journal',
+    outputSchema: journalSummaryOutputSchema,
     description:
-      'Get one journal entry by id with the text of its pages. Page bodies are HTML-stripped and each is truncated to its first 500 characters, marked with a trailing "...", so long pages come back partial. Use when: you have a journalId and need the text of its pages. Do not use when: you only have a title or keyword - run search_journals first.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        journalId: {
-          type: 'string',
-          description: 'The ID of the journal entry to retrieve',
-        },
-      },
-      required: ['journalId'],
-    },
+      'Read a bounded page list for one journalId from search_journals. Version 3 returns stable page IDs/UUIDs, type/order/source format and previews of at most 500 Unicode code points with contentTruncated. Default limit 4; maximum 8. Follow nextCursor with the same journalId/limit until complete. Use get_journal_page for complete content. Cursors expire after five minutes and are invalidated by visible content, order, ownership or session changes. Invalid inputs and missing/denied journals return InvalidParams; capacity failures return InternalError. Requires an authenticated Socket.IO GM; REST is unsupported.',
+    inputSchema: journalSummaryInputJsonSchema,
+  },
+  {
+    name: 'get_journal_page',
+    outputSchema: journalPageOutputSchema,
+    description:
+      'Retrieve complete journal-page content by journalId and pageId from get_journal. Version 1 returns page metadata and ordered chunks of at most 1024 Unicode code points, with exact start/end offsets and contentLength. The numeric response page is paginationPage; page holds document metadata. Default format text parses HTML inertly with structural newlines and leaves Markdown intact; format source returns the exact stored text string. Default limit 4; maximum 8 chunks. Concatenate chunks in order and follow nextCursor with identical IDs/format/limit until complete. contentTruncated reports remaining chunks. Empty text has one empty chunk; non-text pages have metadata and safe asset fields with zero chunks. Source is limited to 4 MiB; responses to 128 KiB. Cursors expire after five minutes and edits, ownership or session changes invalidate them. Invalid input, missing/denied pages and invalid cursors return InvalidParams. Requires an authenticated Socket.IO GM; REST is unsupported.',
+    inputSchema: journalPageInputJsonSchema,
   },
 ];
 
@@ -790,7 +779,7 @@ export const worldTools = [
     name: 'search_world',
     outputSchema: collectionSearchOutputSchema,
     description:
-      'Search actor, item, scene and journal names in one ordered stream. Returns version 2 metadata records with stable IDs and bounded snapshot pagination. Omit query to enumerate; limit applies to the whole page. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported.',
+      'Search actor, item, scene and journal names in one ordered stream. Returns version 3 metadata records with stable IDs, bounded snapshot pagination and readMetadata freshness/source timestamps. Omit query to enumerate; limit applies to the whole page. Follow nextCursor with the same query/limit until complete; default limit 10, maximum 100, expiry five minutes. Requires an authenticated Socket.IO GM; REST is unsupported.',
     inputSchema: worldSearchInputJsonSchema,
   },
   {
@@ -805,7 +794,7 @@ export const worldTools = [
   {
     name: 'refresh_world_data',
     description:
-      'Force a re-fetch of the cached world data from the FoundryVTT server. Reads are normally served from a cache that follows live document changes for as long as the connection holds, so this is rarely needed. Use when: the connection dropped and came back - the cache stopped following changes while it was down and nothing replays them, so it stays a point-in-time copy until this runs, and get_health_status flags it as stale until then; or a read still looks stale after an out-of-band change - notably edits to unlinked (synthetic) token actors, which the live update feed does not cover. Refreshes the cache only; it does not modify the world.',
+      'Force a re-fetch of the cached world data from the FoundryVTT server. Reads are normally served from a cache that follows live document changes for as long as the connection holds, so this is rarely needed. Use when: the connection dropped and came back - automatic reconnect recovery has not yet restored a current snapshot; or a read still looks stale after an out-of-band change - notably edits to unlinked (synthetic) token actors, which the live update feed does not cover. Refreshes the cache only; it does not modify the world.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -816,8 +805,8 @@ export const worldTools = [
 /**
  * Get all tool definitions combined
  */
-export function getAllTools() {
-  return [
+export function getAllTools(delegated = false) {
+  const tools = [
     ...diceTools,
     ...actorTools,
     ...actorMutationTools,
@@ -836,6 +825,29 @@ export function getAllTools() {
     ...generationTools,
     ...diagnosticsTools,
   ];
+  if (!delegated) {
+    return tools;
+  }
+  const descriptions: Record<string, string> = {
+    get_users:
+      "Read the caller's own user record and current presence. Other users and credential fields are omitted.",
+    search_journals:
+      'Search readable journal names and readable page content. Returns version 3 metadata records without page bodies. Journal and page permissions are both required. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
+    get_journal:
+      'Read caller-readable pages of one journal with version 3 IDs/UUIDs, types, order, source format and 500-Unicode-code-point previews with contentTruncated. Journal and page permissions are both required. Follow nextCursor with the same journalId/limit; default limit 4, maximum 8, expiry five minutes. Use get_journal_page for complete content. Visible edits and authorization/session changes invalidate cursors.',
+    get_journal_page:
+      'Read complete caller-readable page content with version 1 page metadata, 1024-Unicode-code-point chunks, exact offsets, contentLength and continuation. Journal and page permissions are both required. Format text parses HTML inertly and preserves Markdown; source returns exact stored text. Follow nextCursor with identical journalId/pageId/format/limit; default limit 4, maximum 8, expiry five minutes. page holds document metadata; paginationPage is the numeric pagination position. Missing and denied pages have the same error. Visible edits and authorization/session changes invalidate cursors.',
+    search_world:
+      'Search caller-readable actors, items and journals in one ordered stream. Returns version 3 metadata records with bounded snapshot pagination. Scenes are unavailable. Follow nextCursor with the same query and limit; default limit 10, maximum 100, expiry five minutes.',
+    get_world_summary:
+      "Read world metadata and counts of caller-readable actors, items, journals, chat messages and the caller's own user record. Unsupported collections are omitted.",
+  };
+  return tools
+    .filter((tool) => Object.hasOwn(delegatedTools, tool.name))
+    .map((tool) => ({
+      ...tool,
+      description: `${descriptions[tool.name] ?? tool.description.replace('Socket reads require a GM; REST uses the authenticated backend view.', 'Service mode uses the backend identity.')} DELEGATED: requires a trusted caller resolver and fresh authorization; results and pagination include only caller-readable records. Unsupported surfaces and writes are unavailable.`,
+    }));
 }
 
 /**

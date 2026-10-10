@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add bounded journal summaries with stable page IDs/UUIDs and explicit preview
+  truncation, plus complete `get_journal_page` text/source retrieval. Preserve
+  Unicode and HTML structure, describe non-text pages, and invalidate cursors
+  when visible journal content or permissions change. Both tools advertise
+  validated structured output and support delegated parent/page visibility.
+
 ## [1.5.3](https://github.com/laurigates/foundryvtt-mcp/compare/foundryvtt-mcp-v1.5.2...foundryvtt-mcp-v1.5.3) (2026-09-04)
 
 
