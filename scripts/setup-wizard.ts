@@ -208,7 +208,7 @@ class SetupWizard {
         validateStatus: () => true // Accept any status code
       });
       
-      if (response.status === 200 || response.status === 401) {
+      if (response.status === 200 || response.status === 401 || (response.status >= 300 && response.status < 400)) {
         console.log('✅ FoundryVTT server is reachable\n');
         return true;
       } else {
@@ -431,7 +431,7 @@ class SetupWizard {
         timeout: 2000,
         validateStatus: () => true 
       });
-      return response.status === 200 || response.status === 401;
+      return response.status === 200 || response.status === 401 || (response.status >= 300 && response.status < 400);
     } catch {
       return false;
     }

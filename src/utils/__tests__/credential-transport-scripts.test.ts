@@ -70,6 +70,27 @@ describe('setup transport boundary', () => {
     );
     expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
   });
+  it.each([
+    301, 302, 307, 308,
+  ])('accepts a %s connectivity response without following it', async (status) => {
+    vi.mocked(axios.get).mockResolvedValue({ status, data: {} });
+    const url = 'https://foundry.example';
+    const instance = wizard(url);
+    expect(await call(instance, 'testConnectivity')).toBe(true);
+    expect(await call(instance, 'testUrl', url)).toBe(true);
+    expect(axios.get).toHaveBeenCalledTimes(2);
+    for (const [, options] of vi.mocked(axios.get).mock.calls) {
+      expect(options?.maxRedirects).toBe(0);
+      expect(options?.headers).toBeUndefined();
+    }
+  });
+  it.each([404, 500])('rejects an unexpected %s connectivity response', async (status) => {
+    vi.mocked(axios.get).mockResolvedValue({ status, data: {} });
+    const url = 'https://foundry.example';
+    const instance = wizard(url);
+    expect(await call(instance, 'testConnectivity')).toBe(false);
+    expect(await call(instance, 'testUrl', url)).toBe(false);
+  });
 });
 
 describe('diagnostic transport boundary', () => {
