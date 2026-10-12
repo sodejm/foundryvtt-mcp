@@ -131,7 +131,8 @@ export class SnapshotPaginator {
     snapshotId: string,
     validate?: () => Promise<void>,
     requireValidation = false,
-  ): Promise<void> {
+    validatedReadMetadata?: () => WorldReadMetadata,
+  ): Promise<WorldReadMetadata | undefined> {
     const snapshot = this.snapshots.get(snapshotId);
     if (!snapshot) {
       throw new PaginationCursorError('Pagination snapshot is no longer available');
@@ -151,6 +152,12 @@ export class SnapshotPaginator {
           'Pagination snapshot expired or was invalidated during validation',
         );
       }
+      if (snapshot.validate && validatedReadMetadata) {
+        // The backend has confirmed this frozen snapshot is still authorized and current.
+        snapshot.readMetadata = structuredClone(validatedReadMetadata());
+        return structuredClone(snapshot.readMetadata);
+      }
+      return undefined;
     } catch (error) {
       if (this.snapshots.get(snapshotId) === snapshot) {
         this.snapshots.delete(snapshotId);

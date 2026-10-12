@@ -61,10 +61,13 @@ async function session(role) {
 function record(name) { passed.push(name); console.log(`PASS ${name}`); }
 async function traverse(client, name, args) {
   const first = await client.tool(name, args);
+  assert.equal(first.readMetadata.freshness, 'current', 'Validated first page must be current');
   const records = [...first.records];
   let page = first;
   while (page.nextCursor) {
     const next = await client.tool(name, { ...args, cursor: page.nextCursor });
+    assert.equal(next.readMetadata.freshness, 'current', 'Validated continuation must be current');
+    assert.ok(next.readMetadata.revision > page.readMetadata.revision, 'Validation must refresh revision');
     assert.equal(next.snapshotId, first.snapshotId);
     assert.equal(next.total, first.total);
     assert.equal(next.page, page.page + 1);
@@ -101,9 +104,12 @@ try {
       }
       for (const collection of ['actors', 'items']) {
         let page = await client.resource(`foundry://${collection}?limit=10`);
+        assert.equal(page.readMetadata.freshness, 'current');
         const total = page.total; const resourceIds = page.records.map(value => value.id);
         while (page.nextUri) {
           const next = await client.resource(page.nextUri);
+          assert.equal(next.readMetadata.freshness, 'current');
+          assert.ok(next.readMetadata.revision > page.readMetadata.revision);
           assert.equal(next.snapshotId, page.snapshotId); assert.equal(next.total, total);
           resourceIds.push(...next.records.map(value => value.id)); page = next;
         }
@@ -116,7 +122,7 @@ try {
       await client.error('search_items', { query: 'different', limit: 10, cursor: items.first.nextCursor });
       await client.error('search_items', { query: 'MCP Snapshot Paging', limit: 100 });
       await client.error('search_items', { limit: 101 });
-      record(`${role}: tools, schemas, details, resources, authorized totals and 251 duplicate names`);
+      record(`${role}: tools, schemas, details, resources, current page freshness, authorized totals and 251 duplicate names`);
     } finally { await client.close(); }
   }
   const client = await session('player');

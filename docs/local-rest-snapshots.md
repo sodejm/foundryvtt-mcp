@@ -34,6 +34,8 @@ type, then case-sensitive ID. Snapshots bind the key, user, world, collection,
 filters, and page size. Serialized records are frozen; document, permission,
 world and reconnect hooks explicitly invalidate them. MCP revalidates the
 backend snapshot before returning cached continuations, including resource pages.
+Successful validation refreshes both the returned page's read metadata and the
+cached snapshot's revision, keeping later authorized pages current.
 
 Expiry is five minutes. Limits are 10,000 records per snapshot, 8 MiB shared
 serialized data, 32 active snapshots, and bounded invalidation tombstones.
@@ -95,7 +97,8 @@ or reset that test server when no longer needed.
   spoofed identity, missing scope/binding, invalid paging, CRUD, permission
   revocation and reconnects.
 - [MCP REST results](evidence/rest-snapshots/mcp-rest-results.json): all four
-  roles, tools and resources, duplicate-name traversal, schema/payload checks,
+  roles, tools and resources, current freshness on every page, duplicate-name
+  traversal, schema/payload checks,
   CRUD and permission invalidation, reconnects, and exact 0/1/100/101/251 counts.
 - [Bounds results](evidence/rest-snapshots/snapshot-bounds-results.json): 10,001
   records, oversized serialized data, and aggregate cache exhaustion all fail
@@ -104,7 +107,7 @@ or reset that test server when no longer needed.
   the backend returns `SNAPSHOT_EXPIRED`.
 
 Local Socket integration also passed 41 cases in two files against this install.
-The MCP suite passed 1,819 tests in 67 files with no skips and 100% coverage for
+The MCP suite passed 1,823 tests in 67 files with no skips and 100% coverage for
 the six required read modules; workflow tests passed 791 cases in seven files.
 Build, lint, documentation, startup/dotenv/package smoke checks, dependency audit,
 secret scan, Semgrep scan/rule tests and workflow policy checks passed. The module

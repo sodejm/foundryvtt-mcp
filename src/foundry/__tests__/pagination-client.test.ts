@@ -431,6 +431,36 @@ describe('REST snapshot pagination', () => {
       expect(get.mock.calls[1][1].params.snapshotId).toBe('immutable');
     });
     for (const surface of ['search', 'resource'] as const) {
+      it(`keeps successfully revalidated ${collection} ${surface} pages current`, async () => {
+        const data = {
+          [collection]: [record(1), record(2), record(3)],
+          total: 3,
+          page: 1,
+          limit: 100,
+          snapshotId: 'immutable',
+        };
+        const client = restClient();
+        Reflect.set(client, '_isConnected', true);
+        const http = vi.mocked(axios.create).mock.results.at(-1)?.value;
+        const observeResponse = vi.mocked(http.interceptors.response.use).mock.calls[0][0];
+        get.mockImplementation(async () => observeResponse({ data }));
+        const read = (cursor?: string) =>
+          surface === 'resource'
+            ? client.getCollectionPage(collection, { limit: 1, cursor })
+            : collection === 'actors'
+              ? client.searchActors({ limit: 1, query: 'Record', cursor })
+              : client.searchItems({ limit: 1, query: 'Record', cursor });
+        const first = await read();
+        const second = await read(requireCursor(first.nextCursor));
+        const third = await read(requireCursor(second.nextCursor));
+        for (const [index, page] of [first, second, third].entries()) {
+          expect(page.readMetadata.freshness).toBe('current');
+          expect(page.readMetadata.revision).toBe(index + 2);
+          expect(page.snapshotId).toBe(first.snapshotId);
+        }
+        expect(third.nextCursor).toBeNull();
+        expect(get).toHaveBeenCalledTimes(4);
+      });
       it(`rechecks ${collection} ${surface} cursors and erases revoked snapshots`, async () => {
         const data = {
           [collection]: [record(1), record(2)],

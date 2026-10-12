@@ -1946,11 +1946,13 @@ export class FoundryClient {
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     if (this.config.apiKey) {
-      await this.paginator.validateSnapshot(
-        page.snapshotId,
-        validate,
-        page.nextCursor !== null || params.cursor !== undefined,
-      );
+      page.readMetadata =
+        (await this.paginator.validateSnapshot(
+          page.snapshotId,
+          validate,
+          page.nextCursor !== null || params.cursor !== undefined,
+          () => this.getReadMetadata(),
+        )) ?? page.readMetadata;
     }
     const { records: actors, ...metadata } = page;
     return { actors, ...metadata };
@@ -2242,11 +2244,13 @@ export class FoundryClient {
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     if (this.config.apiKey) {
-      await this.paginator.validateSnapshot(
-        page.snapshotId,
-        validate,
-        page.nextCursor !== null || params.cursor !== undefined,
-      );
+      page.readMetadata =
+        (await this.paginator.validateSnapshot(
+          page.snapshotId,
+          validate,
+          page.nextCursor !== null || params.cursor !== undefined,
+          () => this.getReadMetadata(),
+        )) ?? page.readMetadata;
     }
     const { records: items, ...metadata } = page;
     return { items, ...metadata };
@@ -3462,11 +3466,13 @@ export class FoundryClient {
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
     if (this.config.apiKey) {
-      await this.paginator.validateSnapshot(
-        page.snapshotId,
-        validate,
-        page.nextCursor !== null || params.cursor !== undefined,
-      );
+      page.readMetadata =
+        (await this.paginator.validateSnapshot(
+          page.snapshotId,
+          validate,
+          page.nextCursor !== null || params.cursor !== undefined,
+          () => this.getReadMetadata(),
+        )) ?? page.readMetadata;
     }
     return page;
   }
