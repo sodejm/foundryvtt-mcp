@@ -114,7 +114,7 @@ jobs:
         run: |
           export FOUNDRY_REST_TEST_FIXTURES="$RUNNER_TEMP/foundry-rest-fixtures.json"
           trap 'rm -f -- "$FOUNDRY_REST_TEST_FIXTURES"' EXIT
-          bun -e 'import { writeFileSync } from "node:fs"; try { JSON.parse(process.env.FOUNDRY_REST_TEST_FIXTURES_JSON); } catch { console.error("Invalid scoped-key fixture JSON."); process.exit(1); } writeFileSync(process.env.FOUNDRY_REST_TEST_FIXTURES, process.env.FOUNDRY_REST_TEST_FIXTURES_JSON, { mode: 0o600 });'
+          bun -e 'import { writeFileSync } from "node:fs"; let fixtures; try { fixtures = JSON.parse(process.env.FOUNDRY_REST_TEST_FIXTURES_JSON); } catch { console.error("Invalid scoped-key fixture JSON."); process.exit(1); } function mask(value) { if (typeof value === "string" && value) { console.log("::add-mask::" + value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")); } else if (value && typeof value === "object") { for (const child of Object.values(value)) mask(child); } } mask(fixtures); writeFileSync(process.env.FOUNDRY_REST_TEST_FIXTURES, process.env.FOUNDRY_REST_TEST_FIXTURES_JSON, { mode: 0o600 });'
           unset FOUNDRY_REST_TEST_FIXTURES_JSON
           bun run test:integration
       - name: Remove scoped-key fixtures

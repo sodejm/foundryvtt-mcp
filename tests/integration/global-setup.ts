@@ -15,7 +15,7 @@ async function waitForContainer(): Promise<void> {
     try {
       const res = await fetch(joinUrl);
       if (res.ok || res.status === 200 || res.status === 302) {
-        console.log(`FoundryVTT ready at ${FOUNDRY_URL} (${Date.now() - start}ms)`);
+        console.log(`FoundryVTT ready (${Date.now() - start}ms)`);
         return;
       }
     } catch {
@@ -24,10 +24,10 @@ async function waitForContainer(): Promise<void> {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
 
-  throw new Error(`FoundryVTT did not become ready at ${FOUNDRY_URL} within ${MAX_WAIT_MS}ms`);
+  throw new Error(`FoundryVTT did not become ready within ${MAX_WAIT_MS}ms`);
 }
 
 export async function setup(): Promise<void> {
-  console.log(`Waiting for FoundryVTT at ${FOUNDRY_URL}...`);
+  console.log('Waiting for FoundryVTT...');
   await waitForContainer();
 }

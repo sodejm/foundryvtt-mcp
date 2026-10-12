@@ -79,7 +79,7 @@ describe('live truthful rule lookup through built MCP stdio', () => {
       expect(ajv.validate(schema!, result.structuredContent), JSON.stringify(ajv.errors)).toBe(true);
     }
     const text = result.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
-    expect(JSON.stringify(result)).not.toContain(fixture.apiKey);
+    expect(JSON.stringify(result).includes(fixture.apiKey)).toBe(false);
     return { result, text };
   }
   async function rule(args: Record<string, unknown>, client = socket) {
