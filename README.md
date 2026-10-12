@@ -228,9 +228,9 @@ search; unavailable world data returns an error. REST detail reads use
 `/api/actors/:id` and `/api/items/:id`; a REST module without item-detail support
 returns its backend error rather than silently selecting a same-name item.
 REST item normalization also needs system ID/version from `/api/world`; a missing
-route yields explicit unsupported economy. The live `foundry-rest-api` 3.4.1
-module provides neither `/api/items` nor `/api/world`, so item REST coverage uses
-a synthetic endpoint fixture, not a claim of module compatibility.
+route yields explicit unsupported economy. The maintained module and relay forks
+versioned `3.4.2-mcp.1` implement these routes and have local Foundry 14 evidence.
+See [the pinned revisions and validation record](docs/local-rest-snapshots.md).
 
 Text consumers can continue reading `content[0].text`; summaries now include
 IDs. Structured consumers should check `schemaVersion` and use `record.id` /
@@ -371,8 +371,9 @@ filters and limit on each continuation call; stop when `nextCursor` is null and
 strings are limited to 1024 characters; type and rarity selectors to 128.
 
 Each traversal captures an immutable snapshot sorted by normalized name,
-document type and case-sensitive ID. In service-identity mode, creates, updates
-and deletes do not alter that traversal. Delegated reads revalidate permissions
+document type and case-sensitive ID. Socket service-identity creates, updates
+and deletes do not alter that traversal. REST collection mutations invalidate
+the backend snapshot, and MCP revalidates it on every continuation. Delegated reads revalidate permissions
 and invalidate cursors when the authorized view changes. A new first-page call
 reads the current view. Cursors expire
 after five minutes and are bound to the world, caller/session, filters and page
@@ -419,9 +420,11 @@ stale until a subsequent refresh succeeds.
 Service-identity Socket.IO pagination accepts a verified Player/Trusted account and filters
 by document ownership before counts and pages; Assistant/GM accounts require explicit
 privileged opt-in. REST actor/item pagination requires that opt-in and uses the authenticated
-backend's visible collection. A multi-page REST result requires a backend-issued
+backend's permission-filtered collection. Each scoped key must bind a live
+Foundry user and grant `entity:read`; unresolved identity fails closed. A multi-page REST result requires a backend-issued
 `snapshotId` identifying an immutable collection: the client sends it on subsequent
-requests and requires the same token on every response. Legacy backends without
+requests and requires the same token on every response. Cached MCP pages revalidate
+the backend token before returning records, including after permission revocation. Legacy backends without
 this contract support only results completed in one backend page. Changed or missing
 tokens, ignored pages, repeated IDs and inconsistent totals fail the read. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.

@@ -1,0 +1,21 @@
+{
+  "target": "127.0.0.1:30001/test1world",
+  "foundry": "14.369",
+  "system": "dnd5e 6.0.6",
+  "passed": [
+    "player authorized totals, contents, embedded data and world identity",
+    "trusted authorized totals, contents, embedded data and world identity",
+    "assistant authorized totals, contents, embedded data and world identity",
+    "gm authorized totals, contents, embedded data and world identity",
+    "context replay, client binding, pagination validation, missing identity, read scope and spoofing",
+    "create invalidates snapshots",
+    "update invalidates snapshots",
+    "delete invalidates snapshots",
+    "permission revocation removes contents and invalidates totals",
+    "reconnect invalidation",
+    "collection cardinality 0",
+    "collection cardinality 1",
+    "collection cardinality 100",
+    "collection cardinality 101"
+  ]
+}

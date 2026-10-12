@@ -86,6 +86,8 @@ function restClient() {
     allowPrivilegedAccount: true,
     baseUrl: 'http://localhost:30000',
     apiKey: 'key',
+    retryAttempts: 1,
+    retryDelay: 1,
   });
 }
 
@@ -349,7 +351,7 @@ describe('REST snapshot pagination', () => {
     }
     expect(seen).toHaveLength(251);
     expect(new Set(seen).size).toBe(251);
-    expect(get).toHaveBeenCalledTimes(3);
+    expect(get).toHaveBeenCalledTimes(8);
     expect(get.mock.calls[0][1].params).not.toHaveProperty('snapshotId');
     expect(
       get.mock.calls.slice(1).every(([, options]) => options.params.snapshotId === 'stable-actors'),
@@ -421,9 +423,67 @@ describe('REST snapshot pagination', () => {
           snapshotId: 'immutable',
         },
       });
+      get.mockResolvedValueOnce({
+        data: { [collection]: [record(1)], total: 2, page: 1, limit: 100, snapshotId: 'immutable' },
+      });
       const result = await search(restClient());
       expect(result.total).toBe(2);
       expect(get.mock.calls[1][1].params.snapshotId).toBe('immutable');
+    });
+    for (const surface of ['search', 'resource'] as const) {
+      it(`rechecks ${collection} ${surface} cursors and erases revoked snapshots`, async () => {
+        const data = {
+          [collection]: [record(1), record(2)],
+          total: 2,
+          page: 1,
+          limit: 100,
+          snapshotId: 'immutable',
+        };
+        get.mockResolvedValue({ data });
+        const client = restClient();
+        const read = (cursor?: string) =>
+          surface === 'resource'
+            ? client.getCollectionPage(collection, { limit: 1, cursor })
+            : collection === 'actors'
+              ? client.searchActors({ limit: 1, query: 'Record', cursor })
+              : client.searchItems({ limit: 1, query: 'Record', cursor });
+        const first = await read();
+        expect(first.nextCursor).toBeTruthy();
+        expect(get.mock.calls.at(-1)?.[1].params).toMatchObject({
+          page: 1,
+          limit: 100,
+          snapshotId: 'immutable',
+        });
+        const cursor = requireCursor(first.nextCursor);
+        get.mockRejectedValue(new Error('SNAPSHOT_INVALIDATED: permission changed'));
+        await expect(read(cursor)).rejects.toThrow(/SNAPSHOT_INVALIDATED/);
+        const calls = get.mock.calls.length;
+        await expect(read(cursor)).rejects.toThrow(/no longer available/);
+        expect(get.mock.calls.length).toBe(calls);
+      });
+    }
+    it(`requires backend validation even for a single backend page of ${collection}`, async () => {
+      get.mockResolvedValue({
+        data: { [collection]: [record(1), record(2)], total: 2, page: 1, limit: 100 },
+      });
+      const client = restClient();
+      await expect(
+        collection === 'actors'
+          ? client.searchActors({ limit: 1 })
+          : client.searchItems({ limit: 1 }),
+      ).rejects.toThrow(/requires a backend snapshotId for continuation/);
+    });
+    it(`rejects a changed ${collection} snapshot on revalidation`, async () => {
+      const data = {
+        [collection]: [record(1), record(2)],
+        total: 2,
+        page: 1,
+        limit: 100,
+        snapshotId: 'immutable',
+      };
+      get.mockResolvedValueOnce({ data });
+      get.mockResolvedValueOnce({ data: { ...data, snapshotId: 'replacement' } });
+      await expect(search(restClient())).rejects.toThrow(/changed during validation/);
     });
     it(`refuses a multipage ${collection} backend without snapshot support`, async () => {
       get.mockResolvedValueOnce({

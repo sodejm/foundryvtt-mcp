@@ -1729,7 +1729,7 @@ export class FoundryClient {
   private async fetchAllRestActors(filters: {
     query?: string | undefined;
     type?: string | undefined;
-  }): Promise<FoundryActor[]> {
+  }): Promise<{ records: FoundryActor[]; validate?: () => Promise<void> }> {
     const requestFilters = Object.fromEntries(
       Object.entries(filters).filter((entry) => entry[1] !== undefined),
     );
@@ -1781,7 +1781,37 @@ export class FoundryClient {
         throw new Error('REST actor pagination returned more records than its reported total');
       }
       if (records.length === expectedTotal) {
-        return records;
+        const backendSnapshotId = result.snapshotId;
+        const total = expectedTotal;
+        const backendLimit = result.limit;
+        return {
+          records,
+          ...(backendSnapshotId === undefined
+            ? {}
+            : {
+                validate: async () => {
+                  const response = await this.executeWithRetry(() =>
+                    this.http.get('/api/actors', {
+                      params: {
+                        ...requestFilters,
+                        page: 1,
+                        limit: 100,
+                        snapshotId: backendSnapshotId,
+                      },
+                    }),
+                  );
+                  const current = restActorPageSchema.parse(response.data);
+                  if (
+                    current.snapshotId !== backendSnapshotId ||
+                    current.total !== total ||
+                    current.page !== 1 ||
+                    current.limit !== backendLimit
+                  ) {
+                    throw new Error('REST actor pagination snapshot changed during validation');
+                  }
+                },
+              }),
+        };
       }
       if (result.actors.length === 0) {
         throw new Error('REST actor pagination made no progress before reaching its total');
@@ -1806,7 +1836,10 @@ export class FoundryClient {
     }
   }
 
-  private async fetchAllRestItems(): Promise<FoundryItem[]> {
+  private async fetchAllRestItems(): Promise<{
+    records: FoundryItem[];
+    validate?: () => Promise<void>;
+  }> {
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
@@ -1850,7 +1883,32 @@ export class FoundryClient {
         throw new Error('REST item pagination returned more records than its reported total');
       }
       if (records.length === expectedTotal) {
-        return records;
+        const backendSnapshotId = result.snapshotId;
+        const total = expectedTotal;
+        const backendLimit = result.limit;
+        return {
+          records,
+          ...(backendSnapshotId === undefined
+            ? {}
+            : {
+                validate: async () => {
+                  const response = await this.executeWithRetry(() =>
+                    this.http.get('/api/items', {
+                      params: { page: 1, limit: 100, snapshotId: backendSnapshotId },
+                    }),
+                  );
+                  const current = restItemPageSchema.parse(response.data);
+                  if (
+                    current.snapshotId !== backendSnapshotId ||
+                    current.total !== total ||
+                    current.page !== 1 ||
+                    current.limit !== backendLimit
+                  ) {
+                    throw new Error('REST item pagination snapshot changed during validation');
+                  }
+                },
+              }),
+        };
       }
       if (result.items.length === 0) {
         throw new Error('REST item pagination made no progress before reaching its total');
@@ -1869,10 +1927,11 @@ export class FoundryClient {
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('actor-search', filters, 'actors');
+    let validate: (() => Promise<void>) | undefined;
     let records: FoundryActor[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
-        records = await this.fetchAllRestActors(filters);
+        ({ records, validate } = await this.fetchAllRestActors(filters));
       } else {
         const worldData = this.readWorld('actors');
         records = worldData.actors
@@ -1886,6 +1945,13 @@ export class FoundryClient {
       records.sort(compareFoundryRecords);
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    if (this.config.apiKey) {
+      await this.paginator.validateSnapshot(
+        page.snapshotId,
+        validate,
+        page.nextCursor !== null || params.cursor !== undefined,
+      );
+    }
     const { records: actors, ...metadata } = page;
     return { actors, ...metadata };
   }
@@ -2140,11 +2206,14 @@ export class FoundryClient {
     this.validateSearchFilters(filters);
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('item-search', filters, 'items');
+    let validate: (() => Promise<void>) | undefined;
     let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
       let identity: ItemEconomyIdentity;
       if (this.config.apiKey) {
-        const rawItems = await this.fetchAllRestItems();
+        const fetched = await this.fetchAllRestItems();
+        const rawItems = fetched.records;
+        validate = fetched.validate;
         identity =
           rawItems.some((item) => item.system !== undefined) || params.rarity
             ? await this.restItemIdentity()
@@ -2172,6 +2241,13 @@ export class FoundryClient {
       records.sort(compareFoundryRecords);
     }
     const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    if (this.config.apiKey) {
+      await this.paginator.validateSnapshot(
+        page.snapshotId,
+        validate,
+        page.nextCursor !== null || params.cursor !== undefined,
+      );
+    }
     const { records: items, ...metadata } = page;
     return { items, ...metadata };
   }
@@ -2931,7 +3007,25 @@ export class FoundryClient {
     if (this.config.apiKey) {
       return this.executeWithRetry(async () => {
         const response = await this.http.get('/api/world');
-        return response.data;
+        const data = response.data;
+        if (!data.world) {
+          return data;
+        }
+        if (typeof data.world.id !== 'string' || !data.world.id) {
+          throw new Error('REST world identity is unavailable');
+        }
+        const observedAt = new Date().toISOString();
+        return {
+          id: data.world.id,
+          title: data.world.title ?? '',
+          description: data.world.description ?? '',
+          system: data.system?.id ?? 'unknown',
+          coreVersion: data.foundryVersion ?? 'unknown',
+          systemVersion: data.system?.version ?? 'unknown',
+          playtime: 0,
+          created: normalizeTimestamp(data.world.created) ?? observedAt,
+          modified: normalizeTimestamp(data.world.modified) ?? observedAt,
+        };
       });
     }
 
@@ -3295,20 +3389,23 @@ export class FoundryClient {
     }
 
     const context = this.paginationContext('collection', { collection }, surface);
+    let validate: (() => Promise<void>) | undefined;
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
         if (collection === 'actors') {
-          const actors = await this.fetchAllRestActors({});
-          records = actors.map((record) => ({
+          const fetched = await this.fetchAllRestActors({});
+          validate = fetched.validate;
+          records = fetched.records.map((record) => ({
             id: record._id,
             name: record.name,
             documentType: 'Actor',
             type: record.type,
           }));
         } else {
-          const items = await this.fetchAllRestItems();
-          records = items.map((record) => ({
+          const fetched = await this.fetchAllRestItems();
+          validate = fetched.validate;
+          records = fetched.records.map((record) => ({
             id: record._id,
             name: record.name,
             documentType: 'Item',
@@ -3363,7 +3460,15 @@ export class FoundryClient {
       }
       records = sortCollectionRecords(records);
     }
-    return this.paginator.paginate(records, params, context, this.getReadMetadata());
+    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    if (this.config.apiKey) {
+      await this.paginator.validateSnapshot(
+        page.snapshotId,
+        validate,
+        page.nextCursor !== null || params.cursor !== undefined,
+      );
+    }
+    return page;
   }
 
   // ==========================================================================
@@ -3505,8 +3610,8 @@ export class FoundryClient {
 
   private async executeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
     let lastError: Error | undefined;
-    const maxAttempts = (this.config.retryAttempts || 3) + 1;
-    const baseDelay = this.config.retryDelay || 1000;
+    const maxAttempts = (this.config.retryAttempts ?? 3) + 1;
+    const baseDelay = this.config.retryDelay ?? 1000;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {

@@ -62,6 +62,7 @@ interface Snapshot<T> {
   expiresAt: number;
   bytes: number;
   readMetadata: WorldReadMetadata;
+  validate?: () => Promise<void>;
 }
 
 export interface SnapshotPaginatorOptions {
@@ -123,6 +124,40 @@ export class SnapshotPaginator {
   clear(): void {
     this.snapshots.clear();
     this.cachedBytes = 0;
+  }
+
+  /** Recheck backend authorization before returning a cached REST page. */
+  async validateSnapshot(
+    snapshotId: string,
+    validate?: () => Promise<void>,
+    requireValidation = false,
+  ): Promise<void> {
+    const snapshot = this.snapshots.get(snapshotId);
+    if (!snapshot) {
+      throw new PaginationCursorError('Pagination snapshot is no longer available');
+    }
+    if (validate) {
+      snapshot.validate = validate;
+    }
+    try {
+      if (requireValidation && !snapshot.validate) {
+        throw new PaginationCursorError(
+          'REST pagination requires a backend snapshotId for continuation',
+        );
+      }
+      await snapshot.validate?.();
+      if (this.snapshots.get(snapshotId) !== snapshot || snapshot.expiresAt <= this.now()) {
+        throw new PaginationCursorError(
+          'Pagination snapshot expired or was invalidated during validation',
+        );
+      }
+    } catch (error) {
+      if (this.snapshots.get(snapshotId) === snapshot) {
+        this.snapshots.delete(snapshotId);
+        this.cachedBytes -= snapshot.bytes;
+      }
+      throw error;
+    }
   }
 
   paginate<T>(

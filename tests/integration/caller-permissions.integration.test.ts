@@ -284,7 +284,7 @@ describe('live delegated caller permissions', () => {
       messages.push(id);
       messageText.set(id, text);
     }
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH });
     await openPlayer(gm, process.env.FOUNDRY_PASSWORD ?? '');
     await openPlayer(a, '');
     await openPlayer(b, '');
