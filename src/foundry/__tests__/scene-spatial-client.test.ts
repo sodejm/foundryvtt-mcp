@@ -187,7 +187,11 @@ describe('structured scene spatial client reads', () => {
   });
 
   it('rejects REST scene spatial reads rather than returning an unproven projection', () => {
-    const client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'key' });
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      apiKey: 'key',
+      allowPrivilegedAccount: true,
+    });
     expect(() => client.getSceneSpatial()).toThrow(/unsupported by the REST backend/);
   });
 });

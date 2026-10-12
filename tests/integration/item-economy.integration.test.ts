@@ -75,7 +75,7 @@ describe('live versioned item economy through built MCP stdio', () => {
         NODE_ENV: 'test',
         LOG_LEVEL: 'error',
         FOUNDRY_URL: process.env.FOUNDRY_URL!,
-        FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME!,
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME!,
         FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
         FOUNDRY_TIMEOUT: '5000',
         FOUNDRY_RETRY_ATTEMPTS: '0',

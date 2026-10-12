@@ -25,7 +25,7 @@ describe('live truthful rule lookup through built MCP stdio', () => {
       command: process.execPath, args: [fileURLToPath(new URL('../../dist/index.js', import.meta.url))],
       cwd, stderr: 'pipe', env: {
         NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: process.env.FOUNDRY_URL!,
-        FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME!, FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME!, FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
         FOUNDRY_TIMEOUT: '5000', FOUNDRY_RETRY_ATTEMPTS: '0',
         ...(optionalRest && { FOUNDRY_REST_URL: process.env.FOUNDRY_REST_URL!,
           FOUNDRY_REST_API_KEY: fixture.apiKey, FOUNDRY_REST_CLIENT_ID: fixture.clientId }),

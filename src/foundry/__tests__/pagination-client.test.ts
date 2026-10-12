@@ -30,7 +30,10 @@ function requireCursor(cursor: string | null): string {
 }
 
 function socketClient(role = 4) {
-  const client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+  const client = new FoundryClient({
+    allowPrivilegedAccount: true,
+    baseUrl: 'http://localhost:30000',
+  });
   const actors = Array.from({ length: 101 }, (_, index) => ({
     _id: id('A', index),
     name: `Actor ${String(index).padStart(3, '0')}`,
@@ -79,7 +82,11 @@ function socketClient(role = 4) {
 }
 
 function restClient() {
-  return new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'key' });
+  return new FoundryClient({
+    allowPrivilegedAccount: true,
+    baseUrl: 'http://localhost:30000',
+    apiKey: 'key',
+  });
 }
 
 beforeEach(() => {
@@ -183,10 +190,10 @@ describe('socket snapshot pagination', () => {
     await expect(client.getCollectionPage('users', {})).resolves.toMatchObject({ total: 2 });
   });
 
-  it('rejects non-GM cached-world reads', async () => {
+  it('allows explicitly opted-in Assistant cached-world reads', async () => {
     const { client } = socketClient(3);
-    await expect(client.searchActors({})).rejects.toThrow(/authenticated GM/);
-    await expect(client.searchWorldPage({})).rejects.toThrow(/authenticated GM/);
+    await expect(client.searchActors({})).resolves.toMatchObject({ total: 101 });
+    await expect(client.searchWorldPage({})).resolves.toMatchObject({ total: 105 });
   });
 
   it('binds the cursor to query, world, caller, and limit', async () => {
@@ -487,6 +494,7 @@ describe('verified compendium client boundary', () => {
   }
   function compendiumClient() {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       apiKey: 'core-key',
       restUrl: 'https://relay.example.test',
@@ -716,6 +724,7 @@ describe('verified compendium client boundary', () => {
   });
   it('denies delegated callers before sending compendium HTTP requests', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       authorizationMode: 'delegated',
       restUrl: 'https://relay.example.test',

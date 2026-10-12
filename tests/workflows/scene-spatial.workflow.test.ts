@@ -77,7 +77,7 @@ describe('built MCP scene spatial workflow', () => {
   async function connect(data = fixture(), delegated = false) {
     let principal = aId;
     const backend = new FoundryClient({ baseUrl: 'http://127.0.0.1:30001',
-      authorizationMode: delegated ? 'delegated' : 'service-identity' });
+      authorizationMode: delegated ? 'delegated' : 'service-identity', allowPrivilegedAccount: true });
     const socket = { connected: true, on: () => socket, off: () => socket,
       emit: (event: string, ...args: unknown[]) => {
         const ack = args.at(-1);

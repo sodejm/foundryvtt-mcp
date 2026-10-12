@@ -9,7 +9,12 @@ Configure all three values alongside the core Foundry credentials:
 FOUNDRY_REST_URL=http://127.0.0.1:3010
 FOUNDRY_REST_CLIENT_ID=your_relay_client_id
 FOUNDRY_REST_API_KEY=your_scoped_relay_key
+FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true
 ```
+
+The relay executes through a GM browser, so it requires explicit privileged-account
+opt-in. Use a separate MCP process and credentials when keeping native reads
+restricted to a Player account; see [account permissions](account-permissions.md).
 
 Enable the module in the world, pair it with that relay, and leave a GM browser
 connected. The key must permit both search and entity reads. The adapter sends

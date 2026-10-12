@@ -38,8 +38,8 @@ It is recommended to create a separate FoundryVTT user account for the MCP serve
 1. Go to **Configuration** → **User Management**
 2. Click **Create User**
 3. Set a username (e.g., `mcp-api`) and a strong password
-4. Assign the **Assistant GM** role (needed to read world data and roll dice)
-5. Use this account's credentials in your MCP configuration
+4. Assign **Player** for scoped reads, granting OBSERVER ownership only on documents the account should read. Local dice needs no privileged role.
+5. Use this account's credentials in your MCP configuration. Consult the [account permission matrix](docs/guides/account-permissions.md) for writes and privileged capabilities. Assistant/GM and REST access require explicit `FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true`.
 
 **Benefits:**
 - Chat messages and actions from the MCP server are clearly attributed to a separate user
@@ -130,6 +130,7 @@ To configure manually, see the [Configuration Guide](docs/guides/configuration.m
 | `FOUNDRY_REST_CLIENT_ID` | No | Paired module client ID |
 | `FOUNDRY_REST_API_KEY` | No | Relay key with search and entity-read permissions |
 | `FOUNDRY_AUTHORIZATION_MODE` | No | `service-identity` (default) or `delegated`; delegated reads require an authenticated host resolver |
+| `FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT` | No | Explicitly allow Assistant/GM or unverifiable REST access (default: `false`) |
 | `FOUNDRY_WRITE_ENABLED` | No | Enable game-state mutations — `true` required for the write tools (default: `false`) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, or `error` (default: `info`) |
 | `FOUNDRY_TIMEOUT` | No | Request timeout in ms (default: `10000`) |
@@ -260,11 +261,11 @@ both service-identity and delegated modes. Cursors expire after five minutes
 and bind to the world, caller and session.
 
 DND5e and PF2e have bounded normalized profiles. Unknown systems expose a bounded
-primitive `system` section in service-identity mode; delegated unknown-system
-reads fail closed. Delegated reads require actor and embedded-item visibility
-before serialization and withhold rich descriptions. Non-GM delegated reads
+primitive `system` section for opted-in Assistant/GM service accounts; lower-role
+and delegated unknown-system reads fail closed. Delegated reads require actor and embedded-item visibility
+before serialization and withhold rich descriptions. Non-GM delegated and Player/Trusted service reads
 omit unidentified or misidentified items before counts, searches, pagination and
-detail reads, including world-item reads. GM and service-identity reads retain
+detail reads, including world-item reads. Opted-in Assistant/GM service reads retain
 these items. Sections contain at most
 64 fields, each text value at most 4,096 UTF-16 code units, with an aggregate
 text budget of 8,192. Text clipping preserves surrogate pairs and reports
@@ -344,7 +345,7 @@ text chunks.
 The default `text` format converts HTML without executing it, preserving block
 breaks and decoding entities; Markdown remains literal text. `source` returns
 the original HTML or Markdown as an inert string after removing secret sections
-for non-GM delegated callers. Redaction also applies before previews, searches
+for non-GM delegated callers and Player/Trusted service accounts. Redaction also applies before previews, searches
 and text conversion. Clients must treat returned
 source as untrusted content. Asset references are metadata; the server does not
 download or render them.
@@ -412,7 +413,9 @@ attempts. `FoundryClientConfig` can override these limits. Recovery buffers at
 most 1,000 incoming events; overflow aborts recovery and leaves retained data
 stale until a subsequent refresh succeeds.
 
-Service-identity Socket.IO pagination requires a GM session. REST actor/item pagination uses the authenticated
+Service-identity Socket.IO pagination accepts a verified Player/Trusted account and filters
+by document ownership before counts and pages; Assistant/GM accounts require explicit
+privileged opt-in. REST actor/item pagination requires that opt-in and uses the authenticated
 backend's visible collection. A multi-page REST result requires a backend-issued
 `snapshotId` identifying an immutable collection: the client sends it on subsequent
 requests and requires the same token on every response. Legacy backends without
@@ -422,7 +425,9 @@ and scene/journal/user collection pages are unsupported and return errors.
 
 ### Authenticated player reads
 
-`service-identity` exposes the configured backend account's data. Use `delegated`
+`service-identity` scopes Player/Trusted reads to observable documents and sanitizes
+chat, journals and users. Assistant/GM accounts expose a full-world view only with
+explicit privileged opt-in. Use `delegated`
 for player access through an embedding host that authenticates each caller and
 resolves `{callerId, userId, worldId, sessionId}` from trusted host state. The
 exported `FoundryMCPServer` accepts this resolver; the stdio executable has no
@@ -445,7 +450,10 @@ including GMs. REST/API-key backends are unavailable in delegated mode.
 
 Game-state mutations are **disabled by default**. They use the Socket.IO
 `modifyDocument` protocol over an authenticated session, and the connected user
-needs GM/owner permission. Set `FOUNDRY_WRITE_ENABLED=true` to enable them.
+needs the operation's Foundry permission (usually OWNER on the target document).
+Journal creation additionally requires the world's CREATE_JOURNAL permission.
+Set `FOUNDRY_WRITE_ENABLED=true` to enable them; privileged opt-in does not grant
+ownership or override Foundry denials. See the [permission matrix](docs/guides/account-permissions.md).
 
 - `start_combat` — begin a new encounter, seeding combatants from tokens (does
   not check for an existing combat — calling it during an active one creates a

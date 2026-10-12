@@ -170,7 +170,7 @@ describe('built MCP CLI structured read workflow', () => {
       cwd: temporaryCwd,
       stderr: 'pipe',
       env: {
-        NODE_ENV: 'test', LOG_LEVEL: 'error',
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', NODE_ENV: 'test', LOG_LEVEL: 'error',
         FOUNDRY_URL: `http://127.0.0.1:${address.port}`,
         FOUNDRY_API_KEY: 'workflow-fixture-key',
         FOUNDRY_TIMEOUT: '500', FOUNDRY_RETRY_ATTEMPTS: '0', FOUNDRY_RETRY_DELAY: '1',

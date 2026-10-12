@@ -55,21 +55,32 @@ describe('FoundryClient', () => {
 
   describe('constructor', () => {
     it('should create instance with default config', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(client).toBeDefined();
       expect(client.isConnected()).toBe(false);
     });
 
     it('should throw on empty baseUrl', () => {
-      expect(() => new FoundryClient({ baseUrl: '' })).toThrow('baseUrl is required');
+      expect(() => new FoundryClient({ allowPrivilegedAccount: true, baseUrl: '' })).toThrow(
+        'baseUrl is required',
+      );
     });
 
     it('should throw on invalid baseUrl', () => {
-      expect(() => new FoundryClient({ baseUrl: 'not-a-url' })).toThrow('Invalid baseUrl');
+      expect(
+        () => new FoundryClient({ allowPrivilegedAccount: true, baseUrl: 'not-a-url' }),
+      ).toThrow('Invalid baseUrl');
     });
 
     it('should configure axios with apiKey interceptor when provided', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'test-key' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        apiKey: 'test-key',
+      });
       expect(mockAxios.create).toHaveBeenCalled();
     });
   });
@@ -79,15 +90,24 @@ describe('FoundryClient', () => {
       { apiKey: 'private-key' },
       { username: 'gm', password: 'private-password' },
     ])('rejects remote HTTP before client creation for %j', (credentials) => {
-      expect(() => new FoundryClient({ baseUrl: 'http://remote.test', ...credentials })).toThrow(
-        'HTTPS',
-      );
+      expect(
+        () =>
+          new FoundryClient({
+            allowPrivilegedAccount: true,
+            baseUrl: 'http://remote.test',
+            ...credentials,
+          }),
+      ).toThrow('HTTPS');
       expect(mockAxios.create).not.toHaveBeenCalled();
     });
     it('checks the effective request URL before adding credentials and disables redirect overrides', async () => {
       const actualAxios = (await vi.importActual<typeof import('axios')>('axios')).default;
       mockAxios.getUri.mockImplementation(actualAxios.getUri);
-      new FoundryClient({ baseUrl: 'https://remote.test/foundry', apiKey: 'private-key' });
+      new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'https://remote.test/foundry',
+        apiKey: 'private-key',
+      });
       const intercept = mockAxiosInstance.interceptors.request.use.mock.calls[0][0];
       for (const request of [
         { url: 'http://remote.test/steal' },
@@ -118,7 +138,11 @@ describe('FoundryClient', () => {
       { userId: 'User000000000001', password: '' },
       { apiKey: 'test-api-key' },
     ])('loads the authenticated connection for %j', async (credentials) => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...credentials,
+      });
       const connect = vi.spyOn(client, 'connect').mockResolvedValue();
 
       await expect(client.testConnection()).resolves.toBe(true);
@@ -132,7 +156,11 @@ describe('FoundryClient', () => {
       { username: 'gm' },
       { password: '' },
     ])('only checks HTTP reachability when authentication is incomplete: %j', async (credentials) => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...credentials });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...credentials,
+      });
       const connect = vi.spyOn(client, 'connect');
       mockAxiosInstance.get.mockResolvedValue({ status: 200 });
 
@@ -144,6 +172,7 @@ describe('FoundryClient', () => {
 
     it('propagates authentication errors instead of falling back to HTTP reachability', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         username: 'gm',
         password: '',
@@ -158,6 +187,7 @@ describe('FoundryClient', () => {
   describe('REST API mode (with apiKey)', () => {
     beforeEach(() => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
       });
@@ -213,6 +243,7 @@ describe('FoundryClient', () => {
 
     it('should retry failed requests', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 2,
@@ -231,6 +262,7 @@ describe('FoundryClient', () => {
 
     it('should fail after max retry attempts', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 1,
@@ -339,6 +371,7 @@ describe('FoundryClient', () => {
 
     it('does NOT retry on 400 Bad Request', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 3,
@@ -353,6 +386,7 @@ describe('FoundryClient', () => {
 
     it('does NOT retry on 404 Not Found', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 3,
@@ -367,6 +401,7 @@ describe('FoundryClient', () => {
 
     it('does NOT retry on 401 Unauthorized', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 3,
@@ -381,6 +416,7 @@ describe('FoundryClient', () => {
 
     it('DOES retry on 429 Too Many Requests (documented exception)', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 2,
@@ -399,6 +435,7 @@ describe('FoundryClient', () => {
 
     it('DOES retry on 500 Internal Server Error', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 1,
@@ -416,6 +453,7 @@ describe('FoundryClient', () => {
 
     it('DOES retry on 503 Service Unavailable', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 1,
@@ -433,6 +471,7 @@ describe('FoundryClient', () => {
     it('uses exponential backoff (baseDelay * 2^(attempt-1), within jitter)', async () => {
       const baseDelay = 100;
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
         retryAttempts: 3,
@@ -458,7 +497,10 @@ describe('FoundryClient', () => {
 
   describe('worldData mode (no apiKey)', () => {
     it('should report unavailable backend when no worldData', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
 
       await expect(client.searchActors({ query: 'test' })).rejects.toThrow(
         'World data unavailable',
@@ -467,42 +509,66 @@ describe('FoundryClient', () => {
     });
 
     it('should reject world info when no snapshot has been captured', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       await expect(client.getWorldInfo()).rejects.toThrow('World data unavailable');
     });
 
     it('should require credentials for connect in Socket.IO mode', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       await expect(client.connect()).rejects.toThrow('Socket.IO mode requires');
     });
 
     it('should reject combat state when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.getCombatState()).toThrow('World data unavailable');
     });
 
     it('should reject chat messages when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.getChatMessages()).toThrow('World data unavailable');
     });
 
     it('should reject users when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.getUsers()).toThrow('World data unavailable');
     });
 
     it('should reject journals when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.getJournals()).toThrow('World data unavailable');
     });
 
     it('should reject world search when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.searchWorld('test')).toThrow('World data unavailable');
     });
 
     it('should reject summary when no snapshot has been captured', () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       expect(() => client.getWorldSummary()).toThrow('World data unavailable');
     });
   });
@@ -514,7 +580,10 @@ describe('FoundryClient', () => {
       restClientId: 'paired-client',
     };
     beforeEach(() => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       vi.spyOn(Math, 'random').mockReturnValue(0.5);
     });
     afterEach(() => vi.restoreAllMocks());
@@ -568,7 +637,11 @@ describe('FoundryClient', () => {
       { apiKey: 'legacy-key' },
       { ...paired, apiKey: 'legacy-key' },
     ])('keeps default and auto dice local with read transport configuration %j', async (config) => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...config,
+      });
       for (const engine of [undefined, 'auto'] as const) {
         const result = await client.rollDice('(7-3)+2', undefined, engine);
         expect(result).toMatchObject({ engine: 'local', total: 6 });
@@ -594,7 +667,11 @@ describe('FoundryClient', () => {
       { restUrl: paired.restUrl, restClientId: paired.restClientId },
       { restApiKey: paired.restApiKey, restClientId: paired.restClientId },
     ])('rejects partial native configuration %j', async (config) => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...config });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...config,
+      });
       await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Configure all');
       expect(Math.random).not.toHaveBeenCalled();
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
@@ -606,7 +683,11 @@ describe('FoundryClient', () => {
     });
 
     it('rejects the legacy-only dice route while allowing explicit local evaluation', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'legacy-key' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        apiKey: 'legacy-key',
+      });
       await expect(client.rollDice('d6', undefined, 'foundry')).rejects.toThrow('Legacy');
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
       expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
@@ -620,6 +701,7 @@ describe('FoundryClient', () => {
       'foundry',
     ] as const)('selects paired Foundry execution for %s even with legacy configuration', async (engine) => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         ...paired,
         apiKey: 'legacy-key',
@@ -663,7 +745,11 @@ describe('FoundryClient', () => {
     });
 
     it('never calls a configured native transport for explicit local execution', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...paired,
+      });
       expect(await client.rollDice('d6', undefined, 'local')).toMatchObject({
         engine: 'local',
         total: 3,
@@ -673,7 +759,11 @@ describe('FoundryClient', () => {
     });
 
     it.each(['network', 'malformed'])('never rerolls after a %s native failure', async (kind) => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000', ...paired });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        ...paired,
+      });
       if (kind === 'network') {
         mockAxiosInstance.post.mockRejectedValue(new Error('fixture-key'));
       } else {
@@ -689,7 +779,10 @@ describe('FoundryClient', () => {
 
   describe('disconnect', () => {
     it('should reset state on disconnect', async () => {
-      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+      });
       await client.disconnect();
       expect(client.isConnected()).toBe(false);
       expect(client.hasWorldData()).toBe(false);
@@ -711,7 +804,7 @@ describe('FoundryClient', () => {
       journal: [],
       messages: [],
       combats: [],
-      users: [{ _id: 'user-aaaaaaaaaaaaaa', name: 'GM', role: 4 }],
+      users: [{ _id: 'test-user-id', name: 'GM', role: 4 }],
       activeUsers: [],
       settings: [],
       macros: [],
@@ -752,6 +845,7 @@ describe('FoundryClient', () => {
 
     it('uses an acknowledgement callback and coalesces concurrent refreshes', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         timeout: 50,
         retryAttempts: 0,
@@ -780,6 +874,7 @@ describe('FoundryClient', () => {
       vi.useFakeTimers();
       try {
         client = new FoundryClient({
+          allowPrivilegedAccount: true,
           baseUrl: 'http://localhost:30000',
           timeout: 25,
           retryAttempts: 0,
@@ -803,6 +898,7 @@ describe('FoundryClient', () => {
 
     it('does not publish malformed or retired acknowledgements', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         timeout: 50,
         retryAttempts: 0,
@@ -823,6 +919,7 @@ describe('FoundryClient', () => {
 
     it('replays document and presence events received during refresh', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         timeout: 50,
         retryAttempts: 0,
@@ -839,16 +936,17 @@ describe('FoundryClient', () => {
         action: 'update',
         result: [{ _id: ACTOR_ID, name: 'During refresh' }],
       });
-      Reflect.get(client, 'onUserActivity')('user-aaaaaaaaaaaaaa', { active: true });
+      Reflect.get(client, 'onUserActivity')('test-user-id', { active: true });
       worldAcks[0]?.(structuredClone(WORLD_SNAPSHOT));
       await refresh;
 
       expect(client.getRawActor(ACTOR_ID)?.name).toBe('During refresh');
-      expect(client.getUsers().activeUsers).toEqual(['user-aaaaaaaaaaaaaa']);
+      expect(client.getUsers().activeUsers).toEqual(['test-user-id']);
     });
 
     it('applies an authoritative write acknowledgement when no broadcast returns to the writer', async () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         timeout: 50,
         retryAttempts: 0,
@@ -939,10 +1037,10 @@ describe('FoundryClient', () => {
       messages: [],
       combats: [],
       users: [
-        { _id: 'user-aaaaaaaaaaaaaa', name: 'GM', role: 4 },
+        { _id: 'test-user-id', name: 'GM', role: 4 },
         { _id: 'user-bbbbbbbbbbbbbb', name: 'Player', role: 1 },
       ],
-      activeUsers: ['user-aaaaaaaaaaaaaa'],
+      activeUsers: ['test-user-id'],
       settings: [],
       macros: [],
       playlists: [],
@@ -966,6 +1064,7 @@ describe('FoundryClient', () => {
       const connected =
         existing ??
         new FoundryClient({
+          allowPrivilegedAccount: true,
           baseUrl: 'http://localhost:30000',
           username: 'gm',
           password: 'secret',
@@ -1000,7 +1099,12 @@ describe('FoundryClient', () => {
     it('authenticates an explicitly empty password for a passwordless Foundry user', async () => {
       const { authenticateFoundry } = await import('../auth.js');
       const { client: connected } = await connectWithMockSocket(
-        new FoundryClient({ baseUrl: 'http://localhost:30000', username: 'gm', password: '' }),
+        new FoundryClient({
+          allowPrivilegedAccount: true,
+          baseUrl: 'http://localhost:30000',
+          username: 'gm',
+          password: '',
+        }),
       );
 
       expect(authenticateFoundry).toHaveBeenCalledWith('http://localhost:30000', 'gm', '');
@@ -1171,16 +1275,13 @@ describe('FoundryClient', () => {
       const { handleGetUsers } = await import('../../tools/handlers/users.js');
       const { client: connected, fire } = await connectWithMockSocket();
 
-      expect(connected.getUsers().activeUsers).toEqual(['user-aaaaaaaaaaaaaa']);
+      expect(connected.getUsers().activeUsers).toEqual(['test-user-id']);
       const before = await handleGetUsers({}, connected);
       expect((before.content[0] as { text: string }).text).toContain('(1/2 online)');
 
       fire('userActivity', 'user-bbbbbbbbbbbbbb', { active: true });
 
-      expect(connected.getUsers().activeUsers).toEqual([
-        'user-aaaaaaaaaaaaaa',
-        'user-bbbbbbbbbbbbbb',
-      ]);
+      expect(connected.getUsers().activeUsers).toEqual(['test-user-id', 'user-bbbbbbbbbbbbbb']);
       const after = await handleGetUsers({}, connected);
       const text = (after.content[0] as { text: string }).text;
       expect(text).toContain('(2/2 online)');
@@ -1191,7 +1292,7 @@ describe('FoundryClient', () => {
       const { handleGetUsers } = await import('../../tools/handlers/users.js');
       const { client: connected, fire } = await connectWithMockSocket();
 
-      fire('userActivity', 'user-aaaaaaaaaaaaaa', { active: false });
+      fire('userActivity', 'test-user-id', { active: false });
 
       expect(connected.getUsers().activeUsers).toEqual([]);
       const after = await handleGetUsers({}, connected);
@@ -1206,7 +1307,7 @@ describe('FoundryClient', () => {
       fire('userActivity', 42, { active: false });
       fire('userActivity', 'user-bbbbbbbbbbbbbb', { active: 'yes' });
 
-      expect(connected.getUsers().activeUsers).toEqual(['user-aaaaaaaaaaaaaa']);
+      expect(connected.getUsers().activeUsers).toEqual(['test-user-id']);
     });
 
     it('removes the userActivity listener on disconnect()', async () => {
@@ -1230,6 +1331,7 @@ describe('FoundryClient', () => {
      */
     it('does not require a socket in REST API mode', async () => {
       const restClient = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-api-key',
       });

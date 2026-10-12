@@ -32,7 +32,10 @@ function ownedItem(index: number, overrides: Partial<WorldItem> = {}): WorldItem
 }
 
 function socketClient(itemCount = 251) {
-  const client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+  const client = new FoundryClient({
+    allowPrivilegedAccount: true,
+    baseUrl: 'http://localhost:30000',
+  });
   const actorId = id('A', 1);
   const otherActorId = id('A', 2);
   const actor: WorldActor = {
@@ -237,7 +240,11 @@ describe('structured actor sheet client reads', () => {
     const { client } = socketClient();
     expect(() => client.getActorSheet('bad')).toThrow(/actorId/);
     expect(() => client.getActorItem(id('A', 1), 'bad')).toThrow(/itemId/);
-    const rest = new FoundryClient({ baseUrl: 'http://localhost:30000', apiKey: 'key' });
+    const rest = new FoundryClient({
+      allowPrivilegedAccount: true,
+      baseUrl: 'http://localhost:30000',
+      apiKey: 'key',
+    });
     expect(() => rest.getActorSheet(id('A', 1))).toThrow(/unsupported by the REST backend/);
   });
 });

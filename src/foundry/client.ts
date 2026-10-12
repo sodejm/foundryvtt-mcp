@@ -578,7 +578,9 @@ export interface FoundryClientConfig {
   socketPath?: string;
   /** Opt-in gate for game-state mutations (FOUNDRY_WRITE_ENABLED). Default false. */
   writeEnabled?: boolean;
-  /** Authorization boundary for public reads. Default preserves service-identity behavior. */
+  /** Explicit consent to an Assistant/GM account or unverifiable REST identity. Default false. */
+  allowPrivilegedAccount?: boolean;
+  /** Authorization boundary for public reads. Default uses the authenticated service account permissions. */
   authorizationMode?: AuthorizationMode;
 }
 
@@ -777,14 +779,66 @@ export class FoundryClient {
     return this.config.authorizationMode === 'delegated';
   }
 
+  private assertPrivilegedAccountAllowed(): void {
+    if (!this.config.allowPrivilegedAccount) {
+      throw new Error(
+        'Privileged or unverifiable Foundry access requires FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true. ' +
+          'Use a Player/Trusted Player account with OBSERVER ownership for scoped reads instead.',
+      );
+    }
+  }
+
+  private requireServiceUser(): WorldUser {
+    const world = this.requireWorldData();
+    const matches = world.users.filter((user) => user._id === world.userId);
+    const user = matches.length === 1 ? matches[0] : undefined;
+    if (
+      !user ||
+      !Number.isInteger(user.role) ||
+      user.role < 1 ||
+      user.role > 4 ||
+      (this.socketUserId !== null && this.socketUserId !== world.userId)
+    ) {
+      throw new Error(
+        'Foundry account permission preflight failed: refresh or reconnect with a valid active account.',
+      );
+    }
+    if (user.role >= GAMEMASTER_ROLE) {
+      this.assertPrivilegedAccountAllowed();
+    }
+    return user;
+  }
+
+  private hasScopedReads(): boolean {
+    return (
+      this.isDelegatedMode() ||
+      (!this.config.apiKey && this.requireServiceUser().role < GAMEMASTER_ROLE)
+    );
+  }
+
   assertReadSurfaceAllowed(surface: ReadSurface): void {
-    if (!this.isDelegatedMode()) {
+    if (this.isDelegatedMode()) {
+      if (!DELEGATED_READ_SURFACES.has(surface)) {
+        throw new CallerAuthorizationError();
+      }
+      this.requireDelegatedState();
       return;
     }
-    if (!DELEGATED_READ_SURFACES.has(surface)) {
-      throw new CallerAuthorizationError();
+    if (surface === 'diagnostics') {
+      return;
     }
-    this.requireDelegatedState();
+    if (this.config.apiKey || surface === 'compendia') {
+      if (this.config.apiKey || this.config.restUrl) {
+        this.assertPrivilegedAccountAllowed();
+      }
+      return;
+    }
+    const user = this.requireServiceUser();
+    if (user.role < GAMEMASTER_ROLE && !DELEGATED_READ_SURFACES.has(surface)) {
+      throw new Error(
+        `Foundry account cannot safely read ${surface}. Use a supported scoped read or a separate explicitly opted-in Assistant/GM process.`,
+      );
+    }
   }
 
   private requireDelegatedState(): AuthorizedCallerState {
@@ -797,7 +851,12 @@ export class FoundryClient {
 
   private readWorld(surface: ReadSurface): WorldData {
     if (!this.isDelegatedMode()) {
-      return this.requireWorldData();
+      this.assertReadSurfaceAllowed(surface);
+      const world = this.requireWorldData();
+      const user = this.requireServiceUser();
+      return user.role < GAMEMASTER_ROLE
+        ? projectWorldData(world, user, surface === 'world-summary' ? 'search' : surface)
+        : world;
     }
     if (!DELEGATED_READ_SURFACES.has(surface)) {
       throw new CallerAuthorizationError();
@@ -931,6 +990,7 @@ export class FoundryClient {
    */
   async connect(): Promise<void> {
     if (this.config.apiKey) {
+      this.assertPrivilegedAccountAllowed();
       try {
         const response = await this.http.get('/api/status');
         this.resetPaginationSession();
@@ -954,12 +1014,16 @@ export class FoundryClient {
 
     const { session } = await authenticateFoundry(this.config.baseUrl, user, this.config.password);
 
-    const worldData = await this.connectAndLoadWorld(session);
-    logger.info('Connected to FoundryVTT via Socket.IO', {
-      actors: worldData.actors.length,
-      scenes: worldData.scenes.length,
-      items: worldData.items.length,
-    });
+    await this.connectAndLoadWorld(session);
+    try {
+      if (!this.isDelegatedMode()) {
+        this.requireServiceUser();
+      }
+    } catch (error) {
+      this.disconnect();
+      throw error;
+    }
+    logger.info('Connected to FoundryVTT via Socket.IO');
   }
 
   /**
@@ -1438,7 +1502,8 @@ export class FoundryClient {
     if (this.isDelegatedMode()) {
       throw new CallerAuthorizationError();
     }
-    return this.refreshWorldDataInternal();
+    await this.refreshWorldDataInternal();
+    this.requireServiceUser();
   }
 
   private async refreshWorldDataInternal(): Promise<void> {
@@ -1584,7 +1649,10 @@ export class FoundryClient {
   }
 
   getWorldData(): WorldData | null {
-    return this.isDelegatedMode() ? this.readWorld('search') : this.worldData;
+    if (!this.isDelegatedMode() && this.worldData === null) {
+      return null;
+    }
+    return this.readWorld('search');
   }
 
   // ==========================================================================
@@ -1614,23 +1682,27 @@ export class FoundryClient {
     const caller = this.config.apiKey
       ? `${this.config.baseUrl}|${this.config.apiKey}`
       : `${this.worldData?.userId ?? 'unknown'}|${this.paginationSession}`;
-    return JSON.stringify({ kind, filters, world, caller });
+    const authorizationFingerprint = this.config.apiKey
+      ? null
+      : createHash('sha256')
+          .update(
+            JSON.stringify({
+              userId: this.requireServiceUser()._id,
+              role: this.requireServiceUser().role,
+              ...(this.hasScopedReads() ? { view: this.readWorld(surface) } : {}),
+            }),
+          )
+          .digest('hex');
+    return JSON.stringify({ kind, filters, world, caller, authorizationFingerprint });
   }
 
   private assertSocketPaginationAuthorized(): void {
     if (this.isDelegatedMode()) {
       this.requireDelegatedState();
-      return;
-    }
-    if (this.config.apiKey) {
-      return;
-    }
-    if (!this.worldData) {
-      throw new Error(WORLD_DATA_UNAVAILABLE_MESSAGE);
-    }
-    const caller = this.worldData.users.find((user) => user._id === this.worldData?.userId);
-    if (!caller || typeof caller.role !== 'number' || caller.role < 4) {
-      throw new Error('Socket pagination requires an authenticated GM with role 4 or higher');
+    } else if (this.config.apiKey) {
+      this.assertPrivilegedAccountAllowed();
+    } else {
+      this.requireServiceUser();
     }
   }
 
@@ -1819,8 +1891,8 @@ export class FoundryClient {
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
-    this.assertReadSurfaceAllowed('actors');
     assertReadId(actorId, 'actorId');
+    this.assertReadSurfaceAllowed('actors');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/actors/${actorId}`));
       return restActor(restDetailDocument(response.data), actorId);
@@ -1848,7 +1920,7 @@ export class FoundryClient {
       throw new Error(unavailableMessage);
     }
     const system = actorSystemIdentity(world);
-    if (system.profile === 'generic' && this.isDelegatedMode()) {
+    if (system.profile === 'generic' && this.hasScopedReads()) {
       throw new Error(unavailableMessage);
     }
     return { world, actor };
@@ -1858,7 +1930,7 @@ export class FoundryClient {
     this.assertReadSurfaceAllowed('actors');
     const { world, actor } = this.actorReadWorld(actorId);
     const system = actorSystemIdentity(world);
-    const delegated = this.isDelegatedMode();
+    const delegated = this.hasScopedReads();
     return {
       schemaVersion: 1,
       documentType: 'ActorSheet',
@@ -1883,7 +1955,7 @@ export class FoundryClient {
     this.assertReadSurfaceAllowed('actors');
     const { world, actor } = this.actorReadWorld(actorId);
     const system = actorSystemIdentity(world);
-    const delegated = this.isDelegatedMode();
+    const delegated = this.hasScopedReads();
     const supported = isActorSectionSupported(system.profile, section, delegated);
     return {
       schemaVersion: 1,
@@ -1904,7 +1976,7 @@ export class FoundryClient {
     this.assertSocketPaginationAuthorized();
     const { world, actor } = this.actorReadWorld(params.actorId);
     const system = actorSystemIdentity(world);
-    const delegated = this.isDelegatedMode();
+    const delegated = this.hasScopedReads();
     const items = Array.isArray(actor.items) ? actor.items : [];
     const visibleProjection = items.map((item) => ({
       summary: publicActorItemSummary(actor._id, item, system),
@@ -1963,8 +2035,8 @@ export class FoundryClient {
   }
 
   getActorItem(actorId: string, itemId: string): ActorItemOutput {
-    this.assertReadSurfaceAllowed('actors');
     assertReadId(actorId, 'actorId');
+    this.assertReadSurfaceAllowed('actors');
     assertReadId(itemId, 'itemId');
     const { world, actor } = this.actorReadWorld(actorId, 'Actor item read unavailable');
     const item = (Array.isArray(actor.items) ? actor.items : []).find(
@@ -1974,7 +2046,7 @@ export class FoundryClient {
       throw new Error('Actor item read unavailable');
     }
     const system = actorSystemIdentity(world);
-    const delegated = this.isDelegatedMode();
+    const delegated = this.hasScopedReads();
     return {
       schemaVersion: 2,
       documentType: 'ActorItem',
@@ -2106,8 +2178,8 @@ export class FoundryClient {
 
   /** Read one world item only; actor-owned and compendium items are excluded. */
   async getItem(itemId: string): Promise<FoundryItem> {
-    this.assertReadSurfaceAllowed('items');
     assertReadId(itemId, 'itemId');
+    this.assertReadSurfaceAllowed('items');
     if (this.config.apiKey) {
       const response = await this.executeWithRetry(() => this.http.get(`/api/items/${itemId}`));
       const raw = restItemWireSchema.parse(restDetailDocument(response.data));
@@ -2259,6 +2331,7 @@ export class FoundryClient {
         'Write operations require an active authenticated Socket.IO connection to FoundryVTT (username/password mode).',
       );
     }
+    this.requireServiceUser();
   }
 
   /**
@@ -2690,6 +2763,7 @@ export class FoundryClient {
       return this.requireDelegatedState().getSpatialView();
     }
     const source = this.requireWorldData();
+    this.requireServiceUser();
     const callers = source.users.filter((candidate) => candidate._id === source.userId);
     const caller = callers.length === 1 ? callers[0] : undefined;
     if (
@@ -3370,6 +3444,9 @@ export class FoundryClient {
       }
     }
     const native = input.engine === 'foundry' && complete;
+    if (native) {
+      this.assertPrivilegedAccountAllowed();
+    }
     const result = native
       ? await new DiceRestAdapter({
           baseUrl: restUrl,
@@ -3459,6 +3536,7 @@ export class FoundryClient {
 
   async get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     this.assertReadSurfaceAllowed('diagnostics');
+    this.assertPrivilegedAccountAllowed();
     return this.executeWithRetry(() => this.http.get(url, config));
   }
 

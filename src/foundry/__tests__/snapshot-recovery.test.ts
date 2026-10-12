@@ -151,6 +151,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('rejects a whitespace identity during the initial session handshake', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       writeEnabled: true,
@@ -177,6 +178,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('preserves extension fields on trusted initial snapshots and refreshes', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -196,6 +198,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     'missing actor',
   ])('marks unapplied %s broadcasts stale and recovers from a clean ACK', async (kind) => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -225,6 +228,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('rejects buffered synthetic actor changes instead of publishing a false-current snapshot', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -251,6 +255,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('keeps unknown settings and duplicate deletes current during ordinary reads and buffered replay', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -278,6 +283,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
   it('retries an invalid identity after the configured delay and publishes only the valid ACK', async () => {
     vi.useFakeTimers();
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 1,
@@ -303,6 +309,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('stops futile retries after event-buffer overflow and recovers on a fresh refresh', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 3,
@@ -336,6 +343,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('invalidates snapshot cursors and reloads when the authenticated session changes', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -369,6 +377,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     { userId: '   ' },
   ])('revokes anonymous sessions before any read or write: %j', async (session) => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -408,6 +417,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('rejects a pending refresh across reconnect and ignores its retired ACK', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -436,6 +446,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('waits for reconnect before reloading a changed session', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -463,6 +474,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('rotates the read session and invalidates cursors when a refresh changes worlds', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,
@@ -486,6 +498,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
   it('does not apply a write ACK to cache after the socket epoch changes', async () => {
     const client = new FoundryClient({
+      allowPrivilegedAccount: true,
       baseUrl: 'http://localhost:30000',
       timeout: 100,
       retryAttempts: 0,

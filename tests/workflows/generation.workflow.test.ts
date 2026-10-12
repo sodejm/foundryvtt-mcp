@@ -36,7 +36,7 @@ describe('built MCP creative generation workflow', () => {
     for (const rest of [false, true]) {
       const transport = new StdioClientTransport({ command: process.execPath,
         args: [fileURLToPath(new URL('../../dist/index.js', import.meta.url))], cwd, stderr: 'pipe', env: {
-          NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: `http://127.0.0.1:${address.port}`,
+          FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: `http://127.0.0.1:${address.port}`,
           FOUNDRY_API_KEY: 'workflow-core-key', FOUNDRY_TIMEOUT: '200', FOUNDRY_RETRY_ATTEMPTS: '0',
           ...(rest && { FOUNDRY_REST_URL: `http://127.0.0.1:${address.port}`, FOUNDRY_REST_API_KEY: 'workflow-rest-key', FOUNDRY_REST_CLIENT_ID: 'fixture' }),
         } });

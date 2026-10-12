@@ -69,7 +69,7 @@ describe('built MCP actor sheet workflow', () => {
     for (const close of closers.splice(0).reverse()) await close();
   });
   async function connect(data = fixture(), delegated = false) {
-    const backend = new FoundryClient({ baseUrl: 'http://127.0.0.1:30001',
+    const backend = new FoundryClient({ allowPrivilegedAccount: true, baseUrl: 'http://127.0.0.1:30001',
       authorizationMode: delegated ? 'delegated' : 'service-identity' });
     const socket = {
       connected: true,
