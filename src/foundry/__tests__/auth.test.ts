@@ -171,7 +171,7 @@ describe('authenticateFoundry — session cookie on the Socket.IO handshake (#20
     vi.resetAllMocks();
   });
 
-  it('passes the session as a Cookie header, not only as a query param', async () => {
+  it('passes the session only as a Cookie header during user lookup', async () => {
     const { socket } = buildMockSocket([{ _id: 'resolvedDocId123', name: 'Gamemaster' }]);
     mockIo.mockReturnValue(socket);
 
@@ -181,17 +181,16 @@ describe('authenticateFoundry — session cookie on the Socket.IO handshake (#20
       'http://localhost:30000',
       expect.objectContaining({
         extraHeaders: { Cookie: 'session=test-session-cookie' },
-        query: { session: 'test-session-cookie' },
       }),
     );
+    expect(mockIo.mock.calls[0]?.[1]).not.toHaveProperty('query');
   });
 });
 
 describe('sessionSocketOptions (#206)', () => {
-  it('carries the session in both the Cookie header and the query param', () => {
+  it('carries the session in the Cookie header without a query parameter', () => {
     expect(sessionSocketOptions('abc123')).toEqual({
       transports: ['websocket'],
-      query: { session: 'abc123' },
       extraHeaders: { Cookie: 'session=abc123' },
     });
   });

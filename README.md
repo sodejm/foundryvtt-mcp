@@ -24,6 +24,12 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 - FoundryVTT server running with an active world
 - MCP-compatible AI client (Claude Desktop, Claude Code, VS Code, etc.)
 
+Native Socket.IO authentication is verified on FoundryVTT 14.369 for username
+lookup, world loading, and reconnects. Earlier versions are not qualified. The
+session travels only in the Cookie header; proxies must forward that header on
+WebSocket upgrades. Do not enable third-party Socket.IO debug logging on
+credentialed connections, because it can print connection options and headers.
+
 ### Recommended: Create a Dedicated API User
 
 It is recommended to create a separate FoundryVTT user account for the MCP server rather than using your own GM or player account. This provides better security and auditability.
