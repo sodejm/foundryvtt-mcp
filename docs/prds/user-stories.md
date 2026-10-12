@@ -77,8 +77,9 @@ Legacy log and system-health utilities require `FOUNDRY_API_KEY`. The unavailabl
 ## MCP resource URI stories
 
 All 9 advertised URIs are registered in `src/tools/resources.ts` and handled in
-`src/tools/handlers/resources.ts`. README and code agree on the surface. None
-have dedicated tests.
+`src/tools/handlers/resources.ts`. The rows below originated as an audit inventory;
+RU-6 now has serialization and pagination regression coverage in
+`src/foundry/__tests__/pagination-client.test.ts`.
 
 | ID | URI | Returns | Client method | Coverage |
 |---|---|---|---|---|
@@ -87,7 +88,7 @@ have dedicated tests.
 | RU-3 | `foundry://scenes` | real data | `getScenes()` | ❌ |
 | RU-4 | `foundry://scenes/current` | real data, graceful null | `getCurrentScene()` | ❌ |
 | RU-5 | `foundry://journals` | real data | `getJournals()` | ❌ |
-| RU-6 | `foundry://users` | real data | `getUsers()` | ❌ |
+| RU-6 | `foundry://users` | paginated ID, name, role, and online metadata; no private fields | `getCollectionPage('users')` | ✅ serialized bytes, immutable continuation, single GM, missing fields, and `get_users` compatibility |
 | RU-7 | `foundry://combat` | real data, graceful null | `getCombatState()` | ❌ |
 | RU-8 | `foundry://world/settings` | real data | `getWorldInfo()` | ❌ |
 | RU-9 | `foundry://system/diagnostics` | graceful stub when no API key | `diagnosticsClient.getSystemHealth()` | ❌ |

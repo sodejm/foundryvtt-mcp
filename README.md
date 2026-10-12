@@ -530,6 +530,13 @@ equivalents). For example, start at `foundry://actors?limit=25`. Consumers of th
 former unbounded arrays must migrate to `records` and follow every page. The
 singleton resources retain their existing fields and add `readMetadata`.
 
+User records expose only `id`, `name`, `documentType: "User"`, `active`, and
+`role` (when supplied by Foundry). Online status comes from the active-user IDs.
+Profile fields, passwords, authentication data, module flags, and unknown fields
+are excluded before pagination. Missing or invalid required IDs/names fail the
+read; a missing role is omitted. The user resource requires a native Socket.IO
+snapshot; the REST backend currently reports it as unsupported.
+
 ## Troubleshooting
 
 The connectivity and setup helpers ship in the source tree (not the published `bin`), so run them from a dev checkout:
