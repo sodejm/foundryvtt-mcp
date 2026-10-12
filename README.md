@@ -60,6 +60,9 @@ Or with npx:
 npx -y foundryvtt-mcp
 ```
 
+For an authenticated remote process under a dedicated Linux account, use the
+[remote STDIO hosting guide](docs/guides/remote-stdio.md).
+
 ### Client Configuration
 
 #### Claude Desktop / Claude Code
