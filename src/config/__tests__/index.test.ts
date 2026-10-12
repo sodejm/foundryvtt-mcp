@@ -198,6 +198,37 @@ describe('Config', () => {
     });
   });
 
+  describe('protected credential transport', () => {
+    it.each([
+      'http://localhost:30001',
+      'http://127.0.0.1:30001',
+      'http://[::1]:30001',
+      'https://remote.test/foundry',
+    ])('accepts %s for both endpoints', async (url) => {
+      process.env = { ...mockEnv, FOUNDRY_URL: url, FOUNDRY_REST_URL: url };
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.url).toBe(url);
+      expect(config.foundry.restUrl).toBe(url);
+    });
+    it.each([
+      'http://remote.test',
+      'http://192.168.1.100',
+      'http://127.1',
+      'http://2130706433',
+      'https://user:transport-secret@remote.test',
+    ])('rejects %s for either endpoint without printing supplied credentials', async (url) => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { config, resetConfig } = await import('../index.js');
+      for (const key of ['FOUNDRY_URL', 'FOUNDRY_REST_URL']) {
+        process.env = { ...mockEnv, [key]: url };
+        resetConfig();
+        expect(() => config.foundry.url).toThrow();
+      }
+      expect(JSON.stringify(errors.mock.calls)).not.toContain('transport-secret');
+    });
+  });
+
   describe('type conversion', () => {
     it('should convert string numbers to numbers', async () => {
       process.env = {

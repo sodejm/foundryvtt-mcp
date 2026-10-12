@@ -11,6 +11,7 @@
 import axios from 'axios';
 import type { ManagerOptions, SocketOptions } from 'socket.io-client';
 import { io } from 'socket.io-client';
+import { assertProtectedCredentialTransport } from '../utils/credential-transport.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -132,24 +133,7 @@ export async function authenticateFoundry(
   user: string,
   password: string,
 ): Promise<{ session: string; userId: string }> {
-  // Warn when credentials are sent over plaintext HTTP to a non-localhost host
-  try {
-    const parsed = new URL(baseUrl);
-    // new URL('http://[::1]').hostname returns the bracketed form '[::1]';
-    // strip IPv6 brackets so loopback comparison is uniform.
-    const host = parsed.hostname.replace(/^\[|\]$/g, '');
-    const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-    if (parsed.protocol === 'http:' && !isLocalhost) {
-      logger.warn(
-        'WARNING: Connecting to a non-localhost host over plain HTTP. ' +
-          'Your password will be transmitted in plaintext. ' +
-          'Use HTTPS for non-local FoundryVTT instances.',
-        { host: parsed.hostname },
-      );
-    }
-  } catch {
-    // URL already validated by config; ignore parse errors here
-  }
+  assertProtectedCredentialTransport(baseUrl);
 
   // Step 1: Get session cookie
   const session = await getSessionCookie(baseUrl);
@@ -185,6 +169,7 @@ export async function authenticateFoundry(
       // letting axios throw on it would surface a bare
       // "Request failed with status code 401" instead (#206).
       validateStatus: (status) => status === 200 || status === 302 || status === 401,
+      maxRedirects: 0,
     },
   );
 

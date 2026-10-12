@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
+import { assertProtectedCredentialTransport } from '../utils/credential-transport.js';
 import type { Capability, CapabilityStatus } from './capabilities.js';
 import type { CompendiumSearchParams } from './client.js';
 import type { CompendiumSearchEntry } from './types.js';
@@ -250,7 +251,7 @@ export class CompendiumRestAdapter {
 }
 
 function normalizeConfig(options: CompendiumRestAdapterOptions): AdapterConfig | null {
-  const baseUrl = options.baseUrl?.trim();
+  const baseUrl = options.baseUrl;
   const clientId = options.clientId?.trim();
   const apiKey = options.apiKey?.trim();
   if (!baseUrl || !clientId || !apiKey) {
@@ -259,6 +260,7 @@ function normalizeConfig(options: CompendiumRestAdapterOptions): AdapterConfig |
 
   let url: URL;
   try {
+    assertProtectedCredentialTransport(baseUrl);
     url = new URL(baseUrl);
   } catch {
     return null;

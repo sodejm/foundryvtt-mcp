@@ -9,6 +9,10 @@
  */
 
 import { z } from 'zod';
+import {
+  CREDENTIAL_TRANSPORT_ERROR,
+  hasProtectedCredentialTransport,
+} from '../utils/credential-transport.js';
 
 /**
  * Zod schema for validating server configuration
@@ -26,14 +30,7 @@ const ConfigSchema = z.object({
     url: z
       .string()
       .url('Invalid FoundryVTT URL - must include protocol (http:// or https://)')
-      .refine((url) => {
-        try {
-          const parsed = new URL(url);
-          return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-        } catch {
-          return false;
-        }
-      }, 'URL must use http:// or https:// protocol')
+      .refine(hasProtectedCredentialTransport, CREDENTIAL_TRANSPORT_ERROR)
       .refine((url) => {
         try {
           const parsed = new URL(url);
@@ -53,20 +50,7 @@ const ConfigSchema = z.object({
     restUrl: z
       .string()
       .url()
-      .refine((value) => {
-        try {
-          const url = new URL(value);
-          return (
-            ['http:', 'https:'].includes(url.protocol) &&
-            !url.username &&
-            !url.password &&
-            !url.search &&
-            !url.hash
-          );
-        } catch {
-          return false;
-        }
-      }, 'REST relay URL must use HTTP or HTTPS without credentials, query, or fragment')
+      .refine(hasProtectedCredentialTransport, CREDENTIAL_TRANSPORT_ERROR)
       .optional(),
     restApiKey: z.string().optional(),
     restClientId: z.string().optional(),
@@ -166,13 +150,15 @@ function loadConfig(): Config {
           console.error('  💡 URL Examples:');
           console.error('     • Local: http://localhost:30000');
           console.error('     • Reverse Proxy: https://foundry.example.com');
-          console.error('     • Network IP: http://192.168.1.100:30000');
+          console.error('     • Network IP: https://192.168.1.100:30000');
           console.error('     • Custom Port: https://foundry.example.com:8443');
         }
       });
       console.error('\n📋 Configuration Help:');
       console.error('  • Check your environment variables and .env file');
-      console.error('  • Ensure FOUNDRY_URL includes protocol (http:// or https://)');
+      console.error(
+        '  • Use HTTPS for remote endpoints; HTTP is allowed only on explicit loopback hosts',
+      );
       console.error('  • For setup guidance, see: SETUP_GUIDE.md');
       console.error('  • Run the setup wizard: npm run setup');
     }

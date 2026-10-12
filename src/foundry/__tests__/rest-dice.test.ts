@@ -70,6 +70,8 @@ describe('bounded native dice transport', () => {
   });
 
   it.each([
+    { baseUrl: 'http://remote.test' },
+    { baseUrl: 'http://127.1' },
     { baseUrl: 'not-a-url' },
     { baseUrl: 'file:///fixture' },
     { baseUrl: 'http://user@localhost:3010' },

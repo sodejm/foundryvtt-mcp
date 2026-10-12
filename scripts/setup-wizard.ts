@@ -7,6 +7,7 @@
  * to reduce setup friction and improve the onboarding experience.
  */
 
+import { assertProtectedCredentialTransport, CREDENTIAL_TRANSPORT_ERROR, hasProtectedCredentialTransport } from '../src/utils/credential-transport.js';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -147,14 +148,13 @@ class SetupWizard {
     console.log('For remote setups, you\'ll need the full URL including protocol.');
     console.log('Examples:');
     console.log('  • https://foundry.example.com (reverse proxy with HTTPS)');
-    console.log('  • http://foundry.example.com (reverse proxy with HTTP)');
     console.log('  • https://my-server.com:8443 (custom port with HTTPS)');
-    console.log('  • http://192.168.1.100:30000 (local network IP)\n');
+    console.log('  • https://192.168.1.100:30000 (local network IP)\n');
 
     const remoteUrl = await this.question('🌐 Enter your remote FoundryVTT URL: ');
     
     if (!this.isValidUrl(remoteUrl)) {
-      throw new Error('Invalid URL format. Please include protocol (http:// or https://)');
+      throw new Error(CREDENTIAL_TRANSPORT_ERROR);
     }
 
     // Validate it's likely a remote URL
@@ -175,13 +175,13 @@ class SetupWizard {
     console.log('Examples:');
     console.log('  • http://localhost:30000 (local development)');
     console.log('  • https://foundry.example.com (reverse proxy)');
-    console.log('  • http://192.168.1.100:30000 (network IP)');
+    console.log('  • https://192.168.1.100:30000 (network IP)');
     console.log('  • https://my-foundry.com:8443 (custom port)\n');
 
     const customUrl = await this.question('🌐 Enter your FoundryVTT URL: ');
     
     if (!this.isValidUrl(customUrl)) {
-      throw new Error('Invalid URL format. Please include protocol (http:// or https://)');
+      throw new Error(CREDENTIAL_TRANSPORT_ERROR);
     }
 
     this.config.foundryUrl = customUrl.trim();
@@ -198,10 +198,12 @@ class SetupWizard {
       throw new Error('FoundryVTT URL not configured');
     }
 
+    assertProtectedCredentialTransport(this.config.foundryUrl);
     console.log(`Testing connection to ${this.config.foundryUrl}...`);
     
     try {
       const response = await axios.get(this.config.foundryUrl, { 
+        maxRedirects: 0,
         timeout: 5000,
         validateStatus: () => true // Accept any status code
       });
@@ -214,7 +216,7 @@ class SetupWizard {
         return false;
       }
     } catch (error) {
-      console.log(`❌ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}\n`);
+      console.log('❌ Connection failed. Check the endpoint and its HTTPS configuration.\n');
       return false;
     }
   }
@@ -286,6 +288,7 @@ class SetupWizard {
       throw new Error('FoundryVTT URL not configured');
     }
 
+    assertProtectedCredentialTransport(this.config.foundryUrl);
     console.log('Testing authentication...');
 
     try {
@@ -295,6 +298,7 @@ class SetupWizard {
           headers: {
             'x-api-key': this.config.apiKey
           },
+          maxRedirects: 0,
           timeout: 5000
         });
 
@@ -315,7 +319,7 @@ class SetupWizard {
           throw new Error('REST API endpoints not found - ensure the module is installed and enabled');
         }
       }
-      throw new Error(`Authentication test failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error('Authentication test failed. Check the endpoint and its HTTPS configuration.');
     }
   }
 
@@ -421,7 +425,9 @@ class SetupWizard {
 
   private async testUrl(url: string): Promise<boolean> {
     try {
+      assertProtectedCredentialTransport(url);
       const response = await axios.get(url, { 
+        maxRedirects: 0,
         timeout: 2000,
         validateStatus: () => true 
       });
@@ -432,12 +438,7 @@ class SetupWizard {
   }
 
   private isValidUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch {
-      return false;
-    }
+    return hasProtectedCredentialTransport(url);
   }
 
   private updateEnvVariable(content: string, key: string, value: string): string {
