@@ -58,25 +58,31 @@ describe('CacheService', () => {
   });
 
   describe('LRU Eviction', () => {
-    it('should evict least recently used entries when max size exceeded', async () => {
-      cache.set('key1', 'value1');
-      // Small delay to ensure different timestamps
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      cache.set('key2', 'value2');
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      cache.set('key3', 'value3');
+    it('should evict least recently used entries when max size exceeded', () => {
+      let now = 1000;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        cache.set('key1', 'value1');
+        now += 1;
+        cache.set('key2', 'value2');
+        now += 1;
+        cache.set('key3', 'value3');
 
-      // Access key1 and key3 to make them recently used
-      cache.get('key1');
-      cache.get('key3');
+        // Access key1 and key3 after key2 to make them recently used.
+        now += 1;
+        cache.get('key1');
+        cache.get('key3');
 
-      // Adding key4 should evict key2 (least recently used)
-      cache.set('key4', 'value4');
+        // Adding key4 should evict key2 (least recently used).
+        cache.set('key4', 'value4');
 
-      expect(cache.get('key1')).toBe('value1'); // Still there
-      expect(cache.get('key2')).toBeUndefined(); // Evicted
-      expect(cache.get('key3')).toBe('value3'); // Still there
-      expect(cache.get('key4')).toBe('value4'); // New entry
+        expect(cache.get('key1')).toBe('value1');
+        expect(cache.get('key2')).toBeUndefined();
+        expect(cache.get('key3')).toBe('value3');
+        expect(cache.get('key4')).toBe('value4');
+      } finally {
+        clock.mockRestore();
+      }
     });
   });
 

@@ -512,6 +512,12 @@ function projectWorldData(source: WorldData, user: WorldUser, surface: ReadSurfa
     .map((message) => {
       const result = cloneValue(message);
       result.user = message.author ?? message.user;
+      if (user.role < GAMEMASTER_ROLE) {
+        result.content = redactHtmlSecrets(result.content);
+        if (typeof result.flavor === 'string') {
+          result.flavor = redactHtmlSecrets(result.flavor);
+        }
+      }
       return result;
     });
   const ownUser = sanitizeUser(
@@ -687,6 +693,7 @@ export class FoundryClient {
   private refreshBuffer: RefreshBuffer | null = null;
   private readonly pendingWorldRequests = new Set<(error: Error) => void>();
   private readonly callerContext = new CallerContextStorage();
+  private readonly callerSessionValid = new WeakMap<AuthorizedCallerState, () => boolean>();
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -774,7 +781,7 @@ export class FoundryClient {
 
   private requireDelegatedState(): AuthorizedCallerState {
     const state = this.callerContext.getStore();
-    if (!state || !this.connectionIsLive()) {
+    if (!state || !this.connectionIsLive() || this.callerSessionValid.get(state)?.() !== true) {
       throw new CallerAuthorizationError();
     }
     return state;
@@ -899,6 +906,13 @@ export class FoundryClient {
       }
       throw new CallerAuthorizationError();
     }
+    const socket = this.socket;
+    const generation = this.socketGeneration;
+    const epoch = this.socketEpoch;
+    this.callerSessionValid.set(
+      state,
+      () => socket !== null && this.isCurrentSocket(socket, generation, epoch),
+    );
     return await this.callerContext.run(state, operation);
   }
 
@@ -981,7 +995,7 @@ export class FoundryClient {
         if (settled || !this.isCurrentSocket(socket, generation, epoch)) {
           return;
         }
-        if (!data?.userId) {
+        if (typeof data?.userId !== 'string' || data.userId.trim().length === 0) {
           fail(new Error('Authentication failed — session event returned no userId'));
           return;
         }
@@ -1171,8 +1185,11 @@ export class FoundryClient {
     this.refreshInFlight = null;
     this.refreshBuffer = null;
     this.resetPaginationSession();
-    this._isConnected = true;
+    this._isConnected = this.socketUserId !== null;
     this.worldDataStale = this.worldData !== null;
+    if (!this._isConnected) {
+      return;
+    }
     void this.refreshWorldDataInternal().catch((error: unknown) => {
       logger.warn('Automatic world snapshot recovery failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -1196,17 +1213,20 @@ export class FoundryClient {
   };
 
   private onSocketSession = (data: { userId?: string } | null): void => {
-    if (!data?.userId || data.userId === this.socketUserId) {
+    const userId =
+      typeof data?.userId === 'string' && data.userId.trim().length > 0 ? data.userId : null;
+    if (userId !== null && userId === this.socketUserId) {
       return;
     }
-    this.socketUserId = data.userId;
+    this.socketUserId = userId;
+    this._isConnected = userId !== null && this.socket?.connected === true;
     this.socketEpoch += 1;
     this.cancelWorldRequests(new Error('Authenticated socket session changed'));
     this.refreshInFlight = null;
     this.refreshBuffer = null;
     this.rotateReadSession();
     this.clearSocketSnapshot();
-    if (this.socket?.connected) {
+    if (this._isConnected) {
       void this.refreshWorldDataInternal().catch((error: unknown) => {
         logger.warn('World snapshot load after session change failed', {
           error: error instanceof Error ? error.message : String(error),
@@ -1431,8 +1451,8 @@ export class FoundryClient {
 
   private async refreshWorldDataInternal(): Promise<void> {
     const socket = this.socket;
-    if (!socket?.connected) {
-      throw new Error('Not connected — cannot refresh world data');
+    if (!socket?.connected || !this._isConnected || !this.socketUserId) {
+      throw new Error('An authenticated Socket.IO connection is required to refresh world data');
     }
     const generation = this.socketGeneration;
     const epoch = this.socketEpoch;
@@ -2242,9 +2262,9 @@ export class FoundryClient {
         'Write operations are disabled. Set FOUNDRY_WRITE_ENABLED=true to allow game-state mutation.',
       );
     }
-    if (!this.socket?.connected) {
+    if (!this.socket?.connected || !this._isConnected || !this.socketUserId) {
       throw new Error(
-        'Write operations require an active Socket.IO connection to FoundryVTT (username/password mode).',
+        'Write operations require an active authenticated Socket.IO connection to FoundryVTT (username/password mode).',
       );
     }
   }
