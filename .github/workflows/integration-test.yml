@@ -11,8 +11,37 @@ permissions:
   contents: read
 
 jobs:
+  pr-validation:
+    name: Verify PR credential isolation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify credential-free environment
+        run: |
+          for variable in $(compgen -e); do
+            if [[ "$variable" == FOUNDRY_* && -n "${!variable}" ]]; then
+              echo "::error::Foundry configuration must not be available to pull request code."
+              exit 1
+            fi
+          done
+          echo "Pull request validation has no Foundry credentials. Run live integration manually from reviewed main after merge." >> "$GITHUB_STEP_SUMMARY"
+
+  reject-untrusted-dispatch:
+    name: Reject untrusted live-test ref
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Live integration must be dispatched from reviewed main."
+          exit 1
+
   preflight:
     name: Check prepared FoundryVTT endpoint
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: foundry-integration
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
@@ -29,7 +58,6 @@ jobs:
           FOUNDRY_DICE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_DICE_TEST_CONTROL_URL }}
           FOUNDRY_ITEM_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ITEM_TEST_CONTROL_URL }}
           FOUNDRY_REST_TEST_FIXTURES_JSON: ${{ secrets.FOUNDRY_REST_TEST_FIXTURES_JSON }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           missing=false
           for required in FOUNDRY_TEST_URL FOUNDRY_TEST_USERNAME FOUNDRY_REST_URL FOUNDRY_REST_TEST_CONTROL_URL FOUNDRY_JOURNAL_TEST_CONTROL_URL FOUNDRY_ACTOR_TEST_CONTROL_URL FOUNDRY_SCENE_TEST_CONTROL_URL FOUNDRY_DICE_TEST_CONTROL_URL FOUNDRY_ITEM_TEST_CONTROL_URL FOUNDRY_REST_TEST_FIXTURES_JSON; do
@@ -43,50 +71,52 @@ jobs:
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "See the integration guide for the prepared disposable world, relay, controllers and scoped-key fixtures. FOUNDRY_TEST_PASSWORD may be empty." >> "$GITHUB_STEP_SUMMARY"
-            if [ "$EVENT_NAME" = workflow_dispatch ]; then
-              echo "::error::The prepared live-test endpoint is not configured."
-              exit 1
-            fi
+            echo "::error::The prepared live-test endpoint is not configured."
+            exit 1
           fi
 
   integration:
     name: Integration tests
     needs: preflight
-    if: needs.preflight.outputs.configured == 'true'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.preflight.outputs.configured == 'true'
+    environment: foundry-integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
       group: foundryvtt-shared-test-world
       cancel-in-progress: false
-    env:
-      FOUNDRY_URL: ${{ secrets.FOUNDRY_TEST_URL }}
-      FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_TEST_USERNAME }}
-      FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_TEST_PASSWORD }}
-      FOUNDRY_TEST_WORLD_ID: test1world
-      FOUNDRY_REST_URL: ${{ secrets.FOUNDRY_REST_URL }}
-      FOUNDRY_REST_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_REST_TEST_CONTROL_URL }}
-      FOUNDRY_JOURNAL_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_JOURNAL_TEST_CONTROL_URL }}
-      FOUNDRY_ACTOR_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ACTOR_TEST_CONTROL_URL }}
-      FOUNDRY_SCENE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_SCENE_TEST_CONTROL_URL }}
-      FOUNDRY_DICE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_DICE_TEST_CONTROL_URL }}
-      FOUNDRY_ITEM_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ITEM_TEST_CONTROL_URL }}
-      FOUNDRY_REST_TEST_VERSION: 3.4.1
     steps:
-      - name: Configure fixture path
-        run: echo "FOUNDRY_REST_TEST_FIXTURES=$RUNNER_TEMP/foundry-rest-fixtures.json" >> "$GITHUB_ENV"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun x playwright install --with-deps chromium
-      - name: Write scoped-key fixtures
+      - run: bun run build
+      - name: Run live integration tests
         env:
+          FOUNDRY_URL: ${{ secrets.FOUNDRY_TEST_URL }}
+          FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_TEST_USERNAME }}
+          FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_TEST_PASSWORD }}
+          FOUNDRY_TEST_WORLD_ID: test1world
+          FOUNDRY_REST_URL: ${{ secrets.FOUNDRY_REST_URL }}
+          FOUNDRY_REST_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_REST_TEST_CONTROL_URL }}
+          FOUNDRY_JOURNAL_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_JOURNAL_TEST_CONTROL_URL }}
+          FOUNDRY_ACTOR_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ACTOR_TEST_CONTROL_URL }}
+          FOUNDRY_SCENE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_SCENE_TEST_CONTROL_URL }}
+          FOUNDRY_DICE_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_DICE_TEST_CONTROL_URL }}
+          FOUNDRY_ITEM_TEST_CONTROL_URL: ${{ secrets.FOUNDRY_ITEM_TEST_CONTROL_URL }}
+          FOUNDRY_REST_TEST_VERSION: 3.4.1
           FOUNDRY_REST_TEST_FIXTURES_JSON: ${{ secrets.FOUNDRY_REST_TEST_FIXTURES_JSON }}
         run: |
-          bun -e 'import { writeFileSync } from "node:fs"; JSON.parse(process.env.FOUNDRY_REST_TEST_FIXTURES_JSON); writeFileSync(process.env.FOUNDRY_REST_TEST_FIXTURES, process.env.FOUNDRY_REST_TEST_FIXTURES_JSON, { mode: 0o600 });'
-      - run: bun run build
-      - run: bun run test:integration
+          export FOUNDRY_REST_TEST_FIXTURES="$RUNNER_TEMP/foundry-rest-fixtures.json"
+          trap 'rm -f -- "$FOUNDRY_REST_TEST_FIXTURES"' EXIT
+          bun -e 'import { writeFileSync } from "node:fs"; try { JSON.parse(process.env.FOUNDRY_REST_TEST_FIXTURES_JSON); } catch { console.error("Invalid scoped-key fixture JSON."); process.exit(1); } writeFileSync(process.env.FOUNDRY_REST_TEST_FIXTURES, process.env.FOUNDRY_REST_TEST_FIXTURES_JSON, { mode: 0o600 });'
+          unset FOUNDRY_REST_TEST_FIXTURES_JSON
+          bun run test:integration
       - name: Remove scoped-key fixtures
         if: always()
-        run: rm -f -- "$FOUNDRY_REST_TEST_FIXTURES"
+        run: rm -f -- "$RUNNER_TEMP/foundry-rest-fixtures.json"
