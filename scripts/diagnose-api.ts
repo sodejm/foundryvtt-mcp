@@ -6,6 +6,7 @@
  */
 
 import axios from 'axios';
+import { assertProtectedCredentialTransport } from '../src/utils/credential-transport.js';
 import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
@@ -29,6 +30,7 @@ async function testEndpoint(
   data?: any,
   authRequired: boolean = true
 ): Promise<TestResult> {
+  assertProtectedCredentialTransport(FOUNDRY_URL);
   const url = `${FOUNDRY_URL}${endpoint}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -47,13 +49,14 @@ async function testEndpoint(
       headers,
       data,
       timeout: 10000,
+      maxRedirects: 0,
       validateStatus: () => true // Don't throw on HTTP error codes
     });
 
     return {
       endpoint,
       method,
-      status: response.status < 400 ? 'PASS' : 'FAIL',
+      status: response.status < 300 ? 'PASS' : 'FAIL',
       statusCode: response.status,
       response: response.data,
       authRequired
@@ -63,13 +66,14 @@ async function testEndpoint(
       endpoint,
       method,
       status: 'FAIL',
-      error: error instanceof Error ? error.message : String(error),
+      error: 'Request failed; check the endpoint and its HTTPS configuration.',
       authRequired
     };
   }
 }
 
 async function runDiagnostics() {
+  assertProtectedCredentialTransport(FOUNDRY_URL);
   console.log('🔍 FoundryVTT REST API Module Diagnostics\n');
   
   console.log('📋 Configuration:');

@@ -81,6 +81,8 @@ describe('CompendiumRestAdapter', () => {
     for (const value of [
       new CompendiumRestAdapter({}),
       adapter({ baseUrl: 'ftp://relay.example.test' }),
+      adapter({ baseUrl: 'http://relay.example.test' }),
+      adapter({ baseUrl: 'http://127.1' }),
       adapter({ baseUrl: 'https://user:pass@relay.example.test' }),
       adapter({ baseUrl: 'https://relay.example.test?key=secret' }),
       adapter({ baseUrl: 'https://relay.example.test/#fragment' }),
@@ -97,6 +99,7 @@ describe('CompendiumRestAdapter', () => {
       );
     }
     expect(axiosMocks.get).not.toHaveBeenCalled();
+    expect(axiosMocks.create).not.toHaveBeenCalled();
   });
 
   it('probes authenticated search and entity reading with bounded transport settings', async () => {

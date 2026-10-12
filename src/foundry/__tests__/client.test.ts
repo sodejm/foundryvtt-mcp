@@ -80,6 +80,43 @@ describe('FoundryClient', () => {
     });
   });
 
+  describe('credential transport boundaries', () => {
+    it.each([
+      { apiKey: 'private-key' },
+      { username: 'gm', password: 'private-password' },
+    ])('rejects remote HTTP before client creation for %j', (credentials) => {
+      expect(() => new FoundryClient({ baseUrl: 'http://remote.test', ...credentials })).toThrow(
+        'HTTPS',
+      );
+      expect(mockAxios.create).not.toHaveBeenCalled();
+    });
+    it('checks the effective request URL before adding credentials and disables redirect overrides', async () => {
+      const actualAxios = (await vi.importActual<typeof import('axios')>('axios')).default;
+      mockAxios.getUri.mockImplementation(actualAxios.getUri);
+      new FoundryClient({ baseUrl: 'https://remote.test/foundry', apiKey: 'private-key' });
+      const intercept = mockAxiosInstance.interceptors.request.use.mock.calls[0][0];
+      for (const request of [
+        { url: 'http://remote.test/steal' },
+        { baseURL: 'http://remote.test', url: '/steal' },
+        { baseURL: 'http://localhost', url: '//remote.test/steal' },
+        { url: 'http://127.1/steal' },
+      ]) {
+        const config = { baseURL: 'https://remote.test/foundry', ...request, headers: {} };
+        expect(() => intercept(config)).toThrow('HTTPS');
+        expect(config.headers).toEqual({});
+      }
+      const request = intercept({
+        baseURL: 'https://remote.test/foundry',
+        url: '/actors',
+        params: { query: 'test' },
+        headers: {},
+        maxRedirects: 3,
+      });
+      expect(request.headers['x-api-key']).toBe('private-key');
+      expect(request.maxRedirects).toBe(0);
+    });
+  });
+
   describe('testConnection', () => {
     it.each([
       { username: 'gm', password: 'secret' },

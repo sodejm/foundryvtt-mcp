@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance } from 'axios';
 import { z } from 'zod';
+import { assertProtectedCredentialTransport } from '../utils/credential-transport.js';
 import {
   type DiceFormulaResult,
   MAX_DICE_PER_TERM,
@@ -56,6 +57,7 @@ export class DiceRestAdapter {
 
   constructor(private readonly options: DiceRestOptions) {
     try {
+      assertProtectedCredentialTransport(options.baseUrl);
       const url = new URL(options.baseUrl);
       if (
         !['http:', 'https:'].includes(url.protocol) ||

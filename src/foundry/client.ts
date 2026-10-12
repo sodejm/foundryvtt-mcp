@@ -10,6 +10,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
+import { assertProtectedCredentialTransport } from '../utils/credential-transport.js';
 import { logger } from '../utils/logger.js';
 import type {
   ActorItemListOutput,
@@ -701,9 +702,11 @@ export class FoundryClient {
     }
 
     try {
-      new URL(config.baseUrl);
+      assertProtectedCredentialTransport(config.baseUrl);
     } catch {
-      throw new Error(`Invalid baseUrl: ${config.baseUrl}`);
+      throw new Error(
+        'Invalid baseUrl: Foundry endpoints require HTTPS or an explicit loopback HTTP host.',
+      );
     }
 
     this.config = {
@@ -731,18 +734,24 @@ export class FoundryClient {
         'Content-Type': 'application/json',
         'User-Agent': 'FoundryMCP/0.2.0',
       },
-      maxRedirects: 3,
+      maxRedirects: 0,
       maxContentLength: 50 * 1024 * 1024,
       maxBodyLength: 50 * 1024 * 1024,
       validateStatus: (status) => status >= 200 && status < 300,
     });
 
-    if (this.config.apiKey) {
-      this.http.interceptors.request.use((reqConfig) => {
+    this.http.interceptors.request.use((reqConfig) => {
+      // Per-request overrides and absolute URLs must obey the same policy.
+      assertProtectedCredentialTransport(reqConfig.baseURL ?? this.config.baseUrl);
+      assertProtectedCredentialTransport(axios.getUri(reqConfig), true);
+      reqConfig.maxRedirects = 0;
+      if (this.config.apiKey) {
         reqConfig.headers['x-api-key'] = this.config.apiKey;
-        return reqConfig;
-      });
+      }
+      return reqConfig;
+    });
 
+    if (this.config.apiKey) {
       // REST mode has no socket to ask about liveness, so every request that
       // does happen doubles as the probe (#217). See `isConnected()`.
       this.http.interceptors.response.use(

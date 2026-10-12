@@ -72,7 +72,7 @@ FOUNDRY_PASSWORD=your_password
 
 **Network/IP:**
 ```env
-FOUNDRY_URL=http://192.168.1.100:30000
+FOUNDRY_URL=https://192.168.1.100:30000
 FOUNDRY_USERNAME=your_username
 FOUNDRY_PASSWORD=your_password
 ```
@@ -270,3 +270,9 @@ Once you have a working connection:
 ---
 
 **Need more help?** Check the main README or open an issue on GitHub.
+
+### Credential transport
+
+Remote Foundry and REST relay endpoints require HTTPS, including LAN addresses, Docker service names, and custom DNS names. HTTP is supported only for the explicit hosts `localhost`, `127.0.0.1`, and `[::1]`. Numeric IP aliases and other names resolving to loopback are rejected. URL credentials, query strings, and fragments are not supported in endpoint configuration.
+
+Credential-bearing requests do not follow redirects. Configure the final HTTPS endpoint directly, including any reverse proxy path prefix. WebSocket reconnects reuse the validated endpoint; WebSocket redirects fail closed. There is no insecure remote HTTP override.
