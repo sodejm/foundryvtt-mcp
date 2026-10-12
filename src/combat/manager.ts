@@ -138,7 +138,7 @@ export class CombatManager extends EventEmitter {
       combatant.initiative = total;
       results[combatant.name] = total;
 
-      logger.debug(`${combatant.name} rolled initiative: ${total} (${roll} + ${modifier})`);
+      logger.debug('Combat initiative rolled');
     }
 
     // Re-sort combatants by initiative
@@ -238,9 +238,7 @@ export class CombatManager extends EventEmitter {
       defeated: combatant.defeated,
     });
 
-    logger.info(
-      `${combatant.name} took ${damage} ${damageType || 'damage'}, HP: ${combatant.hp.current}/${combatant.hp.max}`,
-    );
+    logger.info('Combat damage applied');
 
     return combatant;
   }
@@ -261,9 +259,7 @@ export class CombatManager extends EventEmitter {
       combatant.defeated = false;
     }
 
-    logger.info(
-      `${combatant.name} healed for ${healing}, HP: ${combatant.hp.current}/${combatant.hp.max}`,
-    );
+    logger.info('Combat healing applied');
 
     return combatant;
   }
@@ -291,7 +287,7 @@ export class CombatManager extends EventEmitter {
         duration,
       });
 
-      logger.info(`Applied ${condition} to ${combatant.name}`);
+      logger.info('Combat condition applied');
     }
 
     return combatant;
@@ -310,7 +306,7 @@ export class CombatManager extends EventEmitter {
     const index = combatant.conditions.indexOf(condition);
     if (index > -1) {
       combatant.conditions.splice(index, 1);
-      logger.info(`Removed ${condition} from ${combatant.name}`);
+      logger.info('Combat condition removed');
     }
 
     return combatant;
@@ -337,16 +333,14 @@ export class CombatManager extends EventEmitter {
   }
 
   // Event Handlers
-  private handleCombatStart(event: CombatEvent): void {
-    logger.info(`Combat started with ${event.combat.combatants.length} combatants`);
+  private handleCombatStart(): void {
+    logger.info('Combat started');
   }
 
   private handleTurnStart(event: CombatEvent): void {
     const combatant = event.combat.currentCombatant;
     if (combatant) {
-      logger.info(
-        `Turn ${event.combat.turn + 1}, Round ${event.combat.round}: ${combatant.name}'s turn`,
-      );
+      logger.info('Combat turn started');
 
       // Set turn timer
       this.turnTimer = setTimeout(() => {
@@ -359,12 +353,12 @@ export class CombatManager extends EventEmitter {
     const combatant = event.combat.currentCombatant;
     if (combatant) {
       combatant.turnTaken = true;
-      logger.debug(`${combatant.name} ended their turn`);
+      logger.debug('Combat turn ended');
     }
   }
 
-  private handleRoundEnd(event: CombatEvent): void {
-    logger.info(`Round ${event.combat.round - 1} ended, starting Round ${event.combat.round}`);
+  private handleRoundEnd(): void {
+    logger.info('Combat round advanced');
   }
 
   // Helper Methods

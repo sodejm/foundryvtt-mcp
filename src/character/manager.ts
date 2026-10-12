@@ -73,7 +73,7 @@ export class CharacterManager extends EventEmitter {
       newSkills?: string[];
     } = {},
   ): Promise<CharacterAdvancement> {
-    logger.info(`Starting level up process for actor ${actorId}`);
+    logger.info('Starting actor level up');
 
     const actor = await this.foundryClient.getActor(actorId);
     const currentLevel = actor.level || 1;
@@ -109,7 +109,7 @@ export class CharacterManager extends EventEmitter {
     this.advancementHistory.push(advancement);
     this.emit('character_level_up', advancement);
 
-    logger.info(`${actor.name} leveled up from ${currentLevel} to ${newLevel}`);
+    logger.info('Actor level up completed');
     return advancement;
   }
 
@@ -154,7 +154,7 @@ export class CharacterManager extends EventEmitter {
       equipped?: boolean;
     },
   ): Promise<EquipmentTransaction> {
-    logger.info(`Adding ${itemData.name} to actor ${actorId}`);
+    logger.info('Adding actor equipment');
 
     const transaction: EquipmentTransaction = {
       actorId,
@@ -183,7 +183,7 @@ export class CharacterManager extends EventEmitter {
     this.equipmentHistory.push(transaction);
     this.emit('equipment_changed', transaction);
 
-    logger.info(`Equipped item ${itemId} on actor ${actorId}`);
+    logger.info('Actor equipment equipped');
     return transaction;
   }
 
@@ -206,7 +206,7 @@ export class CharacterManager extends EventEmitter {
     this.equipmentHistory.push(transaction);
     this.emit('equipment_changed', transaction);
 
-    logger.info(`Transferred item ${itemId} from ${fromActorId} to ${toActorId}`);
+    logger.info('Actor equipment transferred');
     return transaction;
   }
 
@@ -267,13 +267,9 @@ export class CharacterManager extends EventEmitter {
     if (resource.currentValue >= amount) {
       resource.currentValue -= amount;
       this.emit('resource_used', { resource, amountUsed: amount });
-      logger.info(
-        `${actorId} used ${amount} ${resourceName} (${resource.currentValue}/${resource.maxValue} remaining)`,
-      );
+      logger.info('Actor resource used');
     } else {
-      logger.warn(
-        `${actorId} attempted to use ${amount} ${resourceName} but only has ${resource.currentValue}`,
-      );
+      logger.warn('Actor resource use rejected');
     }
 
     return resource;
@@ -301,9 +297,7 @@ export class CharacterManager extends EventEmitter {
 
     if (restoredResources.length > 0) {
       this.emit('resources_restored', { actorId, restType, resources: restoredResources });
-      logger.info(
-        `Restored ${restoredResources.length} resources for ${actorId} after ${restType} rest`,
-      );
+      logger.info('Actor resources restored');
     }
 
     return restoredResources;

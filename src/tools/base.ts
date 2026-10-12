@@ -81,7 +81,7 @@ export abstract class BaseTool implements Tool {
    * Execute the tool with automatic validation
    */
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    logger.debug(`Executing tool: ${this.name}`, { args });
+    logger.debug('Executing tool', { tool: this.name });
 
     // Validate input arguments against schema
     this.validateArgs(args);
@@ -89,7 +89,7 @@ export abstract class BaseTool implements Tool {
     try {
       return await this.executeValidated(args, context);
     } catch (error) {
-      logger.error(`Tool execution failed: ${this.name}`, error);
+      logger.error('Tool execution failed', { tool: this.name });
 
       if (error instanceof McpError) {
         throw error;

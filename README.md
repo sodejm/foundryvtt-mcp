@@ -128,6 +128,14 @@ To configure manually, see the [Configuration Guide](docs/guides/configuration.m
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, or `error` (default: `info`) |
 | `FOUNDRY_TIMEOUT` | No | Request timeout in ms (default: `10000`) |
 
+All server diagnostics go to stderr; stdout is reserved for MCP JSON-RPC frames.
+Tool logs identify server-defined tool names and completion, rejection, or failure;
+unknown caller-supplied tool names are omitted.
+`LOG_LEVEL=debug` adds operation labels and allowlisted numeric metadata, such as
+counts and cache sizes. Logs omit tool arguments, document text, resource URIs,
+cache keys, credentials, and upstream error messages or stacks at every level.
+Use the caller-visible MCP response to investigate an individual request failure.
+
 ## Usage
 
 Ask your AI assistant things like:

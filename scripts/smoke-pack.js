@@ -10,7 +10,7 @@
  *   3. The tarball can be installed as a dependency in a fresh consumer
  *      project.
  *   4. `node node_modules/<pkg>/dist/index.js` from the consumer reaches the
- *      startup banner — same contract as smoke-test.js.
+ *      startup banner and exchanges MCP frames at default and debug log levels.
  *
  * Catches packaging-shape regressions that smoke-test.js cannot: smoke-test
  * runs against the source tree, where every file is present regardless of
@@ -20,7 +20,7 @@
  * crashes at startup with ERR_MODULE_NOT_FOUND only when consumers install it.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -33,14 +33,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyInstalledStdio } from './stdio-protocol-check.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 const pkgJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
-
-const BANNER = '🎲 FoundryVTT MCP Server starting...';
-const STARTUP_TIMEOUT_MS = 5000;
-const SIGKILL_GRACE_MS = 2000;
 
 const cleanupPaths = [];
 function registerCleanup(path) {
@@ -228,101 +225,13 @@ if (!documentIdSchema.safeParse('Actor00000000001').success ||
   console.log('✅ Documented TypeScript and runtime subpaths resolve from the installed package');
 }
 
-// ── 4. Spawn the installed server and wait for the banner ────────────────
-function runInstalledServer({ consumer, serverPath }) {
-  return new Promise((resolve) => {
-    const child = spawn('node', [serverPath], {
-      cwd: consumer,
-      env: {
-        ...process.env,
-        FOUNDRY_URL: 'http://127.0.0.1:1',
-        FOUNDRY_USERNAME: 'smoke',
-        FOUNDRY_PASSWORD: 'smoke',
-        LOG_LEVEL: 'error',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    let stdout = '';
-    let resolved = false;
-    let bannerSeen = false;
-
-    const finish = (success, message) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-
-      const stillAlive = success && child.exitCode === null && child.signalCode === null;
-
-      if (success && stillAlive) {
-        console.log(`✅ Pack smoke test passed: ${message}`);
-        terminate(0);
-        return;
-      }
-
-      console.error(`❌ Pack smoke test failed: ${message}`);
-      if (stderr) {
-        console.error('--- stderr ---');
-        console.error(stderr);
-      }
-      if (stdout) {
-        console.error('--- stdout ---');
-        console.error(stdout);
-      }
-      terminate(1);
-    };
-
-    const terminate = (exitCode) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        cleanupAll();
-        if (exitCode !== 0) process.exit(exitCode);
-        resolve();
-        return;
-      }
-      child.kill('SIGTERM');
-      const killTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill('SIGKILL');
-        }
-      }, SIGKILL_GRACE_MS);
-      child.once('exit', () => {
-        clearTimeout(killTimer);
-        cleanupAll();
-        if (exitCode !== 0) process.exit(exitCode);
-        resolve();
-      });
-    };
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-      if (!bannerSeen && stderr.includes(BANNER)) {
-        bannerSeen = true;
-        finish(true, 'banner observed; process alive');
-      }
-    });
-    child.on('exit', (code, signal) => {
-      if (resolved) return;
-      finish(false, `server exited prematurely (code=${code}, signal=${signal})`);
-    });
-    child.on('error', (err) => {
-      if (resolved) return;
-      finish(false, `failed to spawn server: ${err.message}`);
-    });
-
-    const timeout = setTimeout(() => {
-      if (resolved) return;
-      finish(false, `timed out after ${STARTUP_TIMEOUT_MS}ms waiting for banner`);
-    }, STARTUP_TIMEOUT_MS);
-  });
-}
-
 // ── Main ──────────────────────────────────────────────────────────────────
 validateFilesEntries();
 const tarball = packTarball();
 const installed = installInConsumer(tarball);
 verifyConsumerImports(installed);
-await runInstalledServer(installed);
+try {
+  await verifyInstalledStdio(installed);
+} finally {
+  cleanupAll();
+}

@@ -2,7 +2,7 @@
  * @fileoverview Centralized logging utility for FoundryVTT MCP Server
  *
  * This module provides a structured logging system with configurable log levels
- * and consistent formatting across the application. It respects the LOG_LEVEL
+ * and consistent stderr formatting across the application. It respects the LOG_LEVEL
  * environment variable for controlling verbosity.
  *
  * @version 0.1.0
@@ -10,6 +10,10 @@
  */
 
 import { config } from '../config/index.js';
+import { getAllTools } from '../tools/definitions.js';
+
+// Only server-defined identifiers may appear in diagnostic metadata.
+const diagnosticToolNames = new Set(getAllTools().map((tool) => tool.name));
 
 /**
  * Available log levels in order of severity
@@ -33,10 +37,10 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error';
  *
  * logger.info('Server starting...');
  * logger.error('Connection failed:', error);
- * logger.debug('Detailed debug info', { data: someObject });
+ * logger.debug('Cache entry accessed', { accessCount: 2 });
  * ```
  */
-class Logger {
+export class Logger {
   private logLevel: LogLevel;
   private levels: Record<LogLevel, number> = {
     debug: 0,
@@ -76,7 +80,52 @@ class Logger {
    */
   private formatMessage(level: LogLevel, message: string, meta?: unknown): string {
     const timestamp = new Date().toISOString();
-    const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
+    // Read only allowlisted own data properties. Never serialize caller objects,
+    // errors, getters, nested values, or request/response bodies.
+    const fields = [
+      'ttlSeconds',
+      'maxSize',
+      'age',
+      'accessCount',
+      'ttl',
+      'size',
+      'previousSize',
+      'cleaned',
+      'remaining',
+      'actors',
+      'scenes',
+      'items',
+      'replayedEvents',
+      'count',
+      'bufferSize',
+      'matches',
+      'status',
+      'activeUsers',
+      'recentErrors',
+      'totalErrors',
+      'healthScore',
+      'suggestionCount',
+    ];
+    const safe: Record<string, number | string> = {};
+    if (meta !== null && typeof meta === 'object') {
+      try {
+        const toolDescriptor = Object.getOwnPropertyDescriptor(meta, 'tool');
+        const tool = toolDescriptor && 'value' in toolDescriptor ? toolDescriptor.value : undefined;
+        if (typeof tool === 'string' && diagnosticToolNames.has(tool)) {
+          safe.tool = tool;
+        }
+        for (const field of fields) {
+          const descriptor = Object.getOwnPropertyDescriptor(meta, field);
+          const value = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            safe[field] = value;
+          }
+        }
+      } catch {
+        // Proxies and other unusual metadata must not break request handling.
+      }
+    }
+    const metaStr = Object.keys(safe).length ? ` ${JSON.stringify(safe)}` : '';
     return `[${timestamp}] ${level.toUpperCase()}: ${message}${metaStr}`;
   }
 
@@ -90,12 +139,12 @@ class Logger {
    * @param meta - Optional metadata object
    * @example
    * ```typescript
-   * logger.debug('Processing user request', { userId: '123', action: 'search' });
+   * logger.debug('Processing user request');
    * ```
    */
   debug(message: string, meta?: unknown): void {
     if (this.shouldLog('debug')) {
-      console.debug(this.formatMessage('debug', message, meta));
+      process.stderr.write(`${this.formatMessage('debug', message, meta)}\n`);
     }
   }
 
@@ -109,12 +158,12 @@ class Logger {
    * @param meta - Optional metadata object
    * @example
    * ```typescript
-   * logger.info('Server started successfully', { port: 3000 });
+   * logger.info('Server started successfully');
    * ```
    */
   info(message: string, meta?: unknown): void {
     if (this.shouldLog('info')) {
-      console.info(this.formatMessage('info', message, meta));
+      process.stderr.write(`${this.formatMessage('info', message, meta)}\n`);
     }
   }
 
@@ -128,12 +177,12 @@ class Logger {
    * @param meta - Optional metadata object
    * @example
    * ```typescript
-   * logger.warn('Deprecated API endpoint used', { endpoint: '/old-api' });
+   * logger.warn('Deprecated API endpoint used');
    * ```
    */
   warn(message: string, meta?: unknown): void {
     if (this.shouldLog('warn')) {
-      console.warn(this.formatMessage('warn', message, meta));
+      process.stderr.write(`${this.formatMessage('warn', message, meta)}\n`);
     }
   }
 
@@ -148,14 +197,12 @@ class Logger {
    * @example
    * ```typescript
    * logger.error('Database connection failed', error);
-   * logger.error('Invalid user input', { input: userData, validation: errors });
+   * logger.error('Invalid user input');
    * ```
    */
   error(message: string, error?: unknown): void {
     if (this.shouldLog('error')) {
-      const errorDetails =
-        error instanceof Error ? { message: error.message, stack: error.stack } : error;
-      console.error(this.formatMessage('error', message, errorDetails));
+      process.stderr.write(`${this.formatMessage('error', message, error)}\n`);
     }
   }
 }

@@ -51,11 +51,11 @@ export class ToolRegistry {
    */
   register(tool: Tool): void {
     if (this.tools.has(tool.name)) {
-      logger.warn(`Tool '${tool.name}' is already registered, replacing...`);
+      logger.warn('Replacing registered tool');
     }
 
     this.tools.set(tool.name, tool);
-    logger.debug(`Registered tool: ${tool.name}`);
+    logger.debug('Registered tool');
   }
 
   /**
@@ -127,7 +127,7 @@ export class ToolRegistry {
     }
 
     // TODO: Register other tools as they are converted
-    logger.info(`Registered ${this.tools.size} tools`);
+    logger.info('Tool registry initialized');
   }
 }
 

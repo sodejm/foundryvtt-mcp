@@ -34,7 +34,7 @@ export async function withToolError<T>(
       }
       throw new McpError(ErrorCode.InternalError, 'Delegated read unavailable');
     }
-    logger.error(`Failed to ${toolName}:`, error);
+    logger.error('Tool operation failed');
     throw new McpError(
       ErrorCode.InternalError,
       `Failed to ${toolName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
