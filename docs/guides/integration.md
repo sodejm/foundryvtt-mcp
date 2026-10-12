@@ -178,13 +178,14 @@ error. Service-identity reads may retain cached data after transport loss with `
 cursors are invalidated by disconnect/reconnect. REST modules must implement
 `/api/items/:id` for item details; unsupported routes produce their backend
 error. `/api/world` must identify the system/version for normalization; a 404
-yields unsupported economy and rejects rarity filtering. The live REST module
-3.4.1 lacks both item and world endpoints, so these endpoint contracts are
-validated with synthetic REST fixtures. This adds no fallback to owned items
-or compendiums. Socket pagination
-requires a GM session in service-identity mode. Delegated socket reads instead
+yields unsupported economy and rejects rarity filtering. The maintained module
+and relay forks `3.4.2-mcp.1` implement these endpoints; their exact revisions
+and local Foundry 14 results are in [the validation record](../local-rest-snapshots.md).
+Socket pagination accepts permission-filtered Player/Trusted sessions in
+service-identity mode; Assistant/GM sessions require privileged opt-in. Delegated socket reads instead
 require trusted caller context and a fresh permission-filtered view. REST
-pagination uses only the authenticated backend's visible collection.
+pagination requires a scoped key bound to a live Foundry user with `entity:read`.
+The backend filters by that user's OBSERVER permission before totals or paging.
 
 The text block remains available for existing MCP consumers. Prefer the typed
 `structuredContent` fields and validate against the advertised output schema;
@@ -207,8 +208,9 @@ type/rarity selectors 128; empty cursors are invalid.
 
 The server sorts by NFKC-normalized, lowercased name, document type and finally
 case-sensitive document ID. Pages share an immutable snapshot with an exact
-`total`, `snapshotId` and five-minute `expiresAt`. In service-identity mode, writes
-during a traversal do not change its records. Delegated reads revalidate the
+`total`, `snapshotId` and five-minute `expiresAt`. Socket service-identity writes
+during a traversal do not change its records. REST mutations and permission
+changes invalidate backend snapshots; MCP revalidates cached pages before returning them. Delegated reads revalidate the
 authorized view on every continuation and invalidate the cursor when it changes.
 Start without a cursor to read the latest view.
 Corrupt, expired, evicted or context-mismatched cursors fail; start a new

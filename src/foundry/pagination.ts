@@ -62,6 +62,7 @@ interface Snapshot<T> {
   expiresAt: number;
   bytes: number;
   readMetadata: WorldReadMetadata;
+  validate?: () => Promise<void>;
 }
 
 export interface SnapshotPaginatorOptions {
@@ -125,12 +126,54 @@ export class SnapshotPaginator {
     this.cachedBytes = 0;
   }
 
+  /** Recheck backend authorization before returning a cached REST page. */
+  async validateSnapshot(
+    snapshotId: string,
+    validate?: () => Promise<void>,
+    requireValidation = false,
+    validatedReadMetadata?: () => WorldReadMetadata,
+  ): Promise<WorldReadMetadata | undefined> {
+    const snapshot = this.snapshots.get(snapshotId);
+    if (!snapshot) {
+      throw new PaginationCursorError('Pagination snapshot is no longer available');
+    }
+    if (validate) {
+      snapshot.validate = validate;
+    }
+    try {
+      if (requireValidation && !snapshot.validate) {
+        throw new PaginationCursorError(
+          'REST pagination requires a backend snapshotId for continuation',
+        );
+      }
+      await snapshot.validate?.();
+      if (this.snapshots.get(snapshotId) !== snapshot || snapshot.expiresAt <= this.now()) {
+        throw new PaginationCursorError(
+          'Pagination snapshot expired or was invalidated during validation',
+        );
+      }
+      if (snapshot.validate && validatedReadMetadata) {
+        // The backend has confirmed this frozen snapshot is still authorized and current.
+        snapshot.readMetadata = structuredClone(validatedReadMetadata());
+        return structuredClone(snapshot.readMetadata);
+      }
+      return undefined;
+    } catch (error) {
+      if (this.snapshots.get(snapshotId) === snapshot) {
+        this.snapshots.delete(snapshotId);
+        this.cachedBytes -= snapshot.bytes;
+      }
+      throw error;
+    }
+  }
+
   paginate<T>(
     records: readonly T[] | undefined,
     params: PaginationParams,
     context: unknown,
     readMetadataOrDefaultLimit?: WorldReadMetadata | number,
     defaultLimit = DEFAULT_PAGE_LIMIT,
+    maximumExpiresAt?: number,
   ): PaginationMetadata & { records: T[] } {
     validateBoundedText(params.cursor, 'cursor', MAX_CURSOR_LENGTH);
     const contextHash = this.hashContext(context);
@@ -200,6 +243,10 @@ export class SnapshotPaginator {
           `Pagination snapshot exceeds the maximum of ${MAX_SNAPSHOT_RECORDS} records`,
         );
       }
+      const expiresAt = Math.min(now + SNAPSHOT_TTL_MS, maximumExpiresAt ?? Infinity);
+      if (expiresAt <= now) {
+        throw new PaginationCursorError('Pagination snapshot expired during backend acquisition');
+      }
       const cloned = structuredClone([...records]);
       const bytes = Buffer.byteLength(JSON.stringify(cloned), 'utf8');
       if (bytes > MAX_SNAPSHOT_BYTES) {
@@ -213,7 +260,7 @@ export class SnapshotPaginator {
         records: cloned,
         limit,
         contextHash,
-        expiresAt: now + SNAPSHOT_TTL_MS,
+        expiresAt,
         bytes,
         readMetadata: currentMetadata,
       };

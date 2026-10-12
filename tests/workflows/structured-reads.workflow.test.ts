@@ -261,9 +261,16 @@ describe('built MCP CLI structured read workflow', () => {
       const args = { limit: 100, cursor: first.nextCursor! };
       const second = searchEnvelope.parse((await call(name, args)).structured);
       const replay = searchEnvelope.parse((await call(name, args)).structured);
-      expect(replay).toEqual({ ...second, readMetadata: {
-        ...second.readMetadata, respondedAt: replay.readMetadata.respondedAt,
-      } });
+      expect(replay).toEqual({ ...second, readMetadata: replay.readMetadata });
+      expect(replay.readMetadata).toMatchObject({
+        source: second.readMetadata.source,
+        sessionId: second.readMetadata.sessionId,
+        worldId: second.readMetadata.worldId,
+        freshness: 'current',
+      });
+      expect(replay.readMetadata.revision).toBeGreaterThan(second.readMetadata.revision);
+      expect(Date.parse(replay.readMetadata.observedAt))
+        .toBeGreaterThanOrEqual(Date.parse(second.readMetadata.observedAt));
       expect(Date.parse(replay.readMetadata.respondedAt))
         .toBeGreaterThanOrEqual(Date.parse(second.readMetadata.respondedAt));
       const third = searchEnvelope.parse((await call(name, { limit: 100, cursor: second.nextCursor! })).structured);
@@ -276,10 +283,16 @@ describe('built MCP CLI structured read workflow', () => {
       expect(fresh.readMetadata.revision).toBeGreaterThan(first.readMetadata.revision);
       expect(fresh.readMetadata.sessionId).toBe(first.readMetadata.sessionId);
       const superseded = searchEnvelope.parse((await call(name, args)).structured);
+      expect(superseded).toEqual({ ...second, readMetadata: superseded.readMetadata });
       expect(superseded.readMetadata).toMatchObject({
-        ...first.readMetadata, freshness: 'stale',
-        respondedAt: superseded.readMetadata.respondedAt,
+        source: first.readMetadata.source,
+        sessionId: first.readMetadata.sessionId,
+        worldId: first.readMetadata.worldId,
+        freshness: 'current',
       });
+      expect(superseded.readMetadata.revision).toBeGreaterThan(fresh.readMetadata.revision);
+      expect(Date.parse(superseded.readMetadata.observedAt))
+        .toBeGreaterThanOrEqual(Date.parse(fresh.readMetadata.observedAt));
     },
   );
 

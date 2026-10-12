@@ -1,0 +1,9 @@
+{
+  "foundry": "14.369",
+  "world": "test1world",
+  "passed": [
+    "SNAPSHOT_OVERSIZED",
+    "SNAPSHOT_OVERSIZED",
+    "SNAPSHOT_CACHE_FULL"
+  ]
+}

@@ -241,6 +241,31 @@ describe('FoundryClient', () => {
       expect(result).toEqual(mockWorld);
     });
 
+    it('normalizes the caller-bound REST world contract', async () => {
+      client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        apiKey: 'test-api-key',
+        retryAttempts: 0,
+      });
+      mockAxiosInstance.get.mockResolvedValue({
+        data: {
+          world: { id: 'test1world', title: 'Test World' },
+          system: { id: 'dnd5e', version: '6.0.6' },
+          foundryVersion: '14.369',
+        },
+      });
+      expect(await client.getWorldInfo()).toMatchObject({
+        id: 'test1world',
+        title: 'Test World',
+        system: 'dnd5e',
+        coreVersion: '14.369',
+        systemVersion: '6.0.6',
+      });
+      mockAxiosInstance.get.mockResolvedValue({ data: { world: {} } });
+      await expect(client.getWorldInfo()).rejects.toThrow('REST world identity is unavailable');
+    });
+
     it('should retry failed requests', async () => {
       client = new FoundryClient({
         allowPrivilegedAccount: true,

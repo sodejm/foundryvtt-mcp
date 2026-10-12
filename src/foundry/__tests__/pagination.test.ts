@@ -331,6 +331,19 @@ describe('SnapshotPaginator', () => {
     expect(() => validateBoundedText('x'.repeat(1025), 'query')).toThrow(/maximum length/);
   });
 
+  it('does not return a page when its cache is cleared during backend validation', async () => {
+    const paginator = new SnapshotPaginator();
+    const first = paginator.paginate([1, 2], { limit: 1 }, 'context');
+    await expect(
+      paginator.validateSnapshot(first.snapshotId, async () => {
+        paginator.clear();
+      }),
+    ).rejects.toThrow(/invalidated during validation/);
+    expect(() =>
+      paginator.paginate(undefined, { cursor: requireCursor(first.nextCursor) }, 'context'),
+    ).toThrow(/no longer available/);
+  });
+
   it('evicts the oldest snapshot once the entry cap is reached', () => {
     const paginator = new SnapshotPaginator({ secret: 'test-secret' });
     const oldest = paginator.paginate([0, 1], { limit: 1 }, { index: 0 });

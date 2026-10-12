@@ -1,0 +1,21 @@
+{
+  "target": "127.0.0.1:30001/test1world",
+  "foundry": "14.369",
+  "system": "dnd5e 6.0.6",
+  "passed": [
+    "player: tools, schemas, details, resources, current page freshness, authorized totals and 251 duplicate names",
+    "trusted: tools, schemas, details, resources, current page freshness, authorized totals and 251 duplicate names",
+    "assistant: tools, schemas, details, resources, current page freshness, authorized totals and 251 duplicate names",
+    "gm: tools, schemas, details, resources, current page freshness, authorized totals and 251 duplicate names",
+    "create: MCP tool and resource cursors reject invalidation",
+    "update: MCP tool and resource cursors reject invalidation",
+    "delete: MCP tool and resource cursors reject invalidation",
+    "permission revocation: cached MCP cursor denied, fresh totals and details updated",
+    "reconnect: cached MCP cursor denied",
+    "MCP exact traversal cardinality 0",
+    "MCP exact traversal cardinality 1",
+    "MCP exact traversal cardinality 100",
+    "MCP exact traversal cardinality 101",
+    "MCP exact traversal cardinality 251"
+  ]
+}
