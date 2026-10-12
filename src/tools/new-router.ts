@@ -59,7 +59,7 @@ export async function routeToolRequest(
 ) {
   assertToolAllowed(name, foundryClient);
   if (!foundryClient.isDelegatedMode?.()) {
-    logger.debug(`Routing tool request: ${name}`, { args });
+    logger.debug('Routing tool request', { tool: name });
   }
 
   const context: ToolContext = {
@@ -184,7 +184,7 @@ export async function routeResourceRequest(
 ) {
   assertResourceAllowed(uri, foundryClient);
   if (!foundryClient.isDelegatedMode?.()) {
-    logger.debug(`Routing resource request: ${uri}`);
+    logger.debug('Routing resource request');
   }
   return handleReadResource(uri, foundryClient, diagnosticsClient);
 }

@@ -203,8 +203,8 @@ async function getSystemDiagnosticsResource(diagnosticsClient: DiagnosticsClient
         },
       ],
     };
-  } catch (error) {
-    logger.debug('getSystemDiagnosticsResource: diagnostics unavailable', { error });
+  } catch {
+    logger.debug('getSystemDiagnosticsResource: diagnostics unavailable');
     return {
       contents: [
         {

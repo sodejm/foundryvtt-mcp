@@ -166,11 +166,11 @@ export class FoundryMCPServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
       if (!this.foundryClient.isDelegatedMode()) {
-        logger.info('Executing tool', { name, args });
+        logger.info('Executing tool', { tool: name });
       }
 
       try {
-        return (await this.runAsCaller(extra, () =>
+        const result = (await this.runAsCaller(extra, () =>
           routeToolRequest(
             name,
             args || {},
@@ -179,11 +179,17 @@ export class FoundryMCPServer {
             this.diagnosticSystem,
           ),
         )) as CallToolResult;
+        if (result.isError) {
+          logger.info('Tool execution rejected', { tool: name });
+        } else {
+          logger.info('Tool execution completed', { tool: name });
+        }
+        return result;
       } catch (error) {
         if (this.foundryClient.isDelegatedMode()) {
-          logger.error('Delegated tool execution failed');
+          logger.error('Delegated tool execution failed', { tool: name });
         } else {
-          logger.error('Tool execution failed:', error);
+          logger.error('Tool execution failed:', { tool: name });
         }
 
         if (error instanceof McpError) {
@@ -203,7 +209,7 @@ export class FoundryMCPServer {
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
       const { uri } = request.params;
       if (!this.foundryClient.isDelegatedMode()) {
-        logger.info('Reading resource', { uri });
+        logger.info('Reading resource');
       }
 
       try {
@@ -214,7 +220,7 @@ export class FoundryMCPServer {
         if (this.foundryClient.isDelegatedMode()) {
           logger.error('Delegated resource read failed');
         } else {
-          logger.error('Resource read failed:', error);
+          logger.error('Resource read failed:');
         }
 
         if (error instanceof McpError) {
@@ -270,7 +276,7 @@ export class FoundryMCPServer {
       logger.info('FoundryVTT MCP Server started successfully');
     } catch (error) {
       await this.foundryClient.disconnect();
-      logger.error('Failed to start server:', error);
+      logger.error('Failed to start server:');
       throw error;
     }
   }
@@ -282,8 +288,8 @@ export class FoundryMCPServer {
   async shutdown(): Promise<void> {
     try {
       await this.server.close();
-    } catch (error) {
-      logger.error('Error during shutdown:', error);
+    } catch {
+      logger.error('Error during shutdown:');
     } finally {
       await this.foundryClient.disconnect();
     }
@@ -317,20 +323,20 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  process.on('uncaughtException', (error) => {
-    logger.error('Uncaught exception:', error);
+  process.on('uncaughtException', () => {
+    logger.error('Uncaught exception:');
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled rejection at:', { promise, reason });
+  process.on('unhandledRejection', () => {
+    logger.error('Unhandled rejection at:');
     process.exit(1);
   });
 
   try {
     await server.start();
-  } catch (error) {
-    logger.error('Failed to start FoundryVTT MCP Server:', error);
+  } catch {
+    logger.error('Failed to start FoundryVTT MCP Server:');
     process.exit(1);
   }
 }
@@ -352,8 +358,8 @@ const isMainModule = (() => {
 })();
 
 if (isMainModule) {
-  main().catch((error) => {
-    logger.error('Server startup failed:', error);
+  main().catch(() => {
+    logger.error('Server startup failed:');
     process.exit(1);
   });
 }

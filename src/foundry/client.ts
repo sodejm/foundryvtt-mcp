@@ -770,8 +770,7 @@ export class FoundryClient {
       );
     }
 
-    const mode = this.config.apiKey ? 'REST API' : 'Socket.IO';
-    logger.info(`FoundryVTT client initialized (${mode} mode)`);
+    logger.info('FoundryVTT client initialized');
   }
 
   isDelegatedMode(): boolean {
@@ -939,7 +938,7 @@ export class FoundryClient {
         this._isConnected = true;
         logger.info('Connected to FoundryVTT via REST API module');
       } catch (error) {
-        logger.error('Failed to connect via REST API module:', error);
+        logger.error('Failed to connect via REST API module:');
         throw error;
       }
       return;
@@ -1123,18 +1122,10 @@ export class FoundryClient {
       if (applied) {
         this.noteSnapshotMutation();
       }
-      logger.debug(
-        applied
-          ? `Applied ${broadcast.action} ${broadcast.type} broadcast to cached worldData`
-          : `Ignored ${broadcast.action} ${broadcast.type} broadcast (not cached)`,
-      );
-    } catch (error) {
+      logger.debug('Document broadcast processed');
+    } catch {
       this.worldDataStale = true;
-      logger.warn('Failed to apply document broadcast to cached worldData', {
-        type: broadcast.type,
-        action: broadcast.action,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logger.warn('Failed to apply document broadcast to cached worldData');
     }
   };
 
@@ -1163,9 +1154,7 @@ export class FoundryClient {
 
     if (applyUserActivity(this.worldData, activity)) {
       this.noteSnapshotMutation();
-      logger.debug(
-        `User ${activity.userId} is now ${activity.active ? 'active' : 'inactive'} (userActivity)`,
-      );
+      logger.debug('User activity processed');
     }
   };
 
@@ -1199,16 +1188,14 @@ export class FoundryClient {
     if (!this._isConnected) {
       return;
     }
-    void this.refreshWorldDataInternal().catch((error: unknown) => {
-      logger.warn('Automatic world snapshot recovery failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    void this.refreshWorldDataInternal().catch(() => {
+      logger.warn('Automatic world snapshot recovery failed');
     });
     logger.info('FoundryVTT socket reconnected — refreshing cached world data');
   };
 
   /** Retain stale data during an outage and invalidate traversal and pending ACKs. */
-  private onSocketDisconnect = (reason?: unknown): void => {
+  private onSocketDisconnect = (): void => {
     this.socketEpoch += 1;
     this.cancelWorldRequests(new Error('Socket disconnected during world refresh'));
     this.refreshInFlight = null;
@@ -1216,9 +1203,7 @@ export class FoundryClient {
     this.resetPaginationSession();
     this._isConnected = false;
     this.worldDataStale = this.worldData !== null;
-    logger.warn('FoundryVTT socket disconnected — cached world data is now stale', {
-      reason: typeof reason === 'string' ? reason : undefined,
-    });
+    logger.warn('FoundryVTT socket disconnected — cached world data is now stale');
   };
 
   private onSocketSession = (data: { userId?: string } | null): void => {
@@ -1236,10 +1221,8 @@ export class FoundryClient {
     this.rotateReadSession();
     this.clearSocketSnapshot();
     if (this._isConnected) {
-      void this.refreshWorldDataInternal().catch((error: unknown) => {
-        logger.warn('World snapshot load after session change failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
+      void this.refreshWorldDataInternal().catch(() => {
+        logger.warn('World snapshot load after session change failed');
       });
     }
   };
@@ -3434,7 +3417,7 @@ export class FoundryClient {
       logger.debug('Connection test successful', { status: response.status });
       return true;
     } catch (error) {
-      logger.error('Failed to connect to FoundryVTT:', error);
+      logger.error('Failed to connect to FoundryVTT:');
       throw error;
     }
   }

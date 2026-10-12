@@ -81,7 +81,7 @@ export class DiagnosticsClient {
    */
   async getRecentLogs(params: LogSearchParams = {}): Promise<LogResponse> {
     try {
-      logger.debug('DiagnosticsClient | Getting recent logs', params);
+      logger.debug('DiagnosticsClient | Getting recent logs');
 
       const searchParams = new URLSearchParams();
 
@@ -114,7 +114,7 @@ export class DiagnosticsClient {
 
       return parsed;
     } catch (error) {
-      logger.error('DiagnosticsClient | Failed to get recent logs:', error);
+      logger.error('DiagnosticsClient | Failed to get recent logs:');
       throw new Error(
         `Failed to retrieve recent logs: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -150,7 +150,7 @@ export class DiagnosticsClient {
    */
   async searchLogs(params: LogPatternSearchParams): Promise<LogSearchResponse> {
     try {
-      logger.debug('DiagnosticsClient | Searching logs', params);
+      logger.debug('DiagnosticsClient | Searching logs');
 
       const searchParams = new URLSearchParams();
       searchParams.set('pattern', params.pattern);
@@ -169,14 +169,11 @@ export class DiagnosticsClient {
       const response = await this.foundryClient.get(url);
       const parsed = LogSearchResponseSchema.parse(response.data);
 
-      logger.debug('DiagnosticsClient | Search completed', {
-        pattern: params.pattern,
-        matches: parsed.matches,
-      });
+      logger.debug('DiagnosticsClient | Search completed', { matches: parsed.matches });
 
       return parsed;
     } catch (error) {
-      logger.error('DiagnosticsClient | Failed to search logs:', error);
+      logger.error('DiagnosticsClient | Failed to search logs:');
       throw new Error(
         `Failed to search logs: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -216,7 +213,7 @@ export class DiagnosticsClient {
 
       return parsed;
     } catch (error) {
-      logger.error('DiagnosticsClient | Failed to get system health:', error);
+      logger.error('DiagnosticsClient | Failed to get system health:');
       throw new Error(
         `Failed to retrieve system health: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -248,7 +245,7 @@ export class DiagnosticsClient {
    */
   async diagnoseErrors(timeframe: number = 3600): Promise<ErrorDiagnosis> {
     try {
-      logger.debug('DiagnosticsClient | Diagnosing errors', { timeframe });
+      logger.debug('DiagnosticsClient | Diagnosing errors');
 
       const searchParams = new URLSearchParams();
       searchParams.set('timeframe', timeframe.toString());
@@ -265,7 +262,7 @@ export class DiagnosticsClient {
 
       return parsed;
     } catch (error) {
-      logger.error('DiagnosticsClient | Failed to diagnose errors:', error);
+      logger.error('DiagnosticsClient | Failed to diagnose errors:');
       throw new Error(
         `Failed to diagnose errors: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -304,7 +301,7 @@ export class DiagnosticsClient {
 
       return response.logs;
     } catch (error) {
-      logger.error('DiagnosticsClient | Failed to get errors only:', error);
+      logger.error('DiagnosticsClient | Failed to get errors only:');
       throw new Error(
         `Failed to retrieve ${level} logs: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -334,8 +331,8 @@ export class DiagnosticsClient {
       return {
         status: health.status,
       };
-    } catch (error) {
-      logger.error('DiagnosticsClient | Failed to get health status:', error);
+    } catch {
+      logger.error('DiagnosticsClient | Failed to get health status:');
       return { status: 'critical' };
     }
   }
@@ -357,8 +354,8 @@ export class DiagnosticsClient {
     try {
       await this.foundryClient.get('/api/diagnostics/health');
       return true;
-    } catch (error) {
-      logger.debug('DiagnosticsClient | Diagnostics API not available:', error);
+    } catch {
+      logger.debug('DiagnosticsClient | Diagnostics API not available:');
       return false;
     }
   }

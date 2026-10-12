@@ -1,153 +1,160 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '../logger.js';
 
-// Mock the config module before importing logger
-vi.mock('../../config/index.js', () => ({
-  config: {
-    logLevel: 'info',
-  },
-}));
+vi.mock('../../config/index.js', () => ({ config: { logLevel: 'info' } }));
 
-class Logger {
-  private logLevel: 'debug' | 'info' | 'warn' | 'error';
-  private levels: Record<'debug' | 'info' | 'warn' | 'error', number> = {
-    debug: 0,
-    info: 1,
-    warn: 2,
-    error: 3,
-  };
-
-  constructor(logLevel: 'debug' | 'info' | 'warn' | 'error' = 'info') {
-    this.logLevel = logLevel;
-  }
-
-  private shouldLog(level: 'debug' | 'info' | 'warn' | 'error'): boolean {
-    return this.levels[level] >= this.levels[this.logLevel];
-  }
-
-  private formatMessage(
-    level: 'debug' | 'info' | 'warn' | 'error',
-    message: string,
-    meta?: any,
-  ): string {
-    const timestamp = new Date().toISOString();
-    const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
-    return `[${timestamp}] ${level.toUpperCase()}: ${message}${metaStr}`;
-  }
-
-  debug(message: string, meta?: any): void {
-    if (this.shouldLog('debug')) {
-      console.debug(this.formatMessage('debug', message, meta));
-    }
-  }
-
-  info(message: string, meta?: any): void {
-    if (this.shouldLog('info')) {
-      console.info(this.formatMessage('info', message, meta));
-    }
-  }
-
-  warn(message: string, meta?: any): void {
-    if (this.shouldLog('warn')) {
-      console.warn(this.formatMessage('warn', message, meta));
-    }
-  }
-
-  error(message: string, error?: any): void {
-    if (this.shouldLog('error')) {
-      const errorDetails =
-        error instanceof Error ? { message: error.message, stack: error.stack } : error;
-      console.error(this.formatMessage('error', message, errorDetails));
-    }
-  }
-}
-
-describe('Logger', () => {
-  let consoleSpy: any;
-
+describe('production logger', () => {
+  let output: string[];
   beforeEach(() => {
-    consoleSpy = {
-      debug: vi.spyOn(console, 'debug').mockImplementation(() => {}),
-      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
-      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
-      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+    output = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((message) => {
+      output.push(String(message));
+      return true;
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    'debug',
+    'info',
+    'warn',
+    'error',
+  ] as const)('routes all enabled levels to stderr at %s', (minimum) => {
+    const levels = ['debug', 'info', 'warn', 'error'] as const;
+    const logger = new Logger(minimum);
+    for (const level of levels) {
+      logger[level]('Operation completed');
+    }
+    expect(output).toHaveLength(4 - levels.indexOf(minimum));
+    expect(process.stdout.write).not.toHaveBeenCalled();
+    for (const line of output) {
+      expect(line).toMatch(
+        /^\[\d{4}-\d{2}-\d{2}T.*Z\] (DEBUG|INFO|WARN|ERROR): Operation completed\n$/,
+      );
+    }
+  });
+
+  it('defaults to info and preserves safe operational counts', () => {
+    const logger = new Logger();
+    logger.debug('Operation started');
+    logger.info('Operation completed', { count: 2, size: 4 });
+    expect(output).toHaveLength(1);
+    expect(output[0]).toContain('{"size":4,"count":2}');
+  });
+
+  it('omits arguments, credentials, nested values, errors, and unsafe scalars at debug', () => {
+    const logger = new Logger('debug');
+    const canary = 'private-journal-password-canary';
+    const metadata = {
+      tool: canary,
+      args: { content: canary },
+      password: canary,
+      key: canary,
+      uri: canary,
+      count: { body: canary },
+      size: canary,
+      age: Number.POSITIVE_INFINITY,
+      ttl: BigInt(9),
+      status: Number.NaN,
     };
+    for (const level of ['debug', 'info', 'warn', 'error'] as const) {
+      logger[level]('Operation failed', metadata);
+      logger[level]('Operation failed', new Error(canary));
+      logger[level]('Operation failed', canary);
+    }
+    expect(output).toHaveLength(12);
+    expect(output.join('')).not.toContain(canary);
+    expect(output.join('')).not.toContain('stack');
+    expect(output.join('')).not.toContain('{');
+    expect(process.stdout.write).not.toHaveBeenCalled();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it('identifies only tools from the server catalog', () => {
+    const logger = new Logger();
+    logger.info('Tool execution completed', { tool: 'get_world_summary', args: 'private' });
+    logger.error('Tool execution failed', { tool: 'caller-supplied-secret' });
+    expect(output[0]).toContain('{"tool":"get_world_summary"}');
+    expect(output[1]).not.toContain('{');
+    expect(output.join('')).not.toContain('private');
+    expect(output.join('')).not.toContain('caller-supplied-secret');
   });
 
-  describe('log level filtering', () => {
-    it('should log debug messages when log level is debug', () => {
-      const logger = new Logger('debug');
-      logger.debug('test message');
-      expect(consoleSpy.debug).toHaveBeenCalledOnce();
+  it('never invokes metadata getters, serializers, or inherited properties', () => {
+    const getter = vi.fn(() => {
+      throw new Error('private getter');
     });
-
-    it('should not log debug messages when log level is info', () => {
-      const logger = new Logger('info');
-      logger.debug('test message');
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
+    const serializer = vi.fn(() => {
+      throw new Error('private serializer');
     });
-
-    it('should log info messages when log level is info', () => {
-      const logger = new Logger('info');
-      logger.info('test message');
-      expect(consoleSpy.info).toHaveBeenCalledOnce();
-    });
-
-    it('should log warn messages when log level is warn', () => {
-      const logger = new Logger('warn');
-      logger.warn('test message');
-      expect(consoleSpy.warn).toHaveBeenCalledOnce();
-    });
-
-    it('should log error messages at all log levels', () => {
-      const logger = new Logger('debug');
-      logger.error('test message');
-      expect(consoleSpy.error).toHaveBeenCalledOnce();
-    });
+    const metadata = Object.create({ size: 99 });
+    Object.defineProperty(metadata, 'count', { get: getter });
+    metadata.toJSON = serializer;
+    metadata.args = metadata;
+    const logger = new Logger('debug');
+    expect(() => logger.debug('Operation completed', metadata)).not.toThrow();
+    expect(() =>
+      logger.error(
+        'Operation failed',
+        new Proxy(
+          {},
+          {
+            getOwnPropertyDescriptor() {
+              throw new Error('private proxy');
+            },
+          },
+        ),
+      ),
+    ).not.toThrow();
+    expect(getter).not.toHaveBeenCalled();
+    expect(serializer).not.toHaveBeenCalled();
+    expect(output.join('')).not.toContain('private');
+    expect(output.join('')).not.toContain('99');
   });
+});
 
-  describe('message formatting', () => {
-    it('should format messages with timestamp and level', () => {
-      const logger = new Logger('debug');
-      logger.info('test message');
-
-      const call = consoleSpy.info.mock.calls[0][0];
-      expect(call).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] INFO: test message$/);
-    });
-
-    it('should include metadata in formatted message', () => {
-      const logger = new Logger('debug');
-      const metadata = { key: 'value', number: 42 };
-      logger.info('test message', metadata);
-
-      const call = consoleSpy.info.mock.calls[0][0];
-      expect(call).toContain('test message');
-      expect(call).toContain(JSON.stringify(metadata));
-    });
-
-    it('should format error objects properly', () => {
-      const logger = new Logger('debug');
-      const error = new Error('test error');
-      logger.error('test message', error);
-
-      const call = consoleSpy.error.mock.calls[0][0];
-      expect(call).toContain('test message');
-      expect(call).toContain('"message":"test error"');
-      expect(call).toContain('"stack"');
-    });
-  });
-
-  describe('default log level', () => {
-    it('should default to info log level', () => {
-      const logger = new Logger();
-      logger.debug('debug message');
-      logger.info('info message');
-
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
-      expect(consoleSpy.info).toHaveBeenCalledOnce();
-    });
-  });
+it('runtime log labels cannot interpolate request or world data', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
+  const violations: string[] = [];
+  function inspect(directory: string) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== '__tests__') {
+          inspect(path);
+        }
+        continue;
+      }
+      if (!entry.name.endsWith('.ts') || entry.name === 'index-old.ts') {
+        continue;
+      }
+      const source = ts.createSourceFile(
+        path,
+        readFileSync(path, 'utf8'),
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      function visit(node: ts.Node) {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.expression.getText(source) === 'logger' &&
+          ['debug', 'info', 'warn', 'error'].includes(node.expression.name.text) &&
+          (!node.arguments[0] || !ts.isStringLiteral(node.arguments[0]))
+        ) {
+          violations.push(
+            `${path}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
+          );
+        }
+        ts.forEachChild(node, visit);
+      }
+      visit(source);
+    }
+  }
+  inspect(root);
+  expect(violations).toEqual([]);
 });

@@ -63,7 +63,7 @@ export class DiagnosticSystem {
   async diagnoseFeatureProblem(
     feature: 'actors' | 'items' | 'scenes' | 'diagnostics',
   ): Promise<DiagnosticResult> {
-    logger.debug(`Diagnosing problem with feature: ${feature}`);
+    logger.debug('Diagnosing feature availability');
 
     try {
       // Test basic connectivity
@@ -90,7 +90,7 @@ export class DiagnosticSystem {
       // Feature-specific diagnostics
       return await this.createFeatureSpecificDiagnostic(feature);
     } catch (error) {
-      logger.error('Error during diagnosis:', error);
+      logger.error('Error during diagnosis:');
       return this.createGenericErrorDiagnostic(error);
     }
   }
@@ -160,7 +160,7 @@ export class DiagnosticSystem {
         report.connectivity.details += ' (Limited functionality - REST API not available)';
       }
     } catch (error) {
-      logger.error('Health check failed:', error);
+      logger.error('Health check failed:');
       report.connectivity = {
         status: 'offline',
         emoji: '❌',
@@ -328,8 +328,8 @@ export class DiagnosticSystem {
         response?.data !== undefined &&
         ApiStatusResponseSchema.parse(response.data).status === 'ok'
       );
-    } catch (error) {
-      logger.debug('REST API not available:', error);
+    } catch {
+      logger.debug('REST API not available:');
       return false;
     }
   }
@@ -363,8 +363,8 @@ export class DiagnosticSystem {
     try {
       const result = await this.foundryClient.rollDice('1d20', 'Health check test');
       return typeof result.total === 'number';
-    } catch (error) {
-      logger.debug('Dice rolling test failed:', error);
+    } catch {
+      logger.debug('Dice rolling test failed:');
       return false;
     }
   }
@@ -376,8 +376,8 @@ export class DiagnosticSystem {
     try {
       const result = await this.foundryClient.searchActors({ limit: 1 });
       return Array.isArray(result.actors);
-    } catch (error) {
-      logger.debug('Actor search test failed:', error);
+    } catch {
+      logger.debug('Actor search test failed:');
       return false;
     }
   }
@@ -389,8 +389,8 @@ export class DiagnosticSystem {
     try {
       const result = await this.foundryClient.searchItems({ limit: 1 });
       return Array.isArray(result.items);
-    } catch (error) {
-      logger.debug('Item search test failed:', error);
+    } catch {
+      logger.debug('Item search test failed:');
       return false;
     }
   }
@@ -402,8 +402,8 @@ export class DiagnosticSystem {
     try {
       const result = await this.foundryClient.getCurrentScene();
       return !!result && typeof result.name === 'string';
-    } catch (error) {
-      logger.debug('Scene data test failed:', error);
+    } catch {
+      logger.debug('Scene data test failed:');
       return false;
     }
   }

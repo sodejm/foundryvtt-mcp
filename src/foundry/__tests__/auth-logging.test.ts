@@ -18,11 +18,10 @@ describe('authentication logging with the production logger', () => {
 
   beforeEach(() => {
     output = [];
-    for (const level of ['debug', 'info', 'warn', 'error'] as const) {
-      vi.spyOn(console, level).mockImplementation((message: unknown) => {
-        output.push(String(message));
-      });
-    }
+    vi.spyOn(process.stderr, 'write').mockImplementation((message) => {
+      output.push(String(message));
+      return true;
+    });
     vi.mocked(axios.get).mockResolvedValue({
       headers: { 'set-cookie': [`session=${session}; Path=/`] },
     });

@@ -63,8 +63,8 @@ export class CacheService {
         () => {
           try {
             this.cleanup();
-          } catch (err) {
-            logger.warn('Cache cleanup error', { error: err instanceof Error ? err.message : err });
+          } catch {
+            logger.warn('Cache cleanup error');
           }
         },
         Math.max((config.ttlSeconds * 1000) / 4, 30000),
@@ -84,7 +84,7 @@ export class CacheService {
 
     if (!entry) {
       this.stats.misses++;
-      logger.debug('Cache miss', { key });
+      logger.debug('Cache miss');
       return undefined;
     }
 
@@ -93,7 +93,7 @@ export class CacheService {
     if (now - entry.timestamp > entry.ttl * 1000) {
       this.cache.delete(key);
       this.stats.misses++;
-      logger.debug('Cache expired', { key, age: now - entry.timestamp });
+      logger.debug('Cache expired', { age: now - entry.timestamp });
       return undefined;
     }
 
@@ -102,7 +102,7 @@ export class CacheService {
     entry.lastAccessed = now;
 
     this.stats.hits++;
-    logger.debug('Cache hit', { key, accessCount: entry.accessCount });
+    logger.debug('Cache hit', { accessCount: entry.accessCount });
     return entry.value;
   }
 
@@ -131,7 +131,7 @@ export class CacheService {
     };
 
     this.cache.set(key, entry);
-    logger.debug('Cache set', { key, ttl, size: this.cache.size });
+    logger.debug('Cache set', { ttl, size: this.cache.size });
   }
 
   /**
@@ -140,7 +140,7 @@ export class CacheService {
   delete(key: string): boolean {
     const deleted = this.cache.delete(key);
     if (deleted) {
-      logger.debug('Cache deleted', { key });
+      logger.debug('Cache deleted');
     }
     return deleted;
   }
@@ -233,10 +233,7 @@ export class CacheService {
     }
 
     if (cleaned > 0) {
-      logger.debug('Cache cleanup completed', {
-        cleaned,
-        remaining: this.cache.size,
-      });
+      logger.debug('Cache cleanup completed', { cleaned, remaining: this.cache.size });
     }
   }
 
@@ -258,10 +255,7 @@ export class CacheService {
     if (lruKey) {
       this.cache.delete(lruKey);
       this.stats.evictions++;
-      logger.debug('Cache evicted LRU entry', {
-        key: lruKey,
-        age: Date.now() - lruTime,
-      });
+      logger.debug('Cache evicted LRU entry', { age: Date.now() - lruTime });
     }
   }
 }
