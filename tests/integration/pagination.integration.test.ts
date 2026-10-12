@@ -87,7 +87,7 @@ describe('live bounded pagination through MCP stdio', () => {
         ...process.env,
         NODE_ENV: 'test', LOG_LEVEL: 'error',
         FOUNDRY_URL: process.env.FOUNDRY_URL ?? 'http://127.0.0.1:30001',
-        FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME ?? 'Gamemaster',
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME ?? 'Gamemaster',
         FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
       }).filter((entry): entry is [string, string] => entry[1] !== undefined)),
     });

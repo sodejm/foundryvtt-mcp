@@ -105,7 +105,7 @@ describe('built MCP bounded dice workflow', () => {
     ]) {
       const transport = new StdioClientTransport({ command: process.execPath,
         args: [fileURLToPath(new URL('../../dist/index.js', import.meta.url))], cwd, stderr: 'pipe', env: {
-          NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: url, FOUNDRY_USER_ID: userId, FOUNDRY_PASSWORD: '',
+          FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: url, FOUNDRY_USER_ID: userId, FOUNDRY_PASSWORD: '',
           FOUNDRY_TIMEOUT: '200', FOUNDRY_RETRY_ATTEMPTS: '3', ...config,
         } });
       transports.push(transport); transport.stderr?.on('data', () => {});

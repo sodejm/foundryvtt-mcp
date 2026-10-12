@@ -517,13 +517,19 @@ describe('delegated caller authorization', () => {
         expect(client.getActorItem(actorId, item._id).item.name).toBe(item.name);
       }
     });
-    const service = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+    const service = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      allowPrivilegedAccount: true,
+    });
     Reflect.set(service, 'worldData', raw);
     expect(service.getWorldData()).toBe(raw);
   });
 
-  it('preserves service-identity reads as the compatibility default', () => {
-    const client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+  it('allows privileged service-identity reads with explicit opt-in', () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      allowPrivilegedAccount: true,
+    });
     const raw = snapshot({ actors: [actor(1, { default: 0 })] });
     Reflect.set(client, 'worldData', raw);
 
@@ -857,5 +863,161 @@ describe('delegated caller authorization', () => {
         client.searchActors({ limit: 1, cursor: first.nextCursor ?? undefined }),
       ),
     ).rejects.toThrow('Pagination cursor does not match');
+  });
+});
+
+/** Native service accounts use their own authenticated identity, without caller context. */
+function serviceClient(value: WorldData, allowPrivilegedAccount = false) {
+  const client = new FoundryClient({ baseUrl: 'http://localhost:30000', allowPrivilegedAccount });
+  Reflect.set(client, 'worldData', value);
+  Reflect.set(client, 'socketUserId', value.userId);
+  return client;
+}
+
+describe('native service account permission preflight', () => {
+  it.each([3, 4])('requires explicit opt-in for privileged role %i', async (role) => {
+    const value = snapshot({ users: [user(SERVICE, role)] });
+    await expect(serviceClient(value).searchActors({})).rejects.toThrow(
+      'FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true',
+    );
+    expect((await serviceClient(value, true).searchActors({})).actors).toEqual([]);
+  });
+
+  it.each([
+    1, 2,
+  ])('filters owned, shared and hidden documents for role %i even with opt-in', async (role) => {
+    const value = snapshot({
+      users: [user(SERVICE, role), user(GM, 4)],
+      actors: [
+        actor(1, { default: 0, [SERVICE]: 3 }),
+        actor(2, { default: 2 }),
+        actor(3, { default: 0 }),
+      ],
+      items: [
+        {
+          _id: 'Item000000000001',
+          name: 'Shared',
+          type: 'loot',
+          system: {},
+          ownership: { default: 2 },
+        },
+        {
+          _id: 'Item000000000002',
+          name: 'Hidden',
+          type: 'loot',
+          system: {},
+          ownership: { default: 0 },
+        },
+      ],
+      journal: [
+        {
+          _id: 'Journal000000001',
+          name: 'Shared',
+          ownership: { default: 2 },
+          pages: [
+            {
+              _id: 'Page000000000001',
+              name: 'Visible',
+              type: 'text',
+              ownership: { default: -1 },
+              text: { content: '<p>Public</p><section class="secret">NEVER_PUBLIC</section>' },
+            },
+            {
+              _id: 'Page000000000002',
+              name: 'Hidden',
+              type: 'text',
+              ownership: { default: 0 },
+              text: { content: 'NEVER_PUBLIC' },
+            },
+          ],
+        },
+      ],
+      messages: [
+        message(1, GM),
+        message(2, GM, { whisper: [SERVICE] }),
+        message(3, GM, { whisper: [PLAYER_ONE] }),
+        message(4, GM, { blind: true }),
+      ],
+    });
+    const client = serviceClient(value, true);
+    expect((await client.searchActors({})).actors.map((record) => record._id)).toEqual([
+      value.actors[0]!._id,
+      value.actors[1]!._id,
+    ]);
+    await expect(client.getActor(value.actors[2]!._id)).rejects.toThrow(/not found/i);
+    expect(client.getWorldData()!.items.map((record) => record._id)).toEqual(['Item000000000001']);
+    expect(client.getJournals()[0]!.pages).toHaveLength(1);
+    expect(JSON.stringify(client.getJournals())).not.toContain('NEVER_PUBLIC');
+    expect(client.getUsers().users).toEqual([
+      { _id: SERVICE, name: 'Player Two', role, color: '#123456', avatar: `${SERVICE}.webp` },
+    ]);
+    expect(client.getChatMessages().map((record) => record._id)).toEqual([
+      value.messages[0]!._id,
+      value.messages[1]!._id,
+    ]);
+    expect(() => client.getScenes()).toThrow(/cannot safely read scenes/i);
+    expect(client.getWorldData()!.scenes).toEqual([]);
+    expect(value.actors).toHaveLength(3);
+  });
+
+  it.each([
+    { users: [] },
+    { users: [user(SERVICE, 0)] },
+    { users: [user(SERVICE, 5)] },
+    { users: [user(SERVICE, 1.5)] },
+    { users: [user(SERVICE), user(SERVICE)] },
+  ])('fails closed when identity or role cannot be verified: %j', async (overrides) => {
+    await expect(serviceClient(snapshot(overrides)).searchActors({})).rejects.toThrow(
+      /permission preflight failed/i,
+    );
+  });
+
+  it('invalidates service cursors when document grants or account role change', async () => {
+    const value = snapshot({
+      users: [user(SERVICE, 1)],
+      actors: [actor(1, { default: 2 }), actor(2, { default: 2 })],
+    });
+    const client = serviceClient(value);
+    const first = await client.searchActors({ limit: 1 });
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const cursor = first.nextCursor ?? undefined;
+    Reflect.set(
+      client,
+      'worldData',
+      snapshot({
+        users: [user(SERVICE, 1)],
+        actors: [actor(1, { default: 0 }), actor(2, { default: 2 })],
+      }),
+    );
+    await expect(client.searchActors({ limit: 1, cursor })).rejects.toThrow(/cursor/i);
+    Reflect.set(client, 'worldData', snapshot({ users: [user(SERVICE, 2)], actors: value.actors }));
+    await expect(client.searchActors({ limit: 1, cursor })).rejects.toThrow(/cursor/i);
+    Reflect.set(client, 'worldData', snapshot({ users: [user(SERVICE, 4)], actors: value.actors }));
+    await expect(client.searchActors({ limit: 1, cursor })).rejects.toThrow(
+      'FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true',
+    );
+  });
+
+  it('rejects a snapshot belonging to a different socket user', async () => {
+    const client = serviceClient(snapshot({ users: [user(SERVICE)] }));
+    Reflect.set(client, 'socketUserId', PLAYER_ONE);
+    await expect(client.searchActors({})).rejects.toThrow(/permission preflight failed/i);
+  });
+
+  it('rejects privileged REST access before any HTTP request by default', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      apiKey: 'test-only-key',
+    });
+    await expect(client.connect()).rejects.toThrow('FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true');
+    await expect(client.searchActors({})).rejects.toThrow('FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true');
+  });
+
+  it('keeps local dice independent of account privilege and writes disabled', async () => {
+    const client = serviceClient(snapshot({ users: [user(SERVICE)] }));
+    expect((await client.rollDice('1d6', undefined, 'local')).engine).toBe('local');
+    await expect(client.updateActorAttribute('Actor00000000001', { hp: 3 })).rejects.toThrow(
+      /write operations are disabled/i,
+    );
   });
 });

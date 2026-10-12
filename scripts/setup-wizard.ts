@@ -21,6 +21,7 @@ interface WizardConfig {
   username?: string;
   password?: string;
   authMethod: 'api-key' | 'credentials';
+  allowPrivilegedAccount: boolean;
 }
 
 class SetupWizard {
@@ -229,8 +230,8 @@ class SetupWizard {
     console.log('🔐 Step 3: Authentication Method\n');
     
     console.log('Choose your authentication method:');
-    console.log('1. API Key (Recommended - requires Foundry Local REST API module)');
-    console.log('2. Username/Password (Basic authentication)\n');
+    console.log('1. API Key (Privileged REST access - requires Foundry Local REST API module)');
+    console.log('2. Username/Password (Recommended - dedicated Player account)\n');
 
     const choice = await this.question('Enter your choice (1 or 2): ');
     
@@ -244,8 +245,8 @@ class SetupWizard {
         console.log('🔑 Selected: Username/Password authentication\n');
         break;
       default:
-        console.log('❌ Invalid choice. Defaulting to API Key method.\n');
-        this.config.authMethod = 'api-key';
+        console.log('❌ Invalid choice. Defaulting to Username/Password method.\n');
+        this.config.authMethod = 'credentials';
     }
   }
 
@@ -276,6 +277,14 @@ class SetupWizard {
       if (!this.config.username?.trim() || !this.config.password?.trim()) {
         throw new Error('Both username and password are required');
       }
+    }
+
+    console.log('Use a dedicated Player with OBSERVER grants for reads and OWNER grants for actor writes.');
+    console.log('Assistant/GM accounts and REST access require explicit privileged opt-in.');
+    const privilege = await this.question('Allow privileged Assistant/GM or REST access? (y/N): ');
+    this.config.allowPrivilegedAccount = privilege.trim().toLowerCase() === 'y';
+    if (this.config.authMethod === 'api-key' && !this.config.allowPrivilegedAccount) {
+      throw new Error('REST access requires explicit privileged opt-in; use Player credentials for scoped reads.');
     }
   }
 
@@ -343,6 +352,7 @@ class SetupWizard {
 
     // Configure required variables
     envContent = this.updateEnvVariable(envContent, 'FOUNDRY_URL', this.config.foundryUrl!);
+    envContent = this.updateEnvVariable(envContent, 'FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT', String(this.config.allowPrivilegedAccount ?? false));
 
     if (this.config.authMethod === 'api-key' && this.config.apiKey) {
       envContent = this.updateEnvVariable(envContent, 'FOUNDRY_API_KEY', this.config.apiKey);

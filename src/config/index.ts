@@ -62,6 +62,7 @@ const ConfigSchema = z.object({
     retryAttempts: z.number().default(3),
     retryDelay: z.number().default(1000),
     writeEnabled: z.boolean().default(false),
+    allowPrivilegedAccount: z.boolean().default(false),
     authorizationMode: z.enum(['service-identity', 'delegated']).default('service-identity'),
   }),
 
@@ -121,6 +122,10 @@ function loadConfig(): Config {
       retryDelay: process.env.FOUNDRY_RETRY_DELAY
         ? parseInt(process.env.FOUNDRY_RETRY_DELAY, 10)
         : undefined,
+      allowPrivilegedAccount:
+        process.env.FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT !== undefined
+          ? process.env.FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT === 'true'
+          : undefined,
       writeEnabled:
         process.env.FOUNDRY_WRITE_ENABLED !== undefined
           ? process.env.FOUNDRY_WRITE_ENABLED === 'true'

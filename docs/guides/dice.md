@@ -56,7 +56,10 @@ for the official engine.
 
 The supported Foundry transport is the paired REST module/relay configured with
 all three `FOUNDRY_REST_URL`, `FOUNDRY_REST_API_KEY` and
-`FOUNDRY_REST_CLIENT_ID` values. Partial REST configuration is an error for explicit
+`FOUNDRY_REST_CLIENT_ID` values, plus explicit
+`FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true` because the relay executes through a GM
+browser. See [account permissions](account-permissions.md) for process separation.
+Partial REST configuration is an error for explicit
 `engine: foundry` execution. The default `auto` engine always evaluates locally;
 read-only REST credentials do not authorize remote dice execution. The adapter calls `POST /roll` with
 `createChatMessage: false`. Complete paired configuration takes precedence when

@@ -88,12 +88,12 @@ Three layers:
 
 **Module location**: `src/foundry/validators/dnd5e.ts` (new). Wave 4 only ships the dnd5e validators; the directory structure leaves room for `pf2e.ts`, `swade.ts`, etc. without refactoring.
 
-### 4. Audit log & permission model — "Assistant GM" role, every mutation emits a chat message **plus structured flags**
+### 4. Audit log & permission model — operation permissions, every mutation emits a chat message **plus structured flags**
 
 **Permission posture**:
 
-- The MCP server authenticates as a single FoundryVTT user (existing `FOUNDRY_USERNAME` / `FOUNDRY_PASSWORD`). For mutation work, that user **must** have the **Assistant GM** role (Foundry role level 3) or higher. The MCP server does not impersonate other users.
-- The "Assistant GM" role is the right minimum: it allows document updates and creates, but the actual GM (role 4) retains the ability to revoke, world-undo, and override.
+- The MCP server authenticates as a single FoundryVTT user (`FOUNDRY_USERNAME` / `FOUNDRY_PASSWORD`). Writes require `FOUNDRY_WRITE_ENABLED=true` plus the operation's Foundry ownership/world permission. Player/Trusted accounts can update their owned actors and embedded items/effects; journal creation needs CREATE_JOURNAL permission. The MCP server does not impersonate other users.
+- Assistant/GM is an explicit privileged mode requiring `FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true`, suitable for full-world administration and combat/legacy token tools. Prefer a separate privileged process and credentials for those capabilities. The [account permission matrix](../guides/account-permissions.md) records minimum grants and tested limitations.
 - **Permission enforcement lives at the Foundry layer**, not in the MCP server. If the configured user lacks permission to update a specific actor (e.g., an actor with restricted ownership), the Foundry server rejects the mutation and the handler surfaces the error verbatim. The MCP server does **not** maintain its own ACL — that would duplicate Foundry's permission system and rot.
 
 **Out-of-band guardrails (NOT enforced by this layer)**:

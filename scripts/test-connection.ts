@@ -64,6 +64,7 @@ async function testConnection() {
       username: config.foundry.username,
       password: config.foundry.password,
       timeout: config.foundry.timeout,
+      allowPrivilegedAccount: config.foundry.allowPrivilegedAccount,
     });
 
     console.log('🔗 Testing connection...');
@@ -141,14 +142,14 @@ async function testConnection() {
     console.log('\n📝 Summary:');
     console.log('   - Basic connection: ✅');
     console.log('   - Dice rolling: ✅');
-    console.log(`   - Data access: ${config.foundry.apiKey ? '🌐 REST (coverage depends on the target module; Socket.IO is the full-data path)' : '✅ Full worldData'}`);
+    console.log(`   - Data access: ${config.foundry.apiKey ? '🌐 REST (coverage depends on the target module)' : '🔌 Socket.IO (filtered by account permissions)'}`);
     console.log(`   - Connection: ${config.foundry.apiKey ? '🌐 REST API' : '🔌 Socket.IO'}`);
 
     if (!config.foundry.apiKey) {
       console.log('\n💡 Optional: the "Foundry REST API" module adds the diagnostics + compendium path.');
       console.log('   1. Install the "Foundry REST API" module in FoundryVTT');
       console.log('   2. Copy the API key from the module configuration page');
-      console.log('   3. Set FOUNDRY_API_KEY in .env (this switches the client to REST transport)');
+      console.log('   3. Set FOUNDRY_API_KEY and FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true in .env (privileged REST transport)');
       console.log('   4. Restart the MCP server');
     }
 

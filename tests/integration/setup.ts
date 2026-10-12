@@ -10,6 +10,8 @@ const DEFAULT_CONFIG: FoundryClientConfig = {
   // An empty password is a valid Foundry credential and must not be replaced.
   password: process.env.FOUNDRY_PASSWORD ?? '',
   timeout: 15000,
+  // The default integration fixture is an explicitly privileged GM account.
+  allowPrivilegedAccount: true,
 };
 
 /**

@@ -103,6 +103,7 @@ export class FoundryMCPServer {
       retryAttempts: config.foundry.retryAttempts,
       retryDelay: config.foundry.retryDelay,
       writeEnabled: config.foundry.writeEnabled,
+      allowPrivilegedAccount: config.foundry.allowPrivilegedAccount,
       authorizationMode: config.foundry.authorizationMode,
     };
     if (config.foundry.apiKey) {

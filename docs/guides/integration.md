@@ -20,10 +20,13 @@ Add to your Claude Desktop MCP settings:
 }
 ```
 
-For optional compendium search, add the paired relay configuration to the `env` block:
+For optional compendium search, explicitly opt into privileged relay access and
+add the paired relay configuration to the `env` block. Use a separate process
+from the scoped Player connection; see the [account permission matrix](account-permissions.md).
 
 ```json
 {
+  "FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT": "true",
   "FOUNDRY_REST_URL": "http://127.0.0.1:3010",
   "FOUNDRY_REST_CLIENT_ID": "your_relay_client_id",
   "FOUNDRY_REST_API_KEY": "your_scoped_relay_key"
@@ -589,6 +592,11 @@ revocation, forged identities, denied reads/writes, reconnects and membership
 loss. It fails on missing prerequisites and cleans up its owned fixtures.
 The built MCP resolver workflow also covers absent/throwing host resolvers,
 concurrent callers and generic error redaction without trusting request metadata.
+
+`tests/integration/service-permissions.integration.test.ts` verifies the native
+backend account boundary with temporary Player, Trusted Player and Assistant
+accounts, owned/shared/hidden documents and allowed/denied mutations. See the
+[account permission matrix](account-permissions.md) for grants and version qualification.
 
 `tests/integration/compendium.integration.test.ts` additionally requires a paired
 local REST relay, the enabled REST module, an active GM browser controller and

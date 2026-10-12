@@ -45,6 +45,7 @@ owner-only access on Windows; a failed replacement preserves the old file.
 | `FOUNDRY_REST_URL` | — | Separate paired Foundry REST API relay URL |
 | `FOUNDRY_REST_CLIENT_ID` | — | Module client ID registered with that relay |
 | `FOUNDRY_REST_API_KEY` | — | Relay key permitting search and entity reads |
+| `FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT` | `false` | Explicit opt-in for Assistant/GM and unverifiable REST credentials |
 | `FOUNDRY_AUTHORIZATION_MODE` | `service-identity` | Backend-account access, or `delegated` with a trusted host caller resolver |
 | `LOG_LEVEL` | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 | `NODE_ENV` | `development` | Environment mode |
@@ -74,7 +75,12 @@ FOUNDRY_RETRY_ATTEMPTS=3   # Retry failed requests
 
 ## Delegated Callers
 
-The default `service-identity` mode serves the configured Foundry account's view.
+The default `service-identity` mode filters Player/Trusted accounts to observable
+documents. Assistant/GM accounts require `FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true`
+and expose their privileged full-world view. REST credentials also require this
+opt-in because the account role cannot be verified from that transport.
+See the [account permission matrix](account-permissions.md) for minimum roles,
+ownership, denied capabilities, and version qualification.
 It is suitable for a trusted single-account client; exposing a GM connection to
 players requires `delegated` mode and a host that authenticates those players.
 
@@ -136,7 +142,8 @@ embedded-item permissions are checked before fields, inventory counts and IDs
 are serialized. Rich actor biographies and item descriptions are withheld from
 delegated callers, including delegated GMs. Unknown-system sheet, section and
 inventory reads fail closed because no field-visibility profile is established;
-service-identity mode supports a bounded primitive system-path fallback.
+opted-in Assistant/GM service accounts support a bounded primitive system-path
+fallback; Player/Trusted accounts use the conservative profiles.
 
 Structured spatial reads check scene OBSERVER permission and token visibility
 before counts, pages or details. Hidden tokens and tokens
@@ -183,6 +190,7 @@ Configure the separate relay alongside the existing Socket.IO connection:
 FOUNDRY_REST_URL=http://127.0.0.1:3010
 FOUNDRY_REST_CLIENT_ID=your_relay_client_id
 FOUNDRY_REST_API_KEY=your_scoped_relay_key
+FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT=true
 ```
 
 The module must be enabled in the active world, paired with that relay, and

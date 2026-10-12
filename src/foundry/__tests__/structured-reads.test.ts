@@ -59,6 +59,7 @@ const worldItem = {
 let get: ReturnType<typeof vi.fn>;
 function createClient(rest = false) {
   return new FoundryClient({
+    allowPrivilegedAccount: true,
     baseUrl: 'http://localhost:30000',
     ...(rest ? { apiKey: 'fixture' } : {}),
     retryAttempts: 1,

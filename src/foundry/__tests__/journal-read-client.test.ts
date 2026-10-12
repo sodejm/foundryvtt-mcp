@@ -71,7 +71,10 @@ function snapshot(journals: WorldJournal[]): WorldData {
 }
 
 function serviceClient(journals: WorldJournal[]) {
-  const client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+  const client = new FoundryClient({
+    allowPrivilegedAccount: true,
+    baseUrl: 'http://localhost:30000',
+  });
   const world = snapshot(journals);
   Reflect.set(client, 'worldData', world);
   Reflect.set(client, 'snapshotWorldId', WORLD);

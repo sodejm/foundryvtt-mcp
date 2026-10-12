@@ -196,6 +196,26 @@ describe('FoundryClient journal mutations (modifyDocument)', () => {
       };
     }
     Reflect.set(client, 'socketUserId', 'User000000000001');
+    Reflect.set(client, 'worldData', {
+      userId: 'User000000000001',
+      world: { id: 'test' },
+      users: [{ _id: 'User000000000001', name: 'Trusted Player', role: 2, color: '#000' }],
+      actors: [],
+      items: [],
+      scenes: [],
+      journal: [],
+      messages: [],
+      combats: [],
+      settings: [],
+      folders: [],
+      macros: [],
+      playlists: [],
+      tables: [],
+      cards: [],
+      packs: [],
+      modules: [],
+      activeUsers: [],
+    });
     Reflect.set(client, '_isConnected', opts.connected !== false);
     return client;
   };

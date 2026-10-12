@@ -123,7 +123,7 @@ describe('live snapshot recovery through MCP stdio', () => {
       stderr: 'pipe',
       env: Object.fromEntries(Object.entries({
         ...process.env, NODE_ENV: 'test', LOG_LEVEL: 'error', FOUNDRY_URL: proxyUrl,
-        FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME ?? 'Gamemaster',
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true', FOUNDRY_USERNAME: process.env.FOUNDRY_USERNAME ?? 'Gamemaster',
         FOUNDRY_PASSWORD: process.env.FOUNDRY_PASSWORD ?? '',
       }).filter((entry): entry is [string, string] => entry[1] !== undefined)),
     });

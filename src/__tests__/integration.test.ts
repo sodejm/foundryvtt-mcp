@@ -60,6 +60,7 @@ describe('Integration Tests', () => {
     it('should initialize client with proper configuration flow', () => {
       expect(() => {
         client = new FoundryClient({
+          allowPrivilegedAccount: true,
           baseUrl: 'http://localhost:30000',
           apiKey: 'test-key',
           timeout: 5000,
@@ -73,6 +74,7 @@ describe('Integration Tests', () => {
       mockAxiosInstance.get.mockResolvedValue({ data: { status: 'connected' } });
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
       });
@@ -98,6 +100,7 @@ describe('Integration Tests', () => {
         });
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
         retryAttempts: 2,
@@ -117,6 +120,7 @@ describe('Integration Tests', () => {
   describe('Configuration and Logger Integration', () => {
     it('should use logger throughout the system', () => {
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
       });
 
@@ -125,7 +129,7 @@ describe('Integration Tests', () => {
 
     it('should handle invalid configurations gracefully', () => {
       expect(() => {
-        client = new FoundryClient({ baseUrl: '' });
+        client = new FoundryClient({ allowPrivilegedAccount: true, baseUrl: '' });
       }).toThrow('baseUrl is required and cannot be empty');
     });
   });
@@ -156,6 +160,7 @@ describe('Integration Tests', () => {
         .mockResolvedValueOnce({ data: mockActorData });
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
       });
@@ -199,6 +204,7 @@ describe('Integration Tests', () => {
         .mockResolvedValueOnce({ data: { system: { id: 'dnd5e', version: '6.0.6' } } });
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
       });
@@ -220,6 +226,7 @@ describe('Integration Tests', () => {
         .mockRejectedValue(new Error('Service unavailable'));
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
         retryAttempts: 2,
@@ -240,6 +247,7 @@ describe('Integration Tests', () => {
         .mockResolvedValueOnce({ data: { items: [], total: 0, page: 1, limit: 100 } });
 
       client = new FoundryClient({
+        allowPrivilegedAccount: true,
         baseUrl: 'http://localhost:30000',
         apiKey: 'test-key',
         retryAttempts: 1,

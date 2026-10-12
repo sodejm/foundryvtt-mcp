@@ -90,6 +90,23 @@ describe('Config', () => {
   });
 
   describe('configuration validation', () => {
+    it.each([
+      undefined,
+      'false',
+      'TRUE',
+      '1',
+      'true',
+    ])('requires literal true for privileged access (%s)', async (value) => {
+      process.env = { ...mockEnv };
+      if (value !== undefined) {
+        process.env.FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT = value;
+      }
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+      expect(config.foundry.allowPrivilegedAccount).toBe(value === 'true');
+      expect(config.foundry.writeEnabled).toBe(false);
+    });
+
     it('accepts delegated authorization mode', async () => {
       process.env = { ...mockEnv, FOUNDRY_AUTHORIZATION_MODE: 'delegated' };
       const { config, resetConfig } = await import('../index.js');
