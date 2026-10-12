@@ -180,7 +180,7 @@ export async function handleGetActorDetails(
             })
             .join('\n')
         : 'No ability scores available';
-      return {
+      return boundedReadResponse({
         structuredContent,
         content: [
           {
@@ -198,7 +198,7 @@ ${abilities}
 **Biography:** ${actor.biography ?? 'No biography available.'}\n\n${readMetadataText(structuredContent.readMetadata)}`,
           },
         ],
-      };
+      });
     },
     foundryClient,
   );

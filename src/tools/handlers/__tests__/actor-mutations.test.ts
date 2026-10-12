@@ -163,6 +163,8 @@ describe('Actor mutation handlers', () => {
           emit,
         };
       }
+      Reflect.set(client, 'socketUserId', 'User000000000001');
+      Reflect.set(client, '_isConnected', opts.connected !== false);
       return client;
     };
 

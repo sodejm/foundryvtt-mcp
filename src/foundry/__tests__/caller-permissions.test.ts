@@ -176,6 +176,26 @@ beforeEach(() => {
 });
 
 describe('delegated caller authorization', () => {
+  it('does not revive a delegated caller after its socket session is invalidated and restored', async () => {
+    const { client, mock } = delegatedClient();
+    const onSession = Reflect.get(client, 'onSocketSession') as (
+      value: { userId: string } | null,
+    ) => void;
+
+    await runAuthorized(client, mock, context(), snapshot(), async () => {
+      expect((await client.getUsers()).users).toHaveLength(1);
+      onSession(null);
+      onSession({ userId: SERVICE });
+      mock.worldAcks.at(-1)?.(snapshot());
+      expect(Reflect.get(client, '_isConnected')).toBe(true);
+      expect(() => client.getUsers()).toThrow(/not authorized/i);
+    });
+
+    await runAuthorized(client, mock, context(), snapshot(), async () => {
+      expect((await client.getUsers()).users).toHaveLength(1);
+    });
+  });
+
   it('redacts secrets from world and actor-owned item descriptions while preserving GM data', async () => {
     const { client, mock } = delegatedClient();
     const visibleItem: WorldItem = {
@@ -642,6 +662,34 @@ describe('delegated caller authorization', () => {
       gm.client.getWorldData(),
     );
     expect(gmView?.actors.map((entry) => entry._id)).not.toContain('Actor00000000004');
+  });
+
+  it('redacts secret HTML from every non-GM chat projection without mutating the snapshot', async () => {
+    const content =
+      '<p>Public</p><SECTION CLASS=secret><div>Hidden</div></SECTION>' +
+      '<div class="other se&#99;ret"><section>Nested secret</section></div><p>Visible</p>';
+    const flavor = '<p>Public flavor</p><section class="secret">Hidden flavor</section>';
+    const value = snapshot({ messages: [message(1, PLAYER_TWO, { content, flavor })] });
+    const player = delegatedClient();
+    const views = await runAuthorized(player.client, player.mock, context(), value, async () => ({
+      messages: await player.client.getChatMessages(),
+      world: player.client.getWorldData(),
+    }));
+    for (const projected of [views.messages[0], views.world?.messages[0]]) {
+      expect(projected?.content).toContain('Public');
+      expect(projected?.content).toContain('Visible');
+      expect(projected?.content).not.toMatch(/Hidden|Nested secret/);
+      expect(projected?.flavor).toContain('Public flavor');
+      expect(projected?.flavor).not.toContain('Hidden flavor');
+    }
+    const gm = delegatedClient();
+    const messages = await runAuthorized(gm.client, gm.mock, context({ userId: GM }), value, () =>
+      gm.client.getChatMessages(),
+    );
+    expect(messages[0]?.content).toBe(content);
+    expect(messages[0]?.flavor).toBe(flavor);
+    expect(value.messages[0]?.content).toBe(content);
+    expect(value.messages[0]?.flavor).toBe(flavor);
   });
 
   it('does not give GMs a blanket whisper override and honors blind messages', async () => {

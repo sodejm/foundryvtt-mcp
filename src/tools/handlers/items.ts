@@ -90,7 +90,7 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
         readMetadata: availableReadMetadata(foundryClient),
       });
       const { price, rarity } = itemEconomyText(item.economy);
-      return {
+      return boundedReadResponse({
         structuredContent,
         content: [
           {
@@ -108,7 +108,7 @@ export async function handleGetItemDetails(args: { itemId: string }, foundryClie
 **Description:** ${item.description ?? 'No description available.'}\n\n${readMetadataText(structuredContent.readMetadata)}`,
           },
         ],
-      };
+      });
     },
     foundryClient,
   );

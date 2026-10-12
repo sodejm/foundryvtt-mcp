@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorldData } from '../types.js';
 
@@ -146,6 +147,32 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('rejects a whitespace identity during the initial session handshake', async () => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      writeEnabled: true,
+    });
+    const mock = buildMockSocket();
+    vi.mocked(io).mockReturnValue(mock.socket as never);
+    const connecting = callPrivate<Promise<WorldData>>(
+      client,
+      'connectAndLoadWorld',
+      'test-session',
+    );
+    const rejected = expect(connecting).rejects.toThrow(/Authentication failed/);
+    mock.fire('session', { userId: '   ' });
+    mock.worldAcks[0]?.(snapshot('   '));
+    await rejected;
+    expect(client.isConnected()).toBe(false);
+    expect(client.getWorldData()).toBeNull();
+    expect(mock.socket.disconnect).toHaveBeenCalled();
+    await expect(client.updateActorAttribute(ACTOR_ONE, { name: 'Blocked' })).rejects.toThrow(
+      /authenticated/,
+    );
+    expect(mock.modifyAcks).toHaveLength(0);
   });
 
   it('preserves extension fields on trusted initial snapshots and refreshes', async () => {
@@ -321,7 +348,6 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     expect(firstPage.nextCursor).toBeTruthy();
 
     mock.fire('session', { userId: USER_ONE });
-    mock.fire('session', null);
     expect(mock.worldAcks).toHaveLength(1);
 
     mock.fire('session', { userId: USER_TWO });
@@ -334,6 +360,50 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     await expect(
       client.searchActors({ cursor: firstPage.nextCursor ?? undefined }),
     ).rejects.toThrow(/no longer available/);
+  });
+
+  it.each([
+    null,
+    {},
+    { userId: '' },
+    { userId: '   ' },
+  ])('revokes anonymous sessions before any read or write: %j', async (session) => {
+    const client = new FoundryClient({
+      baseUrl: 'http://localhost:30000',
+      timeout: 100,
+      retryAttempts: 0,
+      writeEnabled: true,
+    });
+    const mock = buildMockSocket();
+    attachClient(client, mock);
+    await loadSnapshot(client, mock);
+    const page = await client.searchActors({ limit: 1 });
+    const pending = client.refreshWorldData();
+    const rejected = expect(pending).rejects.toThrow(/session/);
+    mock.fire('session', session);
+    await rejected;
+    mock.worldAcks[1]?.(snapshot());
+    expect(client.isConnected()).toBe(false);
+    expect(client.getWorldData()).toBeNull();
+    expect(client.getReadMetadata().freshness).toBe('unavailable');
+    await expect(client.searchActors({})).rejects.toThrow(/unavailable/);
+    await expect(client.refreshWorldData()).rejects.toThrow(/authenticated/);
+    await expect(client.updateActorAttribute(ACTOR_ONE, { name: 'Forbidden' })).rejects.toThrow(
+      /authenticated/,
+    );
+    expect(mock.modifyAcks).toHaveLength(0);
+    mock.fire('connect');
+    expect(client.isConnected()).toBe(false);
+    expect(mock.worldAcks).toHaveLength(2);
+    mock.fire('session', { userId: USER_ONE });
+    expect(mock.worldAcks).toHaveLength(3);
+    mock.worldAcks[2]?.(snapshot());
+    await vi.waitFor(() => expect(client.getReadMetadata().freshness).toBe('current'));
+    expect(client.isConnected()).toBe(true);
+    expect((await client.searchActors({})).actors).toHaveLength(2);
+    await expect(client.searchActors({ cursor: page.nextCursor ?? undefined })).rejects.toThrow(
+      /no longer available/,
+    );
   });
 
   it('rejects a pending refresh across reconnect and ignores its retired ACK', async () => {
@@ -380,7 +450,7 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
 
     expect(client.getReadMetadata()).toMatchObject({ freshness: 'unavailable', revision: 0 });
     expect(mock.worldAcks).toHaveLength(1);
-    await expect(client.refreshWorldData()).rejects.toThrow(/Not connected/);
+    await expect(client.refreshWorldData()).rejects.toThrow(/authenticated/);
 
     mock.socket.connected = true;
     mock.fire('connect');

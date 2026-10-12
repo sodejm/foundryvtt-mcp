@@ -211,6 +211,31 @@ for (const surface of surfaces) {
         message: expect.stringContaining('request a smaller limit'),
       });
     });
+    it.each([
+      'é'.repeat(70_000),
+      'x'.repeat(70_000),
+    ])('bounds the combined detail representations', async (text) => {
+      const field = surface.name === 'actor' ? 'biography' : 'description';
+      const fetch = vi.fn().mockResolvedValue({ ...surface.sample, [field]: text });
+      await expect(
+        surface.detail(surface.sample._id, clientStub({ [surface.detailMethod]: fetch })),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining('request a smaller limit'),
+      });
+    });
+    it('preserves complete detail text below the response bound', async () => {
+      const field = surface.name === 'actor' ? 'biography' : 'description';
+      const text = 'é'.repeat(10_000);
+      const result = await surface.detail(
+        surface.sample._id,
+        clientStub({
+          [surface.detailMethod]: vi.fn().mockResolvedValue({ ...surface.sample, [field]: text }),
+        }),
+      );
+      expect(result.structuredContent.record).toMatchObject({ [field]: text });
+      expect(result.content[0]?.text).toContain(text);
+    });
     it('omits missing optional values rather than inventing them', async () => {
       const result = await surface.detail(
         surface.sample._id,
