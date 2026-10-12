@@ -2,11 +2,31 @@
 
 ## Environment Variables
 
-Copy `.env.example` and set the required values:
+Run `bun run setup-wizard` from a trusted project directory. The wizard saves `.env`
+in the current working directory using atomic replacement. On POSIX systems, new
+and existing files finish with mode `0600` (owner read/write), regardless of umask.
+The wizard tightens an existing file's permissions before preparing its replacement,
+so later save failures do not leave old credentials publicly readable. If it cannot
+secure the existing file, it stops before writing new credentials. It rejects symlinks
+and nonregular destinations. If saving fails before replacement, the previous file's
+contents stay intact; resolve the directory permissions or symlink and retry.
+
+For manual setup on POSIX, create a private file before adding credentials:
 
 ```bash
-cp .env.example .env
+(umask 077; cp .env.example .env)
+chmod 600 .env
 ```
+
+Check permissions with `ls -l .env`; the mode should be `-rw-------`. Repair an
+existing regular file with `chmod 600 .env`. Keep the project directory writable
+only by trusted users. The wizard does not print credential values. If interrupted,
+it may leave a private `.env-*` temporary directory; remove it after the wizard exits.
+
+Windows uses filesystem ACLs rather than POSIX mode bits. Restrict the project
+directory and `.env` to your account using the file Properties > Security controls
+(or an equivalent ACL tool). The wizard's mode setting alone does not establish
+owner-only access on Windows; a failed replacement preserves the old file.
 
 ### Required
 
