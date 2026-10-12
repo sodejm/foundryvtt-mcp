@@ -431,6 +431,77 @@ describe('REST snapshot pagination', () => {
       expect(get.mock.calls[1][1].params.snapshotId).toBe('immutable');
     });
     for (const surface of ['search', 'resource'] as const) {
+      it(`bounds slow ${collection} ${surface} acquisition to the backend lifetime`, async () => {
+        const startedAt = Date.now();
+        let now = startedAt;
+        const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+        try {
+          const client = restClient();
+          get.mockImplementation(async (_path, options) => {
+            now += 30_000;
+            const page = options.params.page;
+            return {
+              data: {
+                [collection]: [record(page)],
+                total: 2,
+                page,
+                limit: 100,
+                snapshotId: 'immutable',
+              },
+            };
+          });
+          const first = await (surface === 'resource'
+            ? client.getCollectionPage(collection, { limit: 1 })
+            : collection === 'actors'
+              ? client.searchActors({ limit: 1 })
+              : client.searchItems({ limit: 1 }));
+          expect(first.expiresAt).toBe(new Date(startedAt + 300_000).toISOString());
+          expect(get).toHaveBeenCalledTimes(3);
+          now = startedAt + 300_000;
+          const cursor = requireCursor(first.nextCursor);
+          await expect(
+            surface === 'resource'
+              ? client.getCollectionPage(collection, { cursor })
+              : collection === 'actors'
+                ? client.searchActors({ cursor })
+                : client.searchItems({ cursor }),
+          ).rejects.toThrow(/expired/);
+          expect(get).toHaveBeenCalledTimes(3);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+      it(`rejects ${collection} ${surface} snapshots expired during acquisition`, async () => {
+        const startedAt = Date.now();
+        let now = startedAt;
+        const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+        try {
+          const client = restClient();
+          get.mockImplementation(async (_path, options) => {
+            now += 150_000;
+            const page = options.params.page;
+            return {
+              data: {
+                [collection]: [record(page)],
+                total: 2,
+                page,
+                limit: 100,
+                snapshotId: 'immutable',
+              },
+            };
+          });
+          await expect(
+            surface === 'resource'
+              ? client.getCollectionPage(collection, { limit: 1 })
+              : collection === 'actors'
+                ? client.searchActors({ limit: 1 })
+                : client.searchItems({ limit: 1 }),
+          ).rejects.toThrow(/expired during backend acquisition/);
+          expect(get).toHaveBeenCalledTimes(2);
+        } finally {
+          clock.mockRestore();
+        }
+      });
       it(`keeps successfully revalidated ${collection} ${surface} pages current`, async () => {
         const data = {
           [collection]: [record(1), record(2), record(3)],

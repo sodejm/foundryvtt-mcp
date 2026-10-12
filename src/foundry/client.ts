@@ -76,6 +76,7 @@ import {
   type CollectionPage,
   type CollectionRecord,
   type PaginationParams,
+  SNAPSHOT_TTL_MS,
   SnapshotPaginator,
   sortCollectionRecords,
   validateBoundedText,
@@ -1729,10 +1730,11 @@ export class FoundryClient {
   private async fetchAllRestActors(filters: {
     query?: string | undefined;
     type?: string | undefined;
-  }): Promise<{ records: FoundryActor[]; validate?: () => Promise<void> }> {
+  }): Promise<{ records: FoundryActor[]; expiresAt: number; validate?: () => Promise<void> }> {
     const requestFilters = Object.fromEntries(
       Object.entries(filters).filter((entry) => entry[1] !== undefined),
     );
+    const expiresAt = Date.now() + SNAPSHOT_TTL_MS;
     const records: FoundryActor[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
@@ -1786,6 +1788,7 @@ export class FoundryClient {
         const backendLimit = result.limit;
         return {
           records,
+          expiresAt,
           ...(backendSnapshotId === undefined
             ? {}
             : {
@@ -1838,8 +1841,10 @@ export class FoundryClient {
 
   private async fetchAllRestItems(): Promise<{
     records: FoundryItem[];
+    expiresAt: number;
     validate?: () => Promise<void>;
   }> {
+    const expiresAt = Date.now() + SNAPSHOT_TTL_MS;
     const records: FoundryItem[] = [];
     const seen = new Set<string>();
     let expectedTotal: number | undefined;
@@ -1888,6 +1893,7 @@ export class FoundryClient {
         const backendLimit = result.limit;
         return {
           records,
+          expiresAt,
           ...(backendSnapshotId === undefined
             ? {}
             : {
@@ -1928,10 +1934,15 @@ export class FoundryClient {
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('actor-search', filters, 'actors');
     let validate: (() => Promise<void>) | undefined;
+    let maximumExpiresAt: number | undefined;
     let records: FoundryActor[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
-        ({ records, validate } = await this.fetchAllRestActors(filters));
+        ({
+          records,
+          validate,
+          expiresAt: maximumExpiresAt,
+        } = await this.fetchAllRestActors(filters));
       } else {
         const worldData = this.readWorld('actors');
         records = worldData.actors
@@ -1944,7 +1955,14 @@ export class FoundryClient {
       }
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    const page = this.paginator.paginate(
+      records,
+      params,
+      context,
+      this.getReadMetadata(),
+      undefined,
+      maximumExpiresAt,
+    );
     if (this.config.apiKey) {
       page.readMetadata =
         (await this.paginator.validateSnapshot(
@@ -2209,6 +2227,7 @@ export class FoundryClient {
     this.assertSocketPaginationAuthorized();
     const context = this.paginationContext('item-search', filters, 'items');
     let validate: (() => Promise<void>) | undefined;
+    let maximumExpiresAt: number | undefined;
     let records: NormalizedFoundryItem[] | undefined;
     if (params.cursor === undefined) {
       let identity: ItemEconomyIdentity;
@@ -2216,6 +2235,7 @@ export class FoundryClient {
         const fetched = await this.fetchAllRestItems();
         const rawItems = fetched.records;
         validate = fetched.validate;
+        maximumExpiresAt = fetched.expiresAt;
         identity =
           rawItems.some((item) => item.system !== undefined) || params.rarity
             ? await this.restItemIdentity()
@@ -2242,7 +2262,14 @@ export class FoundryClient {
       records = records.filter((item) => itemMatchesRarity(item.economy, params.rarity));
       records.sort(compareFoundryRecords);
     }
-    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    const page = this.paginator.paginate(
+      records,
+      params,
+      context,
+      this.getReadMetadata(),
+      undefined,
+      maximumExpiresAt,
+    );
     if (this.config.apiKey) {
       page.readMetadata =
         (await this.paginator.validateSnapshot(
@@ -3394,12 +3421,14 @@ export class FoundryClient {
 
     const context = this.paginationContext('collection', { collection }, surface);
     let validate: (() => Promise<void>) | undefined;
+    let maximumExpiresAt: number | undefined;
     let records: CollectionRecord[] | undefined;
     if (params.cursor === undefined) {
       if (this.config.apiKey) {
         if (collection === 'actors') {
           const fetched = await this.fetchAllRestActors({});
           validate = fetched.validate;
+          maximumExpiresAt = fetched.expiresAt;
           records = fetched.records.map((record) => ({
             id: record._id,
             name: record.name,
@@ -3409,6 +3438,7 @@ export class FoundryClient {
         } else {
           const fetched = await this.fetchAllRestItems();
           validate = fetched.validate;
+          maximumExpiresAt = fetched.expiresAt;
           records = fetched.records.map((record) => ({
             id: record._id,
             name: record.name,
@@ -3464,7 +3494,14 @@ export class FoundryClient {
       }
       records = sortCollectionRecords(records);
     }
-    const page = this.paginator.paginate(records, params, context, this.getReadMetadata());
+    const page = this.paginator.paginate(
+      records,
+      params,
+      context,
+      this.getReadMetadata(),
+      undefined,
+      maximumExpiresAt,
+    );
     if (this.config.apiKey) {
       page.readMetadata =
         (await this.paginator.validateSnapshot(

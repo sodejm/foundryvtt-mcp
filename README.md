@@ -425,7 +425,9 @@ Foundry user and grant `entity:read`; unresolved identity fails closed. A multi-
 `snapshotId` identifying an immutable collection: the client sends it on subsequent
 requests and requires the same token on every response. Cached MCP pages revalidate
 the backend token before returning records, including after permission revocation. Legacy backends without
-this contract support only results completed in one backend page. Changed or missing
+this contract support only results that fit in one MCP response page: the requested
+limit must cover the entire filtered result (maximum 100 records). Legacy backends
+cannot provide safe continuation cursors. Changed or missing
 tokens, ignored pages, repeated IDs and inconsistent totals fail the read. REST journal/world searches
 and scene/journal/user collection pages are unsupported and return errors.
 

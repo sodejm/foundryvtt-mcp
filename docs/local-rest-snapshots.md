@@ -107,8 +107,10 @@ or reset that test server when no longer needed.
   the backend returns `SNAPSHOT_EXPIRED`.
 
 Local Socket integration also passed 41 cases in two files against this install.
-The MCP suite passed 1,823 tests in 67 files with no skips and 100% coverage for
+The MCP suite passed 1,831 tests in 67 files with no skips and 100% coverage for
 the six required read modules; workflow tests passed 791 cases in seven files.
+Slow-acquisition regressions verify that MCP cursor expiry never extends the
+backend snapshot lifetime and that an already expired acquisition is rejected.
 Build, lint, documentation, startup/dotenv/package smoke checks, dependency audit,
 secret scan, Semgrep scan/rule tests and workflow policy checks passed. The module
 passed 54 tests and its build; the relay passed `go test ./...` and its build.
