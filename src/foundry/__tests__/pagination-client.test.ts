@@ -1,5 +1,8 @@
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DiagnosticsClient } from '../../diagnostics/client.js';
+import { handleReadResource } from '../../tools/handlers/resources.js';
+import { handleGetUsers } from '../../tools/handlers/users.js';
 import {
   CONTENT_GENERATION_UNAVAILABLE,
   DIAGNOSTICS_UNAVAILABLE,
@@ -216,6 +219,95 @@ describe('socket snapshot pagination', () => {
       /maximum length/,
     );
     await expect(client.searchItems({ type: 'x'.repeat(129) })).rejects.toThrow(/maximum length/);
+  });
+});
+
+describe('users resource serialization', () => {
+  async function readUsers(client: FoundryClient, uri = 'foundry://users') {
+    const response = await handleReadResource(uri, client, {} as DiagnosticsClient);
+    const text = response.contents[0].text;
+    return { text, page: JSON.parse(text) };
+  }
+
+  function addPrivateFields(world: WorldData) {
+    for (const user of world.users) {
+      Object.assign(user, {
+        password: 'PRIVATE_PASSWORD_MARKER',
+        passwordHash: 'PRIVATE_HASH_MARKER',
+        authentication: { token: 'PRIVATE_AUTH_MARKER' },
+        flags: { module: { nested: ['PRIVATE_FLAG_MARKER'] } },
+        futureField: { credential: 'PRIVATE_UNKNOWN_MARKER' },
+        avatar: 'PRIVATE_AVATAR_MARKER',
+        character: 'PRIVATE_CHARACTER_MARKER',
+      });
+    }
+  }
+
+  it('serializes only documented fields across immutable pages with private source fields', async () => {
+    const { client, world } = socketClient();
+    addPrivateFields(world);
+    const first = await readUsers(client, 'foundry://users?limit=1');
+    expect(first.page).toMatchObject({ schemaVersion: 3, collection: 'users', total: 2 });
+    expect(first.page.records).toEqual([
+      { id: id('U', 1), name: 'GM', documentType: 'User', active: true, role: 4 },
+    ]);
+    expect(first.page.nextUri).toEqual(expect.stringMatching(/^foundry:\/\/users\?/));
+    world.users[1].name = 'Changed after first page';
+    const second = await readUsers(client, first.page.nextUri);
+    expect(second.page.records).toEqual([
+      { id: id('U', 2), name: 'Other GM', documentType: 'User', active: false, role: 4 },
+    ]);
+    expect(second.page.nextUri).toBeNull();
+    expect(second.page.snapshotId).toBe(first.page.snapshotId);
+    for (const { text } of [first, second]) {
+      expect(text).not.toContain('PRIVATE_');
+      expect(text).not.toContain('password');
+      expect(text).not.toContain('authentication');
+      expect(text).not.toContain('flags');
+      expect(text).not.toContain('futureField');
+    }
+  });
+
+  it('supports a single online GM without optional user profile fields', async () => {
+    const { client, world } = socketClient();
+    world.users.splice(1);
+    const { page } = await readUsers(client);
+    expect(page.records).toEqual([
+      { id: id('U', 1), name: 'GM', documentType: 'User', active: true, role: 4 },
+    ]);
+    expect(page.nextUri).toBeNull();
+    expect(page.total).toBe(1);
+  });
+
+  it('omits a missing role on a non-caller user without exposing other fields', async () => {
+    const { client, world } = socketClient();
+    addPrivateFields(world);
+    Reflect.deleteProperty(world.users[1], 'role');
+    const { text, page } = await readUsers(client);
+    expect(page.records[1]).toEqual({
+      id: id('U', 2),
+      name: 'Other GM',
+      documentType: 'User',
+      active: false,
+    });
+    expect(text).not.toContain('PRIVATE_');
+  });
+
+  it.each(['_id', 'name'])('fails closed when a user lacks required %s', async (field) => {
+    const { client, world } = socketClient();
+    Reflect.deleteProperty(world.users[1], field);
+    await expect(readUsers(client)).rejects.toThrow();
+  });
+
+  it('preserves get_users role and online status without serializing private fields', async () => {
+    const { client, world } = socketClient();
+    addPrivateFields(world);
+    const response = await handleGetUsers({}, client);
+    const text = JSON.stringify(response);
+    expect(text).toContain('1/2 online');
+    expect(text).toContain('**GM** (Game Master) — Online');
+    expect(text).toContain('**Other GM** (Game Master) — Offline');
+    expect(text).not.toContain('PRIVATE_');
   });
 });
 
