@@ -10,7 +10,6 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  id-token: write
 
 jobs:
   release-please:
@@ -36,10 +35,11 @@ jobs:
 
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ github.repository == 'laurigates/foundryvtt-mcp' && github.ref == 'refs/heads/main' && needs.release-please.outputs.release_created == 'true' }}
     permissions:
       contents: read
       id-token: write # OIDC for npm trusted publishing
-    uses: laurigates/.github/.github/workflows/reusable-npm-publish.yml@main
+    # Review and update procedure: docs/adrs/0008-npm-trusted-publishing-oidc.md
+    uses: laurigates/.github/.github/workflows/reusable-npm-publish.yml@aad403be1e3d72f68f6536f212ed3a0339263d22
     with:
       node-version: "24"
