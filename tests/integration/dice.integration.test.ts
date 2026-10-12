@@ -96,14 +96,14 @@ describe('live bounded dice through built MCP and official controlled RNG', () =
   }
   async function call(index: number, args: Record<string, unknown>) {
     const result = CallToolResultSchema.parse(await clients[index]!.callTool({ name: 'roll_dice', arguments: args }));
-    expect(JSON.stringify(result)).not.toContain(fixture.diceKey);
+    expect(JSON.stringify(result).includes(fixture.diceKey)).toBe(false);
     return result;
   }
   async function internalFailure(index: number, args: Record<string, unknown>) {
     const error = await call(index, args).then(() => { throw new Error('Expected tool execution to fail'); }, error => error);
     expect(error).toMatchObject({ code: ErrorCode.InternalError });
-    expect(String(error)).not.toContain(fixture.diceKey);
-    expect(String(error)).not.toContain('invalid-test-dice-key');
+    expect(String(error).includes(fixture.diceKey)).toBe(false);
+    expect(String(error).includes('invalid-test-dice-key')).toBe(false);
   }
   it.each(validDiceCases)('matches official outcomes with identical controlled RNG: %s', async formula => {
     const uniforms = Array.from({ length: 1000 }, (_, index) => [0.9, 0, 0.4, 0.2][index % 4]!);
