@@ -23,14 +23,12 @@ import { logger } from '../utils/logger.js';
  * simply never answers `getJoinData` and emits `session` as `null` — so the
  * only symptom is a bare timeout with no `connect_error` (#206).
  *
- * `extraHeaders` is honoured by socket.io-client in Node.js for both the
- * WebSocket and polling handshakes; the query parameter is kept for servers
- * that read it.
+ * `extraHeaders` carries the cookie on Node.js WebSocket handshakes, including
+ * reconnects. Keep the reusable session out of the request URL.
  */
 export function sessionSocketOptions(session: string): Partial<ManagerOptions & SocketOptions> {
   return {
     transports: ['websocket'],
-    query: { session },
     extraHeaders: { Cookie: `session=${session}` },
   };
 }

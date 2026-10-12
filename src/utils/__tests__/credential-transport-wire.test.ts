@@ -106,6 +106,9 @@ it('keeps Socket.IO sessions on the original endpoint across redirect failures a
   originServer.on('upgrade', (request, socket) => {
     upgrades++;
     expect(request.headers.cookie).toBe('session=wire-session');
+    const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    expect(requestUrl.searchParams.has('session')).toBe(false);
+    expect(requestUrl.href.includes('wire-session')).toBe(false);
     socket.end(
       `HTTP/1.1 302 Found\r\nLocation: ${target.replace('http:', 'ws:')}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
     );

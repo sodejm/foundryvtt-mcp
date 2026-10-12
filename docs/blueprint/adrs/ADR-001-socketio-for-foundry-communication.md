@@ -22,12 +22,15 @@ Use `socket.io-client` (v4.x) to connect directly to the FoundryVTT Socket.IO se
 3. POST `/join` with the document `_id` and password to create an authenticated session.
 4. Reconnect via Socket.IO with the authenticated session to receive the full world state.
 
+Session authentication uses the Cookie header only, including on reconnects.
+Reusable session tokens are never placed in Socket.IO URL query parameters.
+
 ## Consequences
 
 **Positive:**
 - No custom FoundryVTT module required for core functionality.
 - Full world state (actors, items, scenes, journals, combat, users, chat) is received in a single `joinGame` response event.
-- The approach works with any FoundryVTT version that uses Socket.IO (v10+).
+- Cookie-only user lookup, world loading, and reconnects are verified on FoundryVTT 14.369. Earlier versions are not qualified.
 
 **Negative:**
 - The authentication flow reverse-engineers internal FoundryVTT behavior and may break across major FoundryVTT versions.
