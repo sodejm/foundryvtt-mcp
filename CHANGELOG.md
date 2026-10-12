@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+See the [backlog release notes](docs/releases/unreleased-backlog.md) for all seven
+contribution categories, compatibility, migration steps, implementation PRs and
+remaining qualification gates. These fork changes have no new published version.
+
 ### Features
 
 - Add bounded journal summaries with stable page IDs/UUIDs and explicit preview
