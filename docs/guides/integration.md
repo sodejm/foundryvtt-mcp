@@ -598,6 +598,46 @@ empty searches, filters, 1/100/101/251-entry traversals, authorization revocatio
 module removal and recovery. Missing prerequisites fail instead of skipping. See
 [optional capability configuration and test prerequisites](optional-capabilities.md).
 
+### Docker integration harness
+
+Run `bun run test:integration:docker` to start an ephemeral Compose project,
+run the live suite and remove that project. Additional arguments select tests,
+for example `bun run test:integration:docker tests/integration/connection.integration.test.ts`.
+Keep license/download credentials and image configuration in the ignored
+`.env.integration` file. Foundry account download credentials and world login
+credentials are separate; prepare a licensed world before expecting live tests
+to pass.
+
+The published port binds to `127.0.0.1:30001` by default. Set
+`FOUNDRY_TEST_PORT=30022` when another local instance occupies that port. The
+harness sets `FOUNDRY_URL` to its own loopback endpoint and owns a unique Compose
+project, so teardown targets only the service it started.
+
+Each run generates a new admin key in a mode-0600 file inside a mode-0700 temporary
+directory. The image reads it through `/run/secrets/config.json`; the harness
+does not print it or pass it in command arguments or environment variables.
+Inherited `FOUNDRY_ADMIN_KEY` values, including legacy `.env.integration` entries,
+are ignored. Direct Compose startup requires `FOUNDRY_TEST_SECRET_FILE`; use the
+harness to create and remove this private file.
+
+Docker VMs must be able to mount that temporary directory. If your VM does not
+share the host's default temporary location (for example, Colima on macOS), set
+`TMPDIR` to a private directory inside a shared host path before running the
+harness. Keep that directory outside tracked source files.
+
+Startup failures, test failures, SIGINT and SIGTERM all attempt Compose teardown
+and remove the temporary credential. Test failures remain failures even when
+teardown succeeds. If teardown itself fails, the harness reports its project
+name for targeted cleanup; use the same Compose files and set
+`FOUNDRY_TEST_SECRET_FILE=/dev/null` for `down -v --remove-orphans`. A host crash or
+SIGKILL cannot run cleanup: remove the abandoned project and its private
+`foundry-integration-*` temporary directory before reusing the port.
+
+Nonlocal testing requires an explicit `FOUNDRY_TEST_BIND_ADDRESS` override, such
+as `0.0.0.0`, and access controls on the host. Restrict the port to trusted test
+clients with a firewall or private tunnel, use disposable accounts, and do not
+publish this test service to the public internet.
+
 ### GitHub Actions live endpoint
 
 The integration workflow requires a prepared disposable `test1world` with dnd5e, the REST module, a paired REST relay and all fixture controllers reachable from the runner. Create a GitHub environment named `foundry-integration`, select **Selected branches and tags**, and allow only the `main` branch (no tag or pull request patterns). Store the following secrets only in that environment; remove any copies from repository, organization or Dependabot secrets. This server-side policy prevents pull request workflow edits from accessing the credentials. Review and merge the revision before dispatching the workflow from `main`:

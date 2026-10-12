@@ -113,7 +113,7 @@ describe('production logger', () => {
     expect(getter).not.toHaveBeenCalled();
     expect(serializer).not.toHaveBeenCalled();
     expect(output.join('')).not.toContain('private');
-    expect(output.join('')).not.toContain('99');
+    expect(output.join('').replace(/^\[[^\]]+\] /gm, '')).not.toContain('99');
   });
 });
 

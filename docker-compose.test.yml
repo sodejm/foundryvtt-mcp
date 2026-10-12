@@ -1,8 +1,12 @@
 services:
   fvtt-test:
     image: felddy/foundryvtt:14
+    hostname: foundry-integration
     ports:
-      - "30001:30000"
+      - "${FOUNDRY_TEST_BIND_ADDRESS:-127.0.0.1}:${FOUNDRY_TEST_PORT:-30001}:30000"
+    secrets:
+      - source: foundry_test_config
+        target: config.json
     environment:
       - FOUNDRY_LICENSE_KEY=${FOUNDRY_LICENSE_KEY}
       # TWO pins, and FOUNDRY_VERSION is the one that decides. The felddy image
@@ -21,10 +25,14 @@ services:
       # .claude/rules/foundry-write-protocol.md before trusting the write tools
       # on this pin.
       - FOUNDRY_VERSION=${FOUNDRY_VERSION:-14.367}
-      - FOUNDRY_ADMIN_KEY=integration-test-admin
       - FOUNDRY_USERNAME=${FOUNDRY_USERNAME:-test-user}
       - FOUNDRY_PASSWORD=${FOUNDRY_PASSWORD:-test-password}
+      # Override legacy keys from env_file; the private config secret supplies it.
+      - FOUNDRY_ADMIN_KEY=
       - CONTAINER_PRESERVE_CONFIG=false
+    env_file:
+      - path: .env.integration
+        required: false
     tmpfs:
       - /data
     healthcheck:
@@ -33,5 +41,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s
-    env_file:
-      - .env.integration
+secrets:
+  foundry_test_config:
+    file: ${FOUNDRY_TEST_SECRET_FILE:?Use bun run test:integration:docker to create a per-run admin secret}
