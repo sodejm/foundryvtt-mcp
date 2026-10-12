@@ -113,7 +113,7 @@ bun install
 bun run setup-wizard
 ```
 
-The setup wizard will detect your FoundryVTT server, test connectivity, and generate your `.env` configuration.
+The setup wizard will detect your FoundryVTT server, test connectivity, and generate your `.env` configuration in the current directory. It atomically replaces the file with owner-only permissions on POSIX systems and rejects `.env` symlinks. See the [Configuration Guide](docs/guides/configuration.md) for permission checks and Windows access controls.
 
 To configure manually, see the [Configuration Guide](docs/guides/configuration.md).
 
