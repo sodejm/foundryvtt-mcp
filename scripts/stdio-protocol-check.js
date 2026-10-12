@@ -22,6 +22,7 @@ export async function verifyInstalledStdio({ consumer, serverPath }) {
       Object.assign(env, {
         FOUNDRY_URL: `http://127.0.0.1:${fixture.address().port}`,
         FOUNDRY_API_KEY: 'fixture-private-key',
+        FOUNDRY_ALLOW_PRIVILEGED_ACCOUNT: 'true',
         FOUNDRY_WRITE_ENABLED: 'false',
         NODE_ENV: 'test',
       });
