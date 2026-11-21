@@ -66,16 +66,38 @@ jobs:
       - run: actionlint
 
   codeql:
-    name: CodeQL Analysis
+    name: CodeQL Analysis (${{ matrix.language }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            config: .github/codeql/javascript.yml
+          - language: python
+            config: .github/codeql/security-extended.yml
+          - language: actions
+            config: .github/codeql/security-extended.yml
     permissions:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          languages: javascript-typescript
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+          persist-credentials: false
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        id: init
         with:
-          category: "/language:javascript-typescript"
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ${{ matrix.config }}
+      - name: Test delegated dispatch query
+        if: matrix.language == 'javascript-typescript'
+        env:
+          CODEQL: ${{ steps.init.outputs.codeql-path }}
+        run: |
+          "$CODEQL" pack install .github/codeql/javascript
+          "$CODEQL" test run .github/codeql/javascript/tests
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: "/language:${{ matrix.language }}"
