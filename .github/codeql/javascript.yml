@@ -1,0 +1,6 @@
+name: JavaScript security and delegated dispatch
+paths-ignore:
+  - .github/codeql/javascript/tests
+queries:
+  - uses: security-extended
+  - uses: ./.github/codeql/javascript/queries
