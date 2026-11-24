@@ -206,22 +206,20 @@ describe('itemEconomyText', () => {
     ).toEqual({ price: '4 cp', rarity: 'common, uncommon' });
   });
 
-  it.each([
-    'missing',
-    'invalid',
-    'not-applicable',
-    'unsupported',
-  ] as const)('renders explicit unknown status %s', (status) => {
-    expect(
-      itemEconomyText(
-        economy({
-          price: { status, currencies: [], per: null },
-          rarity: { status, values: [] },
-        }),
-      ),
-    ).toEqual({
-      price: `Unknown price (${status})`,
-      rarity: `Unknown rarity (${status})`,
-    });
-  });
+  it.each(['missing', 'invalid', 'not-applicable', 'unsupported'] as const)(
+    'renders explicit unknown status %s',
+    (status) => {
+      expect(
+        itemEconomyText(
+          economy({
+            price: { status, currencies: [], per: null },
+            rarity: { status, values: [] },
+          }),
+        ),
+      ).toEqual({
+        price: `Unknown price (${status})`,
+        rarity: `Unknown rarity (${status})`,
+      });
+    },
+  );
 });

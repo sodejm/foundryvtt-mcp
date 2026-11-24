@@ -8,7 +8,7 @@ local/CI parity.
 
 | Tier | Command | Scope |
 |------|---------|-------|
-| Unit | `just test` (`bun test`) | Pure logic, handlers, client methods with mocked I/O. New functions require unit tests; `just test-coverage` for coverage. |
+| Unit | `just test` (`bun run test`) | Pure logic, handlers, client methods with mocked I/O. New functions require unit tests; `just test-coverage` for coverage. |
 | Integration | `bun run test:integration` | `tests/integration/**` against a **live** FoundryVTT (`docker-compose.test.yml`, port 30001). Real Socket.IO auth + worldData. |
 | E2E | `just test-e2e` (`bun run test:e2e`) | Playwright smoke specs (`tests/e2e/**`). |
 | Gate | `just qa` | biome + `tsc` + unit Vitest — run before committing. |

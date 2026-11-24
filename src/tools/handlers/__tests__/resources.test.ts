@@ -52,32 +52,33 @@ describe('bounded collection resources', () => {
     ['journals', 'JournalEntry', 'getCollectionPage'],
     ['users', 'User', 'getCollectionPage'],
   ] as const;
-  it.each(
-    collections,
-  )('returns a default bounded %s page with stable IDs', async (collection, documentType, method) => {
-    const record = { _id: 'Document00000001', name: 'Twin', type: 'npc' };
-    const fetch = vi.fn().mockResolvedValue({
-      ...(method === 'getCollectionPage'
-        ? { records: [{ id: record._id, name: record.name, documentType }] }
-        : { [collection]: [record] }),
-      ...paginationMetadata(1, 1, 100),
-    });
-    const payload = await readJson(`foundry://${collection}`, { [method]: fetch });
-    expect(payload).toMatchObject({
-      schemaVersion: 3,
-      collection,
-      records: [{ id: record._id, documentType }],
-      total: 1,
-      limit: 100,
-      returnedCount: 1,
-      complete: true,
-      nextCursor: null,
-      nextUri: null,
-    });
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(
-      ...(method === 'getCollectionPage' ? [collection, { limit: 100 }] : [{ limit: 100 }]),
-    );
-  });
+  it.each(collections)(
+    'returns a default bounded %s page with stable IDs',
+    async (collection, documentType, method) => {
+      const record = { _id: 'Document00000001', name: 'Twin', type: 'npc' };
+      const fetch = vi.fn().mockResolvedValue({
+        ...(method === 'getCollectionPage'
+          ? { records: [{ id: record._id, name: record.name, documentType }] }
+          : { [collection]: [record] }),
+        ...paginationMetadata(1, 1, 100),
+      });
+      const payload = await readJson(`foundry://${collection}`, { [method]: fetch });
+      expect(payload).toMatchObject({
+        schemaVersion: 3,
+        collection,
+        records: [{ id: record._id, documentType }],
+        total: 1,
+        limit: 100,
+        returnedCount: 1,
+        complete: true,
+        nextCursor: null,
+        nextUri: null,
+      });
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        ...(method === 'getCollectionPage' ? [collection, { limit: 100 }] : [{ limit: 100 }]),
+      );
+    },
+  );
   it('preserves and encodes the continuation context in nextUri', async () => {
     const fetch = vi
       .fn()

@@ -112,36 +112,34 @@ describe('Compendium handlers', () => {
     });
     expect(textOf(response)).toContain('No compendium entries found');
   });
-  it.each([
-    'unavailable',
-    'unauthorized',
-    'unreachable',
-    'incompatible',
-  ] as const)('reports %s as an explicit failure with unknown results', async (status) => {
-    const response = await handleSearchCompendium(
-      { query: 'Divine Smite' },
-      mockClient({
-        schemaVersion: 1,
+  it.each(['unavailable', 'unauthorized', 'unreachable', 'incompatible'] as const)(
+    'reports %s as an explicit failure with unknown results',
+    async (status) => {
+      const response = await handleSearchCompendium(
+        { query: 'Divine Smite' },
+        mockClient({
+          schemaVersion: 1,
+          restAvailable: false,
+          capability: { ...capability(status), status },
+          results: null,
+          total: null,
+          page: null,
+          limit: 20,
+          nextCursor: null,
+        }),
+      );
+      expect(response.structuredContent).toMatchObject({
         restAvailable: false,
-        capability: { ...capability(status), status },
         results: null,
         total: null,
         page: null,
-        limit: 20,
-        nextCursor: null,
-      }),
-    );
-    expect(response.structuredContent).toMatchObject({
-      restAvailable: false,
-      results: null,
-      total: null,
-      page: null,
-      capability: { status },
-    });
-    expect(textOf(response)).toContain(`Compendium search: ${status}`);
-    expect(textOf(response)).toContain('Results are unavailable.');
-    expect(textOf(response)).not.toContain('No compendium entries found');
-  });
+        capability: { status },
+      });
+      expect(textOf(response)).toContain(`Compendium search: ${status}`);
+      expect(textOf(response)).toContain('Results are unavailable.');
+      expect(textOf(response)).not.toContain('No compendium entries found');
+    },
+  );
   it('renders the opaque next-page cursor', async () => {
     const response = await handleSearchCompendium(
       { query: 'Divine Smite' },

@@ -207,21 +207,21 @@ describe('authenticateFoundry — same-origin login request', () => {
     vi.resetAllMocks();
   });
 
-  it.each([
-    'http://127.0.0.1:30001',
-    'https://example.com/foundry',
-  ])('sends the server origin for %s so Foundry 14 accepts the POST', async (baseUrl) => {
-    await authenticateFoundry(baseUrl, 'abc123DEF456ghij', '');
+  it.each(['http://127.0.0.1:30001', 'https://example.com/foundry'])(
+    'sends the server origin for %s so Foundry 14 accepts the POST',
+    async (baseUrl) => {
+      await authenticateFoundry(baseUrl, 'abc123DEF456ghij', '');
 
-    expect(mockAxios.post).toHaveBeenCalledWith(
-      `${baseUrl}/join`,
-      expect.objectContaining({ password: '' }),
-      expect.objectContaining({
-        maxRedirects: 0,
-        headers: expect.objectContaining({ Origin: new URL(baseUrl).origin }),
-      }),
-    );
-  });
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        `${baseUrl}/join`,
+        expect.objectContaining({ password: '' }),
+        expect.objectContaining({
+          maxRedirects: 0,
+          headers: expect.objectContaining({ Origin: new URL(baseUrl).origin }),
+        }),
+      );
+    },
+  );
 });
 
 describe('authenticateFoundry — rejected /join is reported, not thrown raw (#206)', () => {

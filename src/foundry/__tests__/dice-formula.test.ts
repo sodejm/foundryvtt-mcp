@@ -125,20 +125,14 @@ describe('evaluateDiceFormula', () => {
     ).toEqual([false, false, true, true]);
   });
 
-  it.each([
-    '1d6dh',
-    '1d6dh1',
-    '1d6dl',
-    '1d6dl1',
-    '2d6dh2',
-    '2d6dl2',
-    '4d6dh4',
-    '4d6dl4',
-  ])('preserves all outcomes for native drop-all formula %s', (formula) => {
-    const result = evaluateDiceFormula(formula, () => 0);
-    expect(result.dice[0]?.results.every(({ active }) => active)).toBe(true);
-    expect(result.total).toBe(Number(formula[0]) * 6);
-  });
+  it.each(['1d6dh', '1d6dh1', '1d6dl', '1d6dl1', '2d6dh2', '2d6dl2', '4d6dh4', '4d6dl4'])(
+    'preserves all outcomes for native drop-all formula %s',
+    (formula) => {
+      const result = evaluateDiceFormula(formula, () => 0);
+      expect(result.dice[0]?.results.every(({ active }) => active)).toBe(true);
+      expect(result.total).toBe(Number(formula[0]) * 6);
+    },
+  );
 
   it('supports zero dice without consuming randomness', () => {
     const rng = vi.fn(() => 0);
@@ -161,21 +155,16 @@ describe('evaluateDiceFormula', () => {
     expect(random).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    undefined,
-    null,
-    '0',
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    -0.1,
-    1,
-  ])('rejects injected RNG result %j without falling back to Math.random', (uniform) => {
-    const random = vi.spyOn(Math, 'random');
-    expect(() => evaluateDiceFormula('d6', () => uniform as number)).toThrow(
-      /finite value in \[0, 1\)/,
-    );
-    expect(random).not.toHaveBeenCalled();
-  });
+  it.each([undefined, null, '0', Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1])(
+    'rejects injected RNG result %j without falling back to Math.random',
+    (uniform) => {
+      const random = vi.spyOn(Math, 'random');
+      expect(() => evaluateDiceFormula('d6', () => uniform as number)).toThrow(
+        /finite value in \[0, 1\)/,
+      );
+      expect(random).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects intermediate and final totals outside the safe integer range', () => {
     const huge = Number.MAX_SAFE_INTEGER;

@@ -313,58 +313,57 @@ describe('journal read client', () => {
     ).rejects.toThrow(/cursor/i);
   });
 
-  it.each([
-    'content',
-    'sort',
-    'ownership',
-  ] as const)('invalidates page cursors after %s mutation', async (mutation) => {
-    const value = journal({
-      pages: [
-        {
-          _id: PAGE_ID,
-          name: 'Page',
-          type: 'text',
-          sort: 1,
-          text: { format: 2, markdown: 'x'.repeat(6_000) },
-          ownership: { default: -1 },
-        },
-        {
-          _id: OTHER_PAGE_ID,
-          name: 'Other',
-          type: 'text',
-          sort: 2,
-          text: { format: 2, markdown: 'other' },
-          ownership: { default: -1 },
-        },
-      ],
-    });
-    const { client } = serviceClient([value]);
-    const first = await client.getJournalPageContent({
-      journalId: JOURNAL_ID,
-      pageId: PAGE_ID,
-      limit: 1,
-    });
-    const page = value.pages?.[0];
-    if (!page) {
-      throw new Error('expected page');
-    }
-    if (mutation === 'content') {
-      page.text = { format: 2, markdown: 'y'.repeat(6_000) };
-    }
-    if (mutation === 'sort') {
-      page.sort = 3;
-    }
-    if (mutation === 'ownership') {
-      page.ownership = { default: 3 };
-    }
-    await expect(
-      client.getJournalPageContent({
+  it.each(['content', 'sort', 'ownership'] as const)(
+    'invalidates page cursors after %s mutation',
+    async (mutation) => {
+      const value = journal({
+        pages: [
+          {
+            _id: PAGE_ID,
+            name: 'Page',
+            type: 'text',
+            sort: 1,
+            text: { format: 2, markdown: 'x'.repeat(6_000) },
+            ownership: { default: -1 },
+          },
+          {
+            _id: OTHER_PAGE_ID,
+            name: 'Other',
+            type: 'text',
+            sort: 2,
+            text: { format: 2, markdown: 'other' },
+            ownership: { default: -1 },
+          },
+        ],
+      });
+      const { client } = serviceClient([value]);
+      const first = await client.getJournalPageContent({
         journalId: JOURNAL_ID,
         pageId: PAGE_ID,
-        cursor: requireCursor(first.nextCursor),
-      }),
-    ).rejects.toThrow(/query, world, or caller/);
-  });
+        limit: 1,
+      });
+      const page = value.pages?.[0];
+      if (!page) {
+        throw new Error('expected page');
+      }
+      if (mutation === 'content') {
+        page.text = { format: 2, markdown: 'y'.repeat(6_000) };
+      }
+      if (mutation === 'sort') {
+        page.sort = 3;
+      }
+      if (mutation === 'ownership') {
+        page.ownership = { default: 3 };
+      }
+      await expect(
+        client.getJournalPageContent({
+          journalId: JOURNAL_ID,
+          pageId: PAGE_ID,
+          cursor: requireCursor(first.nextCursor),
+        }),
+      ).rejects.toThrow(/query, world, or caller/);
+    },
+  );
 
   it('invalidates page cursors after deletion', async () => {
     const value = journal({

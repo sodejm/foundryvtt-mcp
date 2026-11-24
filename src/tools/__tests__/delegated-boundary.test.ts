@@ -94,20 +94,21 @@ for (const route of [routeToolRequest, routeNewTool]) {
       expect(debug).not.toHaveBeenCalled();
     });
 
-    it.each(
-      Object.entries(delegatedTools),
-    )('requires active authorization for %s (%s)', async (name, surface) => {
-      const denial = new McpError(ErrorCode.InvalidRequest, 'Caller is not authorized');
-      const execute = vi.spyOn(toolRegistry, 'execute');
-      const client = delegated({
-        assertReadSurfaceAllowed: vi.fn(() => {
-          throw denial;
-        }),
-      });
-      await expect(route(name, {}, client, diagnostics, system)).rejects.toBe(denial);
-      expect(client.assertReadSurfaceAllowed).toHaveBeenCalledWith(surface);
-      expect(execute).not.toHaveBeenCalled();
-    });
+    it.each(Object.entries(delegatedTools))(
+      'requires active authorization for %s (%s)',
+      async (name, surface) => {
+        const denial = new McpError(ErrorCode.InvalidRequest, 'Caller is not authorized');
+        const execute = vi.spyOn(toolRegistry, 'execute');
+        const client = delegated({
+          assertReadSurfaceAllowed: vi.fn(() => {
+            throw denial;
+          }),
+        });
+        await expect(route(name, {}, client, diagnostics, system)).rejects.toBe(denial);
+        expect(client.assertReadSurfaceAllowed).toHaveBeenCalledWith(surface);
+        expect(execute).not.toHaveBeenCalled();
+      },
+    );
 
     it('sanitizes unexpected registry errors without losing protocol errors', async () => {
       vi.spyOn(toolRegistry, 'has').mockReturnValue(true);
@@ -187,24 +188,23 @@ for (const route of [routeResourceRequest, routeNewResource, handleReadResource]
 }
 
 describe('delegated handler errors', () => {
-  it.each([
-    'different caller',
-    'expired snapshot',
-    'PRIVATE_WORLD',
-  ])('uses one safe invalid-params error for unavailable cursors: %s', async (reason) => {
-    await expect(
-      withToolError(
-        'read',
-        async () => {
-          throw new PaginationCursorError(reason);
-        },
-        delegated(),
-      ),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-      message: expect.stringContaining('Pagination cursor unavailable'),
-    });
-  });
+  it.each(['different caller', 'expired snapshot', 'PRIVATE_WORLD'])(
+    'uses one safe invalid-params error for unavailable cursors: %s',
+    async (reason) => {
+      await expect(
+        withToolError(
+          'read',
+          async () => {
+            throw new PaginationCursorError(reason);
+          },
+          delegated(),
+        ),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+        message: expect.stringContaining('Pagination cursor unavailable'),
+      });
+    },
+  );
 
   it('omits backend details from errors and logs', async () => {
     const errorLog = vi.spyOn(logger, 'error');

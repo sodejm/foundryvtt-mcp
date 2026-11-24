@@ -31,36 +31,35 @@ function call(instance: SetupWizard, method: string, ...args: unknown[]) {
 }
 
 describe('setup transport boundary', () => {
-  it.each([
-    'http://foundry.example',
-    'http://127.1',
-    `https://user:${key}@foundry.example`,
-  ])('rejects %s before all probes', async (url) => {
-    const instance = wizard(url);
-    await expect(call(instance, 'testConnectivity')).rejects.toThrow('require HTTPS');
-    await expect(call(instance, 'testAuthentication')).rejects.toThrow('require HTTPS');
-    expect(await call(instance, 'testUrl', url)).toBe(false);
-    expect(call(instance, 'isValidUrl', url)).toBe(false);
-    expect(axios.get).not.toHaveBeenCalled();
-    expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
-  });
-  it.each([
-    'http://localhost:30001',
-    'https://foundry.example',
-  ])('disables redirects on every probe for %s', async (url) => {
-    const instance = wizard(url);
-    expect(await call(instance, 'testConnectivity')).toBe(true);
-    await call(instance, 'testAuthentication');
-    expect(await call(instance, 'testUrl', url)).toBe(true);
-    expect(axios.get).toHaveBeenCalledTimes(3);
-    for (const [, options] of vi.mocked(axios.get).mock.calls) {
-      expect(options?.maxRedirects).toBe(0);
-    }
-    expect(axios.get).toHaveBeenCalledWith(
-      `${url}/api/status`,
-      expect.objectContaining({ headers: { 'x-api-key': key } }),
-    );
-  });
+  it.each(['http://foundry.example', 'http://127.1', `https://user:${key}@foundry.example`])(
+    'rejects %s before all probes',
+    async (url) => {
+      const instance = wizard(url);
+      await expect(call(instance, 'testConnectivity')).rejects.toThrow('require HTTPS');
+      await expect(call(instance, 'testAuthentication')).rejects.toThrow('require HTTPS');
+      expect(await call(instance, 'testUrl', url)).toBe(false);
+      expect(call(instance, 'isValidUrl', url)).toBe(false);
+      expect(axios.get).not.toHaveBeenCalled();
+      expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
+    },
+  );
+  it.each(['http://localhost:30001', 'https://foundry.example'])(
+    'disables redirects on every probe for %s',
+    async (url) => {
+      const instance = wizard(url);
+      expect(await call(instance, 'testConnectivity')).toBe(true);
+      await call(instance, 'testAuthentication');
+      expect(await call(instance, 'testUrl', url)).toBe(true);
+      expect(axios.get).toHaveBeenCalledTimes(3);
+      for (const [, options] of vi.mocked(axios.get).mock.calls) {
+        expect(options?.maxRedirects).toBe(0);
+      }
+      expect(axios.get).toHaveBeenCalledWith(
+        `${url}/api/status`,
+        expect.objectContaining({ headers: { 'x-api-key': key } }),
+      );
+    },
+  );
   it('does not echo credential-bearing request errors', async () => {
     vi.mocked(axios.get).mockRejectedValue(new Error(key));
     const instance = wizard('https://foundry.example');
@@ -70,20 +69,21 @@ describe('setup transport boundary', () => {
     );
     expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
   });
-  it.each([
-    301, 302, 307, 308,
-  ])('accepts a %s connectivity response without following it', async (status) => {
-    vi.mocked(axios.get).mockResolvedValue({ status, data: {} });
-    const url = 'https://foundry.example';
-    const instance = wizard(url);
-    expect(await call(instance, 'testConnectivity')).toBe(true);
-    expect(await call(instance, 'testUrl', url)).toBe(true);
-    expect(axios.get).toHaveBeenCalledTimes(2);
-    for (const [, options] of vi.mocked(axios.get).mock.calls) {
-      expect(options?.maxRedirects).toBe(0);
-      expect(options?.headers).toBeUndefined();
-    }
-  });
+  it.each([301, 302, 307, 308])(
+    'accepts a %s connectivity response without following it',
+    async (status) => {
+      vi.mocked(axios.get).mockResolvedValue({ status, data: {} });
+      const url = 'https://foundry.example';
+      const instance = wizard(url);
+      expect(await call(instance, 'testConnectivity')).toBe(true);
+      expect(await call(instance, 'testUrl', url)).toBe(true);
+      expect(axios.get).toHaveBeenCalledTimes(2);
+      for (const [, options] of vi.mocked(axios.get).mock.calls) {
+        expect(options?.maxRedirects).toBe(0);
+        expect(options?.headers).toBeUndefined();
+      }
+    },
+  );
   it.each([404, 500])('rejects an unexpected %s connectivity response', async (status) => {
     vi.mocked(axios.get).mockResolvedValue({ status, data: {} });
     const url = 'https://foundry.example';
@@ -106,18 +106,18 @@ describe('diagnostic transport boundary', () => {
     expect(axios).not.toHaveBeenCalled();
     expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
   });
-  it.each([
-    'http://127.0.0.1:30001',
-    'https://foundry.example',
-  ])('keeps credentials on the configured endpoint %s', async (url) => {
-    const run = await diagnostics(url);
-    await run();
-    expect(axios).toHaveBeenCalledTimes(8);
-    for (const [options] of vi.mocked(axios).mock.calls) {
-      expect(options).toMatchObject({ maxRedirects: 0 });
-    }
-    expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
-  });
+  it.each(['http://127.0.0.1:30001', 'https://foundry.example'])(
+    'keeps credentials on the configured endpoint %s',
+    async (url) => {
+      const run = await diagnostics(url);
+      await run();
+      expect(axios).toHaveBeenCalledTimes(8);
+      for (const [options] of vi.mocked(axios).mock.calls) {
+        expect(options).toMatchObject({ maxRedirects: 0 });
+      }
+      expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
+    },
+  );
   it('reports redirects as failures and hides request errors', async () => {
     const run = await diagnostics('https://foundry.example');
     vi.mocked(axios)

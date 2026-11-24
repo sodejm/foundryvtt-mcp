@@ -46,25 +46,18 @@ function countLines(result: Awaited<ReturnType<typeof handleGetChatMessages>>): 
 }
 
 describe('handleGetChatMessages — bounded limits', () => {
-  it.each([
-    0,
-    -1,
-    500,
-    10_000,
-    'all',
-    null,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    1.5,
-  ])('rejects invalid limit %s before reading world data', async (limit) => {
-    const client = mockFoundryClient(buildMessages(1000));
-    await expect(handleGetChatMessages({ limit }, client)).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-    });
-    expect(client.getChatMessages).not.toHaveBeenCalled();
-    expect(client.getUsers).not.toHaveBeenCalled();
-    expect(client.getReadMetadata).not.toHaveBeenCalled();
-  });
+  it.each([0, -1, 500, 10_000, 'all', null, Number.NaN, Number.POSITIVE_INFINITY, 1.5])(
+    'rejects invalid limit %s before reading world data',
+    async (limit) => {
+      const client = mockFoundryClient(buildMessages(1000));
+      await expect(handleGetChatMessages({ limit }, client)).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+      });
+      expect(client.getChatMessages).not.toHaveBeenCalled();
+      expect(client.getUsers).not.toHaveBeenCalled();
+      expect(client.getReadMetadata).not.toHaveBeenCalled();
+    },
+  );
 
   it('uses default limit of 20 when no limit supplied', async () => {
     const client = mockFoundryClient(buildMessages(50));

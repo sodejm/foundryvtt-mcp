@@ -36,17 +36,16 @@ for (const route of [routeToolRequest, routeNewToolRequest]) {
     const diagnostics = inaccessible<DiagnosticsClient>('diagnostics client');
     const system = inaccessible<DiagnosticSystem>('diagnostic system');
 
-    it.each([
-      {},
-      { category: 'module error' },
-      { category: 'unknown category' },
-    ])('routes valid input without consulting a diagnostic or Foundry source: %j', async (input) => {
-      const result = await route('diagnose_errors', input, isolatedClient(), diagnostics, system);
-      expect(result.structuredContent).toMatchObject({
-        schemaVersion: 1,
-        capability: { feature: 'diagnostics', status: 'unavailable' },
-      });
-    });
+    it.each([{}, { category: 'module error' }, { category: 'unknown category' }])(
+      'routes valid input without consulting a diagnostic or Foundry source: %j',
+      async (input) => {
+        const result = await route('diagnose_errors', input, isolatedClient(), diagnostics, system);
+        expect(result.structuredContent).toMatchObject({
+          schemaVersion: 1,
+          capability: { feature: 'diagnostics', status: 'unavailable' },
+        });
+      },
+    );
 
     it.each([
       { category: '' },

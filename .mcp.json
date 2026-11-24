@@ -6,27 +6,27 @@
     },
     "context7": {
       "command": "bunx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": ["-y", "@upstash/context7-mcp@4.7.3"]
     },
     "playwright": {
       "command": "bunx",
-      "args": ["-y", "@playwright/mcp@latest"]
+      "args": ["-y", "@playwright/mcp@0.0.86"]
     },
     "sequential-thinking": {
       "command": "bunx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking@2.2.0"]
     },
     "chrome-devtools": {
       "type": "stdio",
       "command": "bunx",
-      "args": ["chrome-devtools-mcp@latest"],
+      "args": ["chrome-devtools-mcp@1.13.0"],
       "env": {}
     },
     "github": {
       "command": "go",
       "args": [
         "run",
-        "github.com/github/github-mcp-server/cmd/github-mcp-server@latest",
+        "github.com/github/github-mcp-server/cmd/github-mcp-server@v1.14.0",
         "stdio"
       ],
       "env": {
@@ -35,7 +35,7 @@
     },
     "pal": {
       "command": "uvx",
-      "args": ["pal-mcp-server@latest"]
+      "args": ["pal-mcp-server@12.1.0"]
     }
   }
 }

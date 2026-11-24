@@ -53,27 +53,29 @@ const singletonReads = [
 afterEach(() => vi.useRealTimers());
 
 describe('cached read freshness', () => {
-  it.each(
-    singletonReads,
-  )('reports stale %s in both machine and text output', async (_name, handler, methods) => {
-    const metadata = readMetadata({ freshness: 'stale' });
-    const result = await handler({}, stub({ ...methods, getReadMetadata: () => metadata }));
-    expect(result.structuredContent.readMetadata).toEqual(metadata);
-    expect(result.content.at(-1)?.text).toContain('**Freshness:** stale');
-  });
-  it.each(
-    singletonReads,
-  )('rejects unavailable %s instead of a successful empty result', async (_name, handler, methods) => {
-    await expect(
-      handler(
-        {},
-        stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'unavailable' }) }),
-      ),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InternalError,
-      message: expect.stringContaining('World data unavailable'),
-    });
-  });
+  it.each(singletonReads)(
+    'reports stale %s in both machine and text output',
+    async (_name, handler, methods) => {
+      const metadata = readMetadata({ freshness: 'stale' });
+      const result = await handler({}, stub({ ...methods, getReadMetadata: () => metadata }));
+      expect(result.structuredContent.readMetadata).toEqual(metadata);
+      expect(result.content.at(-1)?.text).toContain('**Freshness:** stale');
+    },
+  );
+  it.each(singletonReads)(
+    'rejects unavailable %s instead of a successful empty result',
+    async (_name, handler, methods) => {
+      await expect(
+        handler(
+          {},
+          stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'unavailable' }) }),
+        ),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining('World data unavailable'),
+      });
+    },
+  );
   it('adds freshness to journal content and preserves missing-document errors', async () => {
     const result = await handleGetJournal(
       { journalId: id },
@@ -152,29 +154,30 @@ describe('structured read source metadata', () => {
     ['search_journals', handleSearchJournals, 'searchJournalsPage', { records: [] }],
     ['search_world', handleSearchWorld, 'searchWorldPage', { records: [] }],
   ] as const;
-  it.each(
-    searches,
-  )('%s preserves the page capture rather than relabeling it with a newer cache revision', async (name, handler, method, data) => {
-    const metadata = readMetadata({ freshness: 'stale', revision: 2 });
-    const result = await handler(
-      {},
-      stub({
-        [method]: async () => ({ ...data, ...paginationMetadata(0), readMetadata: metadata }),
-        getReadMetadata: () => readMetadata({ revision: 3 }),
-      }),
-    );
-    expect(result.structuredContent.readMetadata).toEqual(metadata);
-    expect(result.content[0]?.text).toContain('**Revision:** 2');
-    const schema = getAllTools().find((tool) => tool.name === name)?.outputSchema;
-    const validate = new Ajv({ strict: false, validateFormats: false }).compile(schema as object);
-    expect(validate(result.structuredContent)).toBe(true);
-    expect(
-      validate({
-        ...result.structuredContent,
-        readMetadata: readMetadata({ freshness: 'unavailable' }),
-      }),
-    ).toBe(false);
-  });
+  it.each(searches)(
+    '%s preserves the page capture rather than relabeling it with a newer cache revision',
+    async (name, handler, method, data) => {
+      const metadata = readMetadata({ freshness: 'stale', revision: 2 });
+      const result = await handler(
+        {},
+        stub({
+          [method]: async () => ({ ...data, ...paginationMetadata(0), readMetadata: metadata }),
+          getReadMetadata: () => readMetadata({ revision: 3 }),
+        }),
+      );
+      expect(result.structuredContent.readMetadata).toEqual(metadata);
+      expect(result.content[0]?.text).toContain('**Revision:** 2');
+      const schema = getAllTools().find((tool) => tool.name === name)?.outputSchema;
+      const validate = new Ajv({ strict: false, validateFormats: false }).compile(schema as object);
+      expect(validate(result.structuredContent)).toBe(true);
+      expect(
+        validate({
+          ...result.structuredContent,
+          readMetadata: readMetadata({ freshness: 'unavailable' }),
+        }),
+      ).toBe(false);
+    },
+  );
   it.each(searches)('%s rejects an unavailable page', async (_name, handler, method, data) => {
     await expect(
       handler(
@@ -196,24 +199,27 @@ describe('structured read source metadata', () => {
       'getActor',
     ],
     ['item', (client: FoundryClient) => handleGetItemDetails({ itemId: id }, client), 'getItem'],
-  ] as const)('%s details expose stale data and reject unavailable data', async (_name, handler, method) => {
-    const result = await handler(
-      stub({
-        [method]: async () => record,
-        getReadMetadata: () => readMetadata({ freshness: 'stale' }),
-      }),
-    );
-    expect(result.structuredContent.readMetadata.freshness).toBe('stale');
-    expect(result.content[0]?.text).toContain('**Freshness:** stale');
-    await expect(
-      handler(
+  ] as const)(
+    '%s details expose stale data and reject unavailable data',
+    async (_name, handler, method) => {
+      const result = await handler(
         stub({
           [method]: async () => record,
-          getReadMetadata: () => readMetadata({ freshness: 'unavailable' }),
+          getReadMetadata: () => readMetadata({ freshness: 'stale' }),
         }),
-      ),
-    ).rejects.toMatchObject({ code: ErrorCode.InternalError });
-  });
+      );
+      expect(result.structuredContent.readMetadata.freshness).toBe('stale');
+      expect(result.content[0]?.text).toContain('**Freshness:** stale');
+      await expect(
+        handler(
+          stub({
+            [method]: async () => record,
+            getReadMetadata: () => readMetadata({ freshness: 'unavailable' }),
+          }),
+        ),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+    },
+  );
 });
 
 describe('resource and health source boundaries', () => {
@@ -221,31 +227,30 @@ describe('resource and health source boundaries', () => {
     const response = await handleReadResource(uri, client, rest);
     return JSON.parse(response.contents[0]?.text ?? '');
   };
-  it.each([
-    'foundry://scenes/current',
-    'foundry://world/settings',
-    'foundry://combat',
-  ])('%s reports stale source metadata and rejects unavailable data', async (uri) => {
-    const methods = {
-      getCurrentScene: async () => {
-        throw new Error('No active scene');
-      },
-      getWorldInfo: async () => ({ title: 'Test' }),
-      getCombatState: () => null,
-    };
-    const payload = await read(
-      uri,
-      stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'stale' }) }),
-    );
-    expect(payload.readMetadata.freshness).toBe('stale');
-    expect(payload).not.toHaveProperty('lastUpdated');
-    await expect(
-      read(
+  it.each(['foundry://scenes/current', 'foundry://world/settings', 'foundry://combat'])(
+    '%s reports stale source metadata and rejects unavailable data',
+    async (uri) => {
+      const methods = {
+        getCurrentScene: async () => {
+          throw new Error('No active scene');
+        },
+        getWorldInfo: async () => ({ title: 'Test' }),
+        getCombatState: () => null,
+      };
+      const payload = await read(
         uri,
-        stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'unavailable' }) }),
-      ),
-    ).rejects.toMatchObject({ code: ErrorCode.InternalError });
-  });
+        stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'stale' }) }),
+      );
+      expect(payload.readMetadata.freshness).toBe('stale');
+      expect(payload).not.toHaveProperty('lastUpdated');
+      await expect(
+        read(
+          uri,
+          stub({ ...methods, getReadMetadata: () => readMetadata({ freshness: 'unavailable' }) }),
+        ),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+    },
+  );
   it('returns an active scene and propagates unexpected scene failures', async () => {
     expect(
       await read('foundry://scenes/current', stub({ getCurrentScene: async () => record })),

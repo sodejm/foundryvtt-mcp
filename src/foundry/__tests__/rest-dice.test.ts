@@ -141,49 +141,46 @@ describe('bounded native dice transport', () => {
     );
   });
 
-  it.each([
-    'formula',
-    'total',
-    'active',
-    'unknown-field',
-    'chat-created',
-  ])('rejects inconsistent %s without a reroll', async (mismatch) => {
-    const data = envelope();
-    if (mismatch === 'formula') {
-      data.data.roll.formula = '1d6';
-    }
-    if (mismatch === 'total') {
-      data.data.roll.total = 99;
-    }
-    if (mismatch === 'active') {
-      data.data.roll.dice = [
-        {
-          faces: 6,
-          results: [
-            { result: 6, active: true },
-            { result: 1, active: true },
-          ],
-        },
-      ];
-    }
-    if (mismatch === 'unknown-field') {
-      Object.assign(data, { unexpected: true });
-    }
-    if (mismatch === 'chat-created') {
-      data.data.chatMessageCreated = true;
-    }
-    post.mockResolvedValue({ data });
-    const random = vi.spyOn(Math, 'random');
-    try {
-      await expect(new DiceRestAdapter(options).roll(parsed)).rejects.toThrow(
-        'no retry or local fallback was attempted',
-      );
-      expect(post).toHaveBeenCalledOnce();
-      expect(random).not.toHaveBeenCalled();
-    } finally {
-      random.mockRestore();
-    }
-  });
+  it.each(['formula', 'total', 'active', 'unknown-field', 'chat-created'])(
+    'rejects inconsistent %s without a reroll',
+    async (mismatch) => {
+      const data = envelope();
+      if (mismatch === 'formula') {
+        data.data.roll.formula = '1d6';
+      }
+      if (mismatch === 'total') {
+        data.data.roll.total = 99;
+      }
+      if (mismatch === 'active') {
+        data.data.roll.dice = [
+          {
+            faces: 6,
+            results: [
+              { result: 6, active: true },
+              { result: 1, active: true },
+            ],
+          },
+        ];
+      }
+      if (mismatch === 'unknown-field') {
+        Object.assign(data, { unexpected: true });
+      }
+      if (mismatch === 'chat-created') {
+        data.data.chatMessageCreated = true;
+      }
+      post.mockResolvedValue({ data });
+      const random = vi.spyOn(Math, 'random');
+      try {
+        await expect(new DiceRestAdapter(options).roll(parsed)).rejects.toThrow(
+          'no retry or local fallback was attempted',
+        );
+        expect(post).toHaveBeenCalledOnce();
+        expect(random).not.toHaveBeenCalled();
+      } finally {
+        random.mockRestore();
+      }
+    },
+  );
 
   it('redacts uncertain transport errors and never retries', async () => {
     post.mockRejectedValue(new Error('fixture-key ambiguous outcome'));

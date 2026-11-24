@@ -159,18 +159,18 @@ describe('CompendiumRestAdapter', () => {
     expect(result).not.toHaveProperty('entries');
   });
 
-  it.each([
-    'ECONNABORTED',
-    'ETIMEDOUT',
-  ])('identifies transport timeout %s without leaking details', async (code) => {
-    axiosMocks.get.mockRejectedValue({ ...axiosError(undefined, 'api-secret'), code });
-    const result = await adapter().probe();
-    expect(result).toMatchObject({
-      status: 'unreachable',
-      reason: 'The Foundry REST relay timed out.',
-    });
-    expect(JSON.stringify(result)).not.toContain('api-secret');
-  });
+  it.each(['ECONNABORTED', 'ETIMEDOUT'])(
+    'identifies transport timeout %s without leaking details',
+    async (code) => {
+      axiosMocks.get.mockRejectedValue({ ...axiosError(undefined, 'api-secret'), code });
+      const result = await adapter().probe();
+      expect(result).toMatchObject({
+        status: 'unreachable',
+        reason: 'The Foundry REST relay timed out.',
+      });
+      expect(JSON.stringify(result)).not.toContain('api-secret');
+    },
+  );
 
   it('rejects malformed success and module error envelopes', async () => {
     axiosMocks.get
@@ -206,14 +206,15 @@ describe('CompendiumRestAdapter', () => {
     expect(result).not.toHaveProperty('entries');
   });
 
-  it.each([
-    401, 403,
-  ])('requires entity-read scope even when search succeeds (HTTP %i)', async (status) => {
-    axiosMocks.get
-      .mockResolvedValueOnce(searchEnvelope([searchRow(1)]))
-      .mockRejectedValueOnce(axiosError(status, 'api-secret'));
-    await expect(adapter().probe()).resolves.toMatchObject({ status: 'unauthorized' });
-  });
+  it.each([401, 403])(
+    'requires entity-read scope even when search succeeds (HTTP %i)',
+    async (status) => {
+      axiosMocks.get
+        .mockResolvedValueOnce(searchEnvelope([searchRow(1)]))
+        .mockRejectedValueOnce(axiosError(status, 'api-secret'));
+      await expect(adapter().probe()).resolves.toMatchObject({ status: 'unauthorized' });
+    },
+  );
 
   it('does not present empty results after the unfiltered verification loses authorization', async () => {
     axiosMocks.get.mockResolvedValueOnce(searchEnvelope([])).mockRejectedValueOnce(axiosError(403));

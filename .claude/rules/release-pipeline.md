@@ -14,12 +14,12 @@ Releases via **release-please** + npm publish (`.github/workflows/release-please
 The workflow mints a short-lived token from the **Release Please GitHub App**:
 
 ```yaml
-- uses: actions/create-github-app-token@v3
+- uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
   id: app-token
   with:
     app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
     private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
-- uses: googleapis/release-please-action@v5
+- uses: googleapis/release-please-action@0dfd8538845b8e92600d271a895a5372865d4062 # v5
   with:
     token: ${{ steps.app-token.outputs.token }}
 ```

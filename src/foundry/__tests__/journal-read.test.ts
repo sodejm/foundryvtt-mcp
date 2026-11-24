@@ -50,16 +50,16 @@ describe('journal read preparation', () => {
     expect(htmlToJournalText(source)).toBe('deep');
   });
 
-  it.each([
-    JOURNAL_MAX_HTML_DEPTH + 1,
-    20_000,
-  ])('rejects nesting depth %i during parsing before unbounded parser work', (depth) => {
-    const source = `${'<div>'.repeat(depth)}deep${'</div>'.repeat(depth)}`;
-    expect(() => htmlToJournalText(source)).toThrow(
-      `Journal page HTML exceeds the maximum nesting depth of ${JOURNAL_MAX_HTML_DEPTH}`,
-    );
-    expect(htmlToJournalText('<p>fresh</p>')).toBe('fresh');
-  });
+  it.each([JOURNAL_MAX_HTML_DEPTH + 1, 20_000])(
+    'rejects nesting depth %i during parsing before unbounded parser work',
+    (depth) => {
+      const source = `${'<div>'.repeat(depth)}deep${'</div>'.repeat(depth)}`;
+      expect(() => htmlToJournalText(source)).toThrow(
+        `Journal page HTML exceeds the maximum nesting depth of ${JOURNAL_MAX_HTML_DEPTH}`,
+      );
+      expect(htmlToJournalText('<p>fresh</p>')).toBe('fresh');
+    },
+  );
 
   it('does not count closed or void siblings toward the nesting limit', () => {
     expect(htmlToJournalText('<p>x<br></p>'.repeat(JOURNAL_MAX_HTML_DEPTH + 1))).toBe(
@@ -74,22 +74,23 @@ describe('journal read preparation', () => {
     );
   }, 20_000);
 
-  it.each([
-    0, 499, 500, 501, 10_001,
-  ])('round-trips source and bounds previews at %i Unicode code points', (length) => {
-    const source = '😀'.repeat(length);
-    const prepared = prepare(page({ text: { markdown: source, format: 2 } }));
-    const summary = journalPageSummary(prepared);
-    const content = journalContentChunks(prepared, 'source');
+  it.each([0, 499, 500, 501, 10_001])(
+    'round-trips source and bounds previews at %i Unicode code points',
+    (length) => {
+      const source = '😀'.repeat(length);
+      const prepared = prepare(page({ text: { markdown: source, format: 2 } }));
+      const summary = journalPageSummary(prepared);
+      const content = journalContentChunks(prepared, 'source');
 
-    expect(summary.content).toBe('😀'.repeat(Math.min(length, 500)));
-    expect(summary.contentTruncated).toBe(length > 500);
-    expect(content.contentLength).toBe(length);
-    expect(content.chunks.map((chunk) => chunk.content).join('')).toBe(source);
-    expect(content.chunks.every((chunk) => Array.from(chunk.content).length <= 1024)).toBe(true);
-    expect(content.chunks.at(-1)?.end).toBe(length);
-    expect(content.chunks).toHaveLength(Math.max(1, Math.ceil(length / 1024)));
-  });
+      expect(summary.content).toBe('😀'.repeat(Math.min(length, 500)));
+      expect(summary.contentTruncated).toBe(length > 500);
+      expect(content.contentLength).toBe(length);
+      expect(content.chunks.map((chunk) => chunk.content).join('')).toBe(source);
+      expect(content.chunks.every((chunk) => Array.from(chunk.content).length <= 1024)).toBe(true);
+      expect(content.chunks.at(-1)?.end).toBe(length);
+      expect(content.chunks).toHaveLength(Math.max(1, Math.ceil(length / 1024)));
+    },
+  );
 
   it('keeps markdown intact and identifies Foundry source formats', () => {
     const markdown = '# Heading\n\n*literal* 😀';
@@ -164,14 +165,12 @@ describe('journal read preparation', () => {
     );
   });
 
-  it.each([
-    NaN,
-    Infinity,
-    0.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects unsafe sort values: %j', (sort) => {
-    expect(() => prepare(page({ sort }))).toThrow(/sort must be a safe integer/);
-  });
+  it.each([NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects unsafe sort values: %j',
+    (sort) => {
+      expect(() => prepare(page({ sort }))).toThrow(/sort must be a safe integer/);
+    },
+  );
 
   it.each([
     { _id: 'short' },

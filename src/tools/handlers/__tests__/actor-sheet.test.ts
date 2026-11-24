@@ -246,22 +246,22 @@ describe('actor sheet structured read handlers', () => {
   it.each([
     { mode: 'service', delegated: false, message: 'Pagination cursor is malformed' },
     { mode: 'delegated', delegated: true, message: 'Pagination cursor unavailable' },
-  ])('returns InvalidParams for $mode inventory cursor failures', async ({
-    delegated,
-    message,
-  }) => {
-    const foundry = client({
-      isDelegatedMode: vi.fn().mockReturnValue(delegated),
-      listActorItems: vi.fn(() => {
-        throw new PaginationCursorError('Pagination cursor is malformed');
-      }),
-    });
+  ])(
+    'returns InvalidParams for $mode inventory cursor failures',
+    async ({ delegated, message }) => {
+      const foundry = client({
+        isDelegatedMode: vi.fn().mockReturnValue(delegated),
+        listActorItems: vi.fn(() => {
+          throw new PaginationCursorError('Pagination cursor is malformed');
+        }),
+      });
 
-    await expect(
-      handleListActorItems({ actorId: ACTOR_ID, cursor: 'invalid' }, foundry),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-      message: expect.stringContaining(message),
-    });
-  });
+      await expect(
+        handleListActorItems({ actorId: ACTOR_ID, cursor: 'invalid' }, foundry),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+        message: expect.stringContaining(message),
+      });
+    },
+  );
 });

@@ -163,38 +163,38 @@ describe('bounded journal handlers', () => {
       nextCursor: null,
     });
   });
-  it.each([
-    'text',
-    'source',
-  ])('returns exact %s chunks and numeric pagination separately from page metadata', async (format) => {
-    const content = '## Exact source\n😀 & <p>text</p>';
-    const fn = vi.fn().mockResolvedValue(
-      pageContent({
+  it.each(['text', 'source'])(
+    'returns exact %s chunks and numeric pagination separately from page metadata',
+    async (format) => {
+      const content = '## Exact source\n😀 & <p>text</p>';
+      const fn = vi.fn().mockResolvedValue(
+        pageContent({
+          format,
+          contentLength: Array.from(content).length,
+          chunks: [{ index: 3, start: 3072, end: 3072 + Array.from(content).length, content }],
+          paginationPage: 4,
+          readMetadata: readMetadata({ freshness: 'stale' }),
+        }),
+      );
+      const result = await handleGetJournalPage(
+        { journalId, pageId, format, limit: 4, cursor: 'fixture-cursor' },
+        client('getJournalPageContent', fn),
+      );
+      expect(fn).toHaveBeenCalledWith({
+        journalId,
+        pageId,
         format,
-        contentLength: Array.from(content).length,
-        chunks: [{ index: 3, start: 3072, end: 3072 + Array.from(content).length, content }],
-        paginationPage: 4,
-        readMetadata: readMetadata({ freshness: 'stale' }),
-      }),
-    );
-    const result = await handleGetJournalPage(
-      { journalId, pageId, format, limit: 4, cursor: 'fixture-cursor' },
-      client('getJournalPageContent', fn),
-    );
-    expect(fn).toHaveBeenCalledWith({
-      journalId,
-      pageId,
-      format,
-      limit: 4,
-      cursor: 'fixture-cursor',
-    });
-    expect(result.structuredContent.page).toEqual(metadata);
-    expect(result.structuredContent.paginationPage).toBe(4);
-    for (const value of [content, metadata.uuid, `Format: ${format}`, '**Freshness:** stale']) {
-      expect(getText(result)).toContain(value);
-    }
-    validate('get_journal_page', result.structuredContent);
-  });
+        limit: 4,
+        cursor: 'fixture-cursor',
+      });
+      expect(result.structuredContent.page).toEqual(metadata);
+      expect(result.structuredContent.paginationPage).toBe(4);
+      for (const value of [content, metadata.uuid, `Format: ${format}`, '**Freshness:** stale']) {
+        expect(getText(result)).toContain(value);
+      }
+      validate('get_journal_page', result.structuredContent);
+    },
+  );
   it('returns non-text asset metadata with no invented text chunks', async () => {
     const data = pageContent({
       page: {
@@ -248,49 +248,59 @@ describe('bounded journal handlers', () => {
   it.each([
     ['summary', handleGetJournal, 'getJournalSummaryPage', { journalId }],
     ['page', handleGetJournalPage, 'getJournalPageContent', { journalId, pageId }],
-  ] as const)('maps missing/denied %s and invalid cursors to InvalidParams', async (_name, handler, method, args) => {
-    await expect(
-      handler(args, client(method, vi.fn().mockRejectedValue(new JournalReadUnavailableError()))),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-      message: expect.stringContaining('Journal unavailable'),
-    });
-    await expect(
-      handler(
-        args,
-        client(method, vi.fn().mockRejectedValue(new PaginationCursorError('expired'))),
-      ),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-      message: expect.stringContaining('expired'),
-    });
-    await expect(
-      handler(
-        args,
-        client(method, vi.fn().mockRejectedValue(new PaginationCursorError('secret owner')), true),
-      ),
-    ).rejects.toMatchObject({
-      code: ErrorCode.InvalidParams,
-      message: expect.stringContaining('Pagination cursor unavailable'),
-    });
-  });
+  ] as const)(
+    'maps missing/denied %s and invalid cursors to InvalidParams',
+    async (_name, handler, method, args) => {
+      await expect(
+        handler(args, client(method, vi.fn().mockRejectedValue(new JournalReadUnavailableError()))),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+        message: expect.stringContaining('Journal unavailable'),
+      });
+      await expect(
+        handler(
+          args,
+          client(method, vi.fn().mockRejectedValue(new PaginationCursorError('expired'))),
+        ),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+        message: expect.stringContaining('expired'),
+      });
+      await expect(
+        handler(
+          args,
+          client(
+            method,
+            vi.fn().mockRejectedValue(new PaginationCursorError('secret owner')),
+            true,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParams,
+        message: expect.stringContaining('Pagination cursor unavailable'),
+      });
+    },
+  );
   it.each([
     [handleGetJournal, 'getJournalSummaryPage', { journalId }],
     [handleGetJournalPage, 'getJournalPageContent', { journalId, pageId }],
-  ] as const)('rejects malformed backend output and sanitizes delegated backend failures', async (handler, method, args) => {
-    await expect(
-      handler(args, client(method, vi.fn().mockResolvedValue({}))),
-    ).rejects.toMatchObject({ code: ErrorCode.InternalError });
-    const result = handler(
-      args,
-      client(method, vi.fn().mockRejectedValue(new Error('private backend detail')), true),
-    );
-    await expect(result).rejects.toMatchObject({
-      code: ErrorCode.InternalError,
-      message: expect.stringContaining('Delegated read unavailable'),
-    });
-    await expect(result).rejects.not.toThrow('private backend detail');
-  });
+  ] as const)(
+    'rejects malformed backend output and sanitizes delegated backend failures',
+    async (handler, method, args) => {
+      await expect(
+        handler(args, client(method, vi.fn().mockResolvedValue({}))),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      const result = handler(
+        args,
+        client(method, vi.fn().mockRejectedValue(new Error('private backend detail')), true),
+      );
+      await expect(result).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining('Delegated read unavailable'),
+      });
+      await expect(result).rejects.not.toThrow('private backend detail');
+    },
+  );
   it('enforces the combined wire cap even when individual page metadata is valid', async () => {
     const pages = Array.from({ length: 8 }, (_, index) => ({
       ...metadata,
