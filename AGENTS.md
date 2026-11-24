@@ -14,6 +14,12 @@ actionable, and applicable regardless of the agent a contributor uses.
 - Check for a nearer `AGENTS.md` before editing a subdirectory; a nearer file
   supplements this root guidance for that area. There are no nested
   `AGENTS.md` files today.
+- Before changing agent-facing guidance, consult the
+  [AAIF project catalog](https://aaif.io/projects) and apply the relevant
+  upstream project guidance.
+- For MCP protocol, client-integration, or transport changes, follow the
+  applicable upstream MCP specification and verify client compatibility across
+  every affected transport, including Socket.IO and REST where supported.
 - Keep setup, validation, security, transport, and workflow instructions here
   aligned with `package.json`, CI, and the binding details in `.claude/rules/`.
   When any of those sources change, update this file and the relevant
