@@ -4,6 +4,24 @@ This repository implements an MCP server for FoundryVTT. It uses Node.js 22.12+
 and Bun for package management. Keep the STDIO protocol clean: never write logs
 or diagnostics to standard output from the server process.
 
+## AAIF-compatible agent guidance
+
+This root file follows the open `AGENTS.md` convention stewarded by the
+[Agentic AI Foundation (AAIF)](https://aaif.io/projects/agents-md). It is the
+repository-neutral entry point for coding agents, so keep it concise,
+actionable, and applicable regardless of the agent a contributor uses.
+
+- Check for a nearer `AGENTS.md` before editing a subdirectory; a nearer file
+  supplements this root guidance for that area. There are no nested
+  `AGENTS.md` files today.
+- Keep setup, validation, security, transport, and workflow instructions here
+  aligned with `package.json`, CI, and the binding details in `.claude/rules/`.
+  When any of those sources change, update this file and the relevant
+  Claude-specific context in `CLAUDE.md` in the same change.
+- Put tool-specific context in its companion file rather than duplicating it:
+  `CLAUDE.md` contains Claude architecture context; this file remains the
+  shared operational contract.
+
 ## Working safely
 
 - Install the lockfile exactly with `bun install --frozen-lockfile`.
