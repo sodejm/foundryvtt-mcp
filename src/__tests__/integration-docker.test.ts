@@ -113,65 +113,71 @@ describe('Docker integration lifecycle', () => {
     expect(existsSync(secret)).toBe(false);
   });
 
-  it.each([
-    '0',
-    '65536',
-    '30001:30000',
-    'abc',
-  ])('rejects invalid port %s before startup', async (port) => {
-    const runCommand = vi.fn();
-    await expect(
-      runIntegrationDocker({ cwd: await fixture(), env: { FOUNDRY_TEST_PORT: port }, runCommand }),
-    ).rejects.toThrow('FOUNDRY_TEST_PORT');
-    expect(runCommand).not.toHaveBeenCalled();
-  });
+  it.each(['0', '65536', '30001:30000', 'abc'])(
+    'rejects invalid port %s before startup',
+    async (port) => {
+      const runCommand = vi.fn();
+      await expect(
+        runIntegrationDocker({
+          cwd: await fixture(),
+          env: { FOUNDRY_TEST_PORT: port },
+          runCommand,
+        }),
+      ).rejects.toThrow('FOUNDRY_TEST_PORT');
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(['SIGINT', 'SIGTERM'] as const)('tears down after %s during startup', async (signal) => {
-    const cwd = await fixture();
-    const executable = join(cwd, 'docker');
-    const log = join(cwd, 'events.jsonl');
-    const descendant = join(cwd, 'descendant.pid');
-    await writeFile(
-      executable,
-      `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(process.env.EVENT_LOG, JSON.stringify({args:process.argv.slice(2), secret:process.env.FOUNDRY_TEST_SECRET_FILE})+'\\n');\nif(process.argv.includes('up')) { const grandchild = require('node:child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.env.DESCENDANT_PID,String(process.pid)); setInterval(()=>{},1000);"], {stdio:'ignore'}); setInterval(()=>{},1000); }\n`,
-    );
-    await chmod(executable, 0o700);
-    const child = spawn(
-      process.execPath,
-      [fileURLToPath(new URL('../../scripts/integration-docker.mjs', import.meta.url))],
-      {
-        cwd,
-        env: {
-          ...process.env,
-          PATH: `${cwd}:${process.env.PATH}`,
-          EVENT_LOG: log,
-          DESCENDANT_PID: descendant,
+  it.each(['SIGINT', 'SIGTERM'] as const)(
+    'tears down after %s during startup',
+    async (signal) => {
+      const cwd = await fixture();
+      const executable = join(cwd, 'docker');
+      const log = join(cwd, 'events.jsonl');
+      const descendant = join(cwd, 'descendant.pid');
+      await writeFile(
+        executable,
+        `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(process.env.EVENT_LOG, JSON.stringify({args:process.argv.slice(2), secret:process.env.FOUNDRY_TEST_SECRET_FILE})+'\\n');\nif(process.argv.includes('up')) { const grandchild = require('node:child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.env.DESCENDANT_PID,String(process.pid)); setInterval(()=>{},1000);"], {stdio:'ignore'}); setInterval(()=>{},1000); }\n`,
+      );
+      await chmod(executable, 0o700);
+      const child = spawn(
+        process.execPath,
+        [fileURLToPath(new URL('../../scripts/integration-docker.mjs', import.meta.url))],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            PATH: `${cwd}:${process.env.PATH}`,
+            EVENT_LOG: log,
+            DESCENDANT_PID: descendant,
+          },
+          stdio: 'pipe',
         },
-        stdio: 'pipe',
-      },
-    );
-    const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
-    try {
-      const deadline = Date.now() + 5000;
-      while ((!existsSync(log) || !existsSync(descendant)) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+      );
+      const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+      try {
+        const deadline = Date.now() + 5000;
+        while ((!existsSync(log) || !existsSync(descendant)) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(existsSync(log)).toBe(true);
+        expect(existsSync(descendant)).toBe(true);
+        const descendantPid = Number(readFileSync(descendant, 'utf8'));
+        child.kill(signal);
+        expect(await exited).toBe(signal === 'SIGINT' ? 130 : 143);
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+        const events = readFileSync(log, 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        expect(events).toHaveLength(2);
+        expect(events[1].args).toContain('down');
+        expect(events[1].args[2]).toBe(events[0].args[2]);
+        expect(existsSync(events[0].secret)).toBe(false);
+      } finally {
+        child.kill('SIGKILL');
       }
-      expect(existsSync(log)).toBe(true);
-      expect(existsSync(descendant)).toBe(true);
-      const descendantPid = Number(readFileSync(descendant, 'utf8'));
-      child.kill(signal);
-      expect(await exited).toBe(signal === 'SIGINT' ? 130 : 143);
-      expect(() => process.kill(descendantPid, 0)).toThrow();
-      const events = readFileSync(log, 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      expect(events).toHaveLength(2);
-      expect(events[1].args).toContain('down');
-      expect(events[1].args[2]).toBe(events[0].args[2]);
-      expect(existsSync(events[0].secret)).toBe(false);
-    } finally {
-      child.kill('SIGKILL');
-    }
-  }, 15000);
+    },
+    15000,
+  );
 });

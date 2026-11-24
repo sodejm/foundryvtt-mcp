@@ -19,25 +19,23 @@ describe('production logger', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    'debug',
-    'info',
-    'warn',
-    'error',
-  ] as const)('routes all enabled levels to stderr at %s', (minimum) => {
-    const levels = ['debug', 'info', 'warn', 'error'] as const;
-    const logger = new Logger(minimum);
-    for (const level of levels) {
-      logger[level]('Operation completed');
-    }
-    expect(output).toHaveLength(4 - levels.indexOf(minimum));
-    expect(process.stdout.write).not.toHaveBeenCalled();
-    for (const line of output) {
-      expect(line).toMatch(
-        /^\[\d{4}-\d{2}-\d{2}T.*Z\] (DEBUG|INFO|WARN|ERROR): Operation completed\n$/,
-      );
-    }
-  });
+  it.each(['debug', 'info', 'warn', 'error'] as const)(
+    'routes all enabled levels to stderr at %s',
+    (minimum) => {
+      const levels = ['debug', 'info', 'warn', 'error'] as const;
+      const logger = new Logger(minimum);
+      for (const level of levels) {
+        logger[level]('Operation completed');
+      }
+      expect(output).toHaveLength(4 - levels.indexOf(minimum));
+      expect(process.stdout.write).not.toHaveBeenCalled();
+      for (const line of output) {
+        expect(line).toMatch(
+          /^\[\d{4}-\d{2}-\d{2}T.*Z\] (DEBUG|INFO|WARN|ERROR): Operation completed\n$/,
+        );
+      }
+    },
+  );
 
   it('defaults to info and preserves safe operational counts', () => {
     const logger = new Logger();

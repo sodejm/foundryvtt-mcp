@@ -275,16 +275,16 @@ for (const surface of [
       await expect(surface.search(client)).rejects.toThrow();
       client.disconnect();
     });
-    it.each([
-      'HTTP 404 not found',
-      'network unavailable',
-    ])('propagates REST failure %s', async (message) => {
-      const client = createClient(true);
-      get.mockRejectedValue(new Error(message));
-      await expect(surface.detail(client, surface.id)).rejects.toThrow(message);
-      await expect(surface.search(client)).rejects.toThrow(message);
-      client.disconnect();
-    });
+    it.each(['HTTP 404 not found', 'network unavailable'])(
+      'propagates REST failure %s',
+      async (message) => {
+        const client = createClient(true);
+        get.mockRejectedValue(new Error(message));
+        await expect(surface.detail(client, surface.id)).rejects.toThrow(message);
+        await expect(surface.search(client)).rejects.toThrow(message);
+        client.disconnect();
+      },
+    );
   });
 }
 describe('Socket.IO value fidelity', () => {
@@ -327,30 +327,30 @@ describe('Socket.IO value fidelity', () => {
     client.disconnect();
   });
 
-  it.each([
-    0, 1,
-  ])('reads structured D&D 5e item weight %s through search and detail', async (weight) => {
-    const client = createClient();
-    setWorld(client, {
-      items: [
-        { ...worldItem, system: { ...worldItem.system, weight: { value: weight, units: 'lb' } } },
-      ],
-    });
-    expect(await client.getItem(I)).toMatchObject({ weight });
-    expect((await client.searchItems({})).items[0]).toMatchObject({ weight });
-    client.disconnect();
-  });
+  it.each([0, 1])(
+    'reads structured D&D 5e item weight %s through search and detail',
+    async (weight) => {
+      const client = createClient();
+      setWorld(client, {
+        items: [
+          { ...worldItem, system: { ...worldItem.system, weight: { value: weight, units: 'lb' } } },
+        ],
+      });
+      expect(await client.getItem(I)).toMatchObject({ weight });
+      expect((await client.searchItems({})).items[0]).toMatchObject({ weight });
+      client.disconnect();
+    },
+  );
 
-  it.each([
-    {},
-    { value: '0' },
-    { value: null },
-  ])('omits nonnumeric structured weight %j', async (weight) => {
-    const client = createClient();
-    setWorld(client, { items: [{ ...worldItem, system: { ...worldItem.system, weight } }] });
-    expect(await client.getItem(I)).not.toHaveProperty('weight');
-    client.disconnect();
-  });
+  it.each([{}, { value: '0' }, { value: null }])(
+    'omits nonnumeric structured weight %j',
+    async (weight) => {
+      const client = createClient();
+      setWorld(client, { items: [{ ...worldItem, system: { ...worldItem.system, weight } }] });
+      expect(await client.getItem(I)).not.toHaveProperty('weight');
+      client.disconnect();
+    },
+  );
 
   it('keeps detail reads scoped to world documents rather than same-ID embedded items', async () => {
     const client = createClient();
@@ -433,28 +433,33 @@ describe('item economy transport and ownership boundaries', () => {
     [{ id: 'homebrew', version: '1.0' }, 'unsupported-system'],
     [{ id: 'dnd5e', version: '99.0.0' }, 'unsupported-version'],
     [{ id: 'dnd5e' }, 'unsupported-version'],
-  ])('keeps unknown economy explicit across world and owned reads: %j', async (identity, status) => {
-    const client = createClient();
-    const unknown = { ...pfItem, system: { price: 0, rarity: 'Commun', private: 'not-public' } };
-    setWorld(client, {
-      system: identity,
-      items: [unknown],
-      actors: [{ ...worldActor, items: [unknown] }],
-    });
-    const result = await client.getItem(I);
-    expect(result.economy).toMatchObject({
-      adapter: { status },
-      source: { price: 0, rarity: 'Commun' },
-      price: { status: 'unsupported', currencies: [] },
-      rarity: { status: 'unsupported', values: [] },
-    });
-    expect(client.getActorItem(A, I).item.economy).toEqual(result.economy);
-    expect(result).not.toHaveProperty('price');
-    expect(result).not.toHaveProperty('rarity');
-    expect(JSON.stringify(result.economy)).not.toContain('not-public');
-    await expect(client.searchItems({ rarity: 'common' })).rejects.toMatchObject({ code: -32602 });
-    client.disconnect();
-  });
+  ])(
+    'keeps unknown economy explicit across world and owned reads: %j',
+    async (identity, status) => {
+      const client = createClient();
+      const unknown = { ...pfItem, system: { price: 0, rarity: 'Commun', private: 'not-public' } };
+      setWorld(client, {
+        system: identity,
+        items: [unknown],
+        actors: [{ ...worldActor, items: [unknown] }],
+      });
+      const result = await client.getItem(I);
+      expect(result.economy).toMatchObject({
+        adapter: { status },
+        source: { price: 0, rarity: 'Commun' },
+        price: { status: 'unsupported', currencies: [] },
+        rarity: { status: 'unsupported', values: [] },
+      });
+      expect(client.getActorItem(A, I).item.economy).toEqual(result.economy);
+      expect(result).not.toHaveProperty('price');
+      expect(result).not.toHaveProperty('rarity');
+      expect(JSON.stringify(result.economy)).not.toContain('not-public');
+      await expect(client.searchItems({ rarity: 'common' })).rejects.toMatchObject({
+        code: -32602,
+      });
+      client.disconnect();
+    },
+  );
 
   it('uses explicit unknown economy when REST cannot establish system identity', async () => {
     const client = createClient(true);

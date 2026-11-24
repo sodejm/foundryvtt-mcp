@@ -364,24 +364,19 @@ describe('delegated caller authorization', () => {
     expect(Object.isFrozen(view?.actors[0]?.system)).toBe(true);
   });
 
-  it.each([
-    0,
-    -1,
-    101,
-    'all',
-    null,
-    Number.NaN,
-    1.5,
-  ])('rejects invalid chat getter limit %s before authorization', (limit) => {
-    const { client, mock } = delegatedClient();
-    expect(() => client.getChatMessages(limit as number)).toThrow(McpError);
-    try {
-      client.getChatMessages(limit as number);
-    } catch (error) {
-      expect(error).toMatchObject({ code: ErrorCode.InvalidParams });
-    }
-    expect(mock.worldAcks).toHaveLength(0);
-  });
+  it.each([0, -1, 101, 'all', null, Number.NaN, 1.5])(
+    'rejects invalid chat getter limit %s before authorization',
+    (limit) => {
+      const { client, mock } = delegatedClient();
+      expect(() => client.getChatMessages(limit as number)).toThrow(McpError);
+      try {
+        client.getChatMessages(limit as number);
+      } catch (error) {
+        expect(error).toMatchObject({ code: ErrorCode.InvalidParams });
+      }
+      expect(mock.worldAcks).toHaveLength(0);
+    },
+  );
 
   it('redacts nested journal secrets before every player read and content search', async () => {
     const { client, mock } = delegatedClient();
@@ -452,78 +447,80 @@ describe('delegated caller authorization', () => {
     });
   });
 
-  it.each([
-    'dnd5e',
-    'pf2e',
-  ])('filters %s unidentified and misidentified items before player counts, search and detail', async (systemId) => {
-    const { client, mock } = delegatedClient();
-    const identity: WorldItem = {
-      _id: 'Item000000000001',
-      name: 'Visible equipment',
-      type: 'equipment',
-      ownership: { default: 2 },
-      system: { identified: true, identification: { status: 'identified' }, quantity: 0 },
-    };
-    const hidden: WorldItem[] = [
-      {
-        ...identity,
-        _id: 'Item000000000002',
-        name: 'NEVER_PUBLIC DND5E',
-        img: 'secret.webp',
-        system: {
-          identified: false,
-          price: { value: 5000, denomination: 'gp' },
-          rarity: 'legendary',
+  it.each(['dnd5e', 'pf2e'])(
+    'filters %s unidentified and misidentified items before player counts, search and detail',
+    async (systemId) => {
+      const { client, mock } = delegatedClient();
+      const identity: WorldItem = {
+        _id: 'Item000000000001',
+        name: 'Visible equipment',
+        type: 'equipment',
+        ownership: { default: 2 },
+        system: { identified: true, identification: { status: 'identified' }, quantity: 0 },
+      };
+      const hidden: WorldItem[] = [
+        {
+          ...identity,
+          _id: 'Item000000000002',
+          name: 'NEVER_PUBLIC DND5E',
+          img: 'secret.webp',
+          system: {
+            identified: false,
+            price: { value: 5000, denomination: 'gp' },
+            rarity: 'legendary',
+          },
         },
-      },
-      {
-        ...identity,
-        _id: 'Item000000000003',
-        name: 'NEVER_PUBLIC PF2E',
-        system: { identification: { status: 'unidentified' }, price: { value: { gp: 5000 } } },
-      },
-      {
-        ...identity,
-        _id: 'Item000000000004',
-        name: 'NEVER_PUBLIC MISIDENTIFIED',
-        system: { identification: { status: 'misidentified' }, rarity: 'unique' },
-      },
-    ];
-    const actorData = actor(1, { default: 2 }, [identity, ...hidden]);
-    const raw = snapshot({
-      system: { id: systemId },
-      actors: [actorData],
-      items: [identity, ...hidden],
-    });
-    const before = structuredClone(raw);
-    const actorId = actorData._id;
-    await runAuthorized(client, mock, context(), raw, async () => {
-      expect(client.getWorldSummary().items).toBe(1);
-      expect(JSON.stringify(client.getWorldData())).not.toContain('NEVER_PUBLIC');
-      expect(client.listActorItems({ actorId }).total).toBe(1);
-      expect(client.listActorItems({ actorId, query: 'NEVER_PUBLIC' }).total).toBe(0);
-      expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(0);
-      expect((await client.searchItems({})).total).toBe(1);
-      for (const item of hidden) {
-        expect(() => client.getActorItem(actorId, item._id)).toThrow('Actor item read unavailable');
-        await expect(client.getItem(item._id)).rejects.toThrow();
-      }
-    });
-    expect(raw).toEqual(before);
-    await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
-      expect(client.listActorItems({ actorId }).total).toBe(4);
-      expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(3);
-      for (const item of hidden) {
-        expect(client.getActorItem(actorId, item._id).item.name).toBe(item.name);
-      }
-    });
-    const service = new FoundryClient({
-      baseUrl: 'http://localhost:30000',
-      allowPrivilegedAccount: true,
-    });
-    Reflect.set(service, 'worldData', raw);
-    expect(service.getWorldData()).toBe(raw);
-  });
+        {
+          ...identity,
+          _id: 'Item000000000003',
+          name: 'NEVER_PUBLIC PF2E',
+          system: { identification: { status: 'unidentified' }, price: { value: { gp: 5000 } } },
+        },
+        {
+          ...identity,
+          _id: 'Item000000000004',
+          name: 'NEVER_PUBLIC MISIDENTIFIED',
+          system: { identification: { status: 'misidentified' }, rarity: 'unique' },
+        },
+      ];
+      const actorData = actor(1, { default: 2 }, [identity, ...hidden]);
+      const raw = snapshot({
+        system: { id: systemId },
+        actors: [actorData],
+        items: [identity, ...hidden],
+      });
+      const before = structuredClone(raw);
+      const actorId = actorData._id;
+      await runAuthorized(client, mock, context(), raw, async () => {
+        expect(client.getWorldSummary().items).toBe(1);
+        expect(JSON.stringify(client.getWorldData())).not.toContain('NEVER_PUBLIC');
+        expect(client.listActorItems({ actorId }).total).toBe(1);
+        expect(client.listActorItems({ actorId, query: 'NEVER_PUBLIC' }).total).toBe(0);
+        expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(0);
+        expect((await client.searchItems({})).total).toBe(1);
+        for (const item of hidden) {
+          expect(() => client.getActorItem(actorId, item._id)).toThrow(
+            'Actor item read unavailable',
+          );
+          await expect(client.getItem(item._id)).rejects.toThrow();
+        }
+      });
+      expect(raw).toEqual(before);
+      await runAuthorized(client, mock, context({ userId: GM }), raw, async () => {
+        expect(client.listActorItems({ actorId }).total).toBe(4);
+        expect((await client.searchItems({ query: 'NEVER_PUBLIC' })).total).toBe(3);
+        for (const item of hidden) {
+          expect(client.getActorItem(actorId, item._id).item.name).toBe(item.name);
+        }
+      });
+      const service = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        allowPrivilegedAccount: true,
+      });
+      Reflect.set(service, 'worldData', raw);
+      expect(service.getWorldData()).toBe(raw);
+    },
+  );
 
   it('allows privileged service-identity reads with explicit opt-in', () => {
     const client = new FoundryClient({
@@ -883,82 +880,85 @@ describe('native service account permission preflight', () => {
     expect((await serviceClient(value, true).searchActors({})).actors).toEqual([]);
   });
 
-  it.each([
-    1, 2,
-  ])('filters owned, shared and hidden documents for role %i even with opt-in', async (role) => {
-    const value = snapshot({
-      users: [user(SERVICE, role), user(GM, 4)],
-      actors: [
-        actor(1, { default: 0, [SERVICE]: 3 }),
-        actor(2, { default: 2 }),
-        actor(3, { default: 0 }),
-      ],
-      items: [
-        {
-          _id: 'Item000000000001',
-          name: 'Shared',
-          type: 'loot',
-          system: {},
-          ownership: { default: 2 },
-        },
-        {
-          _id: 'Item000000000002',
-          name: 'Hidden',
-          type: 'loot',
-          system: {},
-          ownership: { default: 0 },
-        },
-      ],
-      journal: [
-        {
-          _id: 'Journal000000001',
-          name: 'Shared',
-          ownership: { default: 2 },
-          pages: [
-            {
-              _id: 'Page000000000001',
-              name: 'Visible',
-              type: 'text',
-              ownership: { default: -1 },
-              text: { content: '<p>Public</p><section class="secret">NEVER_PUBLIC</section>' },
-            },
-            {
-              _id: 'Page000000000002',
-              name: 'Hidden',
-              type: 'text',
-              ownership: { default: 0 },
-              text: { content: 'NEVER_PUBLIC' },
-            },
-          ],
-        },
-      ],
-      messages: [
-        message(1, GM),
-        message(2, GM, { whisper: [SERVICE] }),
-        message(3, GM, { whisper: [PLAYER_ONE] }),
-        message(4, GM, { blind: true }),
-      ],
-    });
-    const client = serviceClient(value, true);
-    expect((await client.searchActors({})).actors.map((record) => record._id)).toEqual([
-      value.actors[0]!._id,
-      value.actors[1]!._id,
-    ]);
-    await expect(client.getActor(value.actors[2]!._id)).rejects.toThrow(/not found/i);
-    expect(client.getWorldData()!.items.map((record) => record._id)).toEqual(['Item000000000001']);
-    expect(client.getJournals()[0]!.pages).toHaveLength(1);
-    expect(JSON.stringify(client.getJournals())).not.toContain('NEVER_PUBLIC');
-    expect(client.getUsers().users).toEqual([
-      { _id: SERVICE, name: 'Player Two', role, color: '#123456', avatar: `${SERVICE}.webp` },
-    ]);
-    expect(client.getChatMessages().map((record) => record._id)).toEqual([
-      value.messages[0]!._id,
-      value.messages[1]!._id,
-    ]);
-    expect(() => client.getScenes()).toThrow(/cannot safely read scenes/i);
-    expect(client.getWorldData()!.scenes).toEqual([]);
-    expect(value.actors).toHaveLength(3);
-  });
+  it.each([1, 2])(
+    'filters owned, shared and hidden documents for role %i even with opt-in',
+    async (role) => {
+      const value = snapshot({
+        users: [user(SERVICE, role), user(GM, 4)],
+        actors: [
+          actor(1, { default: 0, [SERVICE]: 3 }),
+          actor(2, { default: 2 }),
+          actor(3, { default: 0 }),
+        ],
+        items: [
+          {
+            _id: 'Item000000000001',
+            name: 'Shared',
+            type: 'loot',
+            system: {},
+            ownership: { default: 2 },
+          },
+          {
+            _id: 'Item000000000002',
+            name: 'Hidden',
+            type: 'loot',
+            system: {},
+            ownership: { default: 0 },
+          },
+        ],
+        journal: [
+          {
+            _id: 'Journal000000001',
+            name: 'Shared',
+            ownership: { default: 2 },
+            pages: [
+              {
+                _id: 'Page000000000001',
+                name: 'Visible',
+                type: 'text',
+                ownership: { default: -1 },
+                text: { content: '<p>Public</p><section class="secret">NEVER_PUBLIC</section>' },
+              },
+              {
+                _id: 'Page000000000002',
+                name: 'Hidden',
+                type: 'text',
+                ownership: { default: 0 },
+                text: { content: 'NEVER_PUBLIC' },
+              },
+            ],
+          },
+        ],
+        messages: [
+          message(1, GM),
+          message(2, GM, { whisper: [SERVICE] }),
+          message(3, GM, { whisper: [PLAYER_ONE] }),
+          message(4, GM, { blind: true }),
+        ],
+      });
+      const client = serviceClient(value, true);
+      expect((await client.searchActors({})).actors.map((record) => record._id)).toEqual([
+        value.actors[0]!._id,
+        value.actors[1]!._id,
+      ]);
+      await expect(client.getActor(value.actors[2]!._id)).rejects.toThrow(/not found/i);
+      expect(client.getWorldData()!.items.map((record) => record._id)).toEqual([
+        'Item000000000001',
+      ]);
+      expect(client.getJournals()[0]!.pages).toHaveLength(1);
+      expect(JSON.stringify(client.getJournals())).not.toContain('NEVER_PUBLIC');
+      expect(client.getUsers().users).toEqual([
+        { _id: SERVICE, name: 'Player Two', role, color: '#123456', avatar: `${SERVICE}.webp` },
+      ]);
+      expect(client.getChatMessages().map((record) => record._id)).toEqual([
+        value.messages[0]!._id,
+        value.messages[1]!._id,
+      ]);
+      expect(() => client.getScenes()).toThrow(/cannot safely read scenes/i);
+      expect(client.getWorldData()!.scenes).toEqual([]);
+      expect(value.actors).toHaveLength(3);
+    },
+  );
 
   it.each([
     { users: [] },

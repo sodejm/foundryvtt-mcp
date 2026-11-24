@@ -20,7 +20,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that i
 
 ### Prerequisites
 
-- Node.js 18+ (or [Bun](https://bun.sh/))
+- Node.js 22.12+ (or a current [Bun](https://bun.sh/) release)
 - FoundryVTT server running with an active world
 - MCP-compatible AI client (Claude Desktop, Claude Code, VS Code, etc.)
 
@@ -585,7 +585,7 @@ Detailed guide: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 ```bash
 bun run build          # Compile TypeScript and make dist/index.js executable
 bun run dev            # Development mode with hot reload
-bun test               # Unit tests (Vitest)
+bun run test           # Unit tests (Vitest)
 bun run test:e2e       # E2E tests (Playwright)
 bun run lint           # Lint code (Biome)
 bun run smoke          # Startup smoke test against the local build

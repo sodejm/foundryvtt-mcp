@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 const publisher = 'laurigates/.github/.github/workflows/reusable-npm-publish.yml';
-const reviewedRevision = 'aad403be1e3d72f68f6536f212ed3a0339263d22';
+const reviewedRevision = '77007a7fb1a39bf7fa800c02416cfe2cd187215d';
 const publishCondition = "${{ github.repository == 'laurigates/foundryvtt-mcp' && github.ref == 'refs/heads/main' && needs.release-please.outputs.release_created == 'true' }}";
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 

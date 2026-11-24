@@ -104,14 +104,17 @@ describe('scene spatial projection', () => {
     [3, 1900, 1501.110699893027, 320, 284.8076211353316, 17, 20],
     [4, 1760.9183210283588, 1500, 229.8076211353316, 275, 16, 20],
     [5, 1760.9183210283588, 1500, 229.8076211353316, 275, 16, 20],
-  ])('matches native padded dimensions for grid type %i', (type, width, height, originX, originY, rows, columns) => {
-    const dimensions = projected(type)?.scene.dimensions;
-    expect(dimensions?.widthPixels).toBeCloseTo(width, 11);
-    expect(dimensions?.heightPixels).toBeCloseTo(height, 11);
-    expect(dimensions?.originXPixels).toBeCloseTo(originX, 11);
-    expect(dimensions?.originYPixels).toBeCloseTo(originY, 11);
-    expect(dimensions).toMatchObject({ rows, columns, derivation: 'foundry-native' });
-  });
+  ])(
+    'matches native padded dimensions for grid type %i',
+    (type, width, height, originX, originY, rows, columns) => {
+      const dimensions = projected(type)?.scene.dimensions;
+      expect(dimensions?.widthPixels).toBeCloseTo(width, 11);
+      expect(dimensions?.heightPixels).toBeCloseTo(height, 11);
+      expect(dimensions?.originXPixels).toBeCloseTo(originX, 11);
+      expect(dimensions?.originYPixels).toBeCloseTo(originY, 11);
+      expect(dimensions).toMatchObject({ rows, columns, derivation: 'foundry-native' });
+    },
+  );
 
   it.each([
     [2, 12, 13],

@@ -2,6 +2,9 @@
 
 Model Context Protocol (MCP) server bridging AI assistants with FoundryVTT tabletop gaming software.
 
+`AGENTS.md` is the repository-neutral source of operational instructions. This
+file adds Claude-specific architecture context and must remain consistent with it.
+
 ## Tech Stack
 
 - **Language**: TypeScript (ES modules, `.js` imports for MCP SDK compatibility)
@@ -15,7 +18,7 @@ Model Context Protocol (MCP) server bridging AI assistants with FoundryVTT table
 ```bash
 bun run build          # Compile TypeScript
 bun run dev            # Development mode with hot reload
-bun test               # Unit tests (Vitest)
+bun run test           # Unit tests (Vitest)
 bun run test:integration # Integration tests (needs :30001 container + .env.integration — prefer `just test-integration-docker`)
 bun run test:e2e       # E2E tests (Playwright, headless)
 bun run lint           # Lint code (Biome)

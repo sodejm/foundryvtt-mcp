@@ -193,38 +193,38 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     expect(client.getWorldData()).toMatchObject({ extensionState: { version: 2 } });
   });
 
-  it.each([
-    'synthetic actor',
-    'missing actor',
-  ])('marks unapplied %s broadcasts stale and recovers from a clean ACK', async (kind) => {
-    const client = new FoundryClient({
-      allowPrivilegedAccount: true,
-      baseUrl: 'http://localhost:30000',
-      timeout: 100,
-      retryAttempts: 0,
-    });
-    const mock = buildMockSocket();
-    attachClient(client, mock);
-    await loadSnapshot(client, mock);
-    callPrivate(client, 'onDocumentBroadcast', {
-      type: 'Actor',
-      action: 'update',
-      result: [{ _id: 'ActorMissing0001', name: 'Changed' }],
-      ...(kind === 'synthetic actor'
-        ? {
-            operation: {
-              parentUuid: 'Scene.Scene00000000001.Token.Token00000000001.Actor.ActorMissing0001',
-            },
-          }
-        : {}),
-    });
-    expect(client.getReadMetadata().freshness).toBe('stale');
-    expect(client.getWorldData()?.actors[0]?.name).toBe('Alpha');
-    const refresh = client.refreshWorldData();
-    mock.worldAcks[1]?.(snapshot());
-    await refresh;
-    expect(client.getReadMetadata().freshness).toBe('current');
-  });
+  it.each(['synthetic actor', 'missing actor'])(
+    'marks unapplied %s broadcasts stale and recovers from a clean ACK',
+    async (kind) => {
+      const client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        timeout: 100,
+        retryAttempts: 0,
+      });
+      const mock = buildMockSocket();
+      attachClient(client, mock);
+      await loadSnapshot(client, mock);
+      callPrivate(client, 'onDocumentBroadcast', {
+        type: 'Actor',
+        action: 'update',
+        result: [{ _id: 'ActorMissing0001', name: 'Changed' }],
+        ...(kind === 'synthetic actor'
+          ? {
+              operation: {
+                parentUuid: 'Scene.Scene00000000001.Token.Token00000000001.Actor.ActorMissing0001',
+              },
+            }
+          : {}),
+      });
+      expect(client.getReadMetadata().freshness).toBe('stale');
+      expect(client.getWorldData()?.actors[0]?.name).toBe('Alpha');
+      const refresh = client.refreshWorldData();
+      mock.worldAcks[1]?.(snapshot());
+      await refresh;
+      expect(client.getReadMetadata().freshness).toBe('current');
+    },
+  );
 
   it('rejects buffered synthetic actor changes instead of publishing a false-current snapshot', async () => {
     const client = new FoundryClient({
@@ -370,50 +370,48 @@ describe('FoundryClient snapshot recovery lifecycle', () => {
     ).rejects.toThrow(/no longer available/);
   });
 
-  it.each([
-    null,
-    {},
-    { userId: '' },
-    { userId: '   ' },
-  ])('revokes anonymous sessions before any read or write: %j', async (session) => {
-    const client = new FoundryClient({
-      allowPrivilegedAccount: true,
-      baseUrl: 'http://localhost:30000',
-      timeout: 100,
-      retryAttempts: 0,
-      writeEnabled: true,
-    });
-    const mock = buildMockSocket();
-    attachClient(client, mock);
-    await loadSnapshot(client, mock);
-    const page = await client.searchActors({ limit: 1 });
-    const pending = client.refreshWorldData();
-    const rejected = expect(pending).rejects.toThrow(/session/);
-    mock.fire('session', session);
-    await rejected;
-    mock.worldAcks[1]?.(snapshot());
-    expect(client.isConnected()).toBe(false);
-    expect(client.getWorldData()).toBeNull();
-    expect(client.getReadMetadata().freshness).toBe('unavailable');
-    await expect(client.searchActors({})).rejects.toThrow(/unavailable/);
-    await expect(client.refreshWorldData()).rejects.toThrow(/authenticated/);
-    await expect(client.updateActorAttribute(ACTOR_ONE, { name: 'Forbidden' })).rejects.toThrow(
-      /authenticated/,
-    );
-    expect(mock.modifyAcks).toHaveLength(0);
-    mock.fire('connect');
-    expect(client.isConnected()).toBe(false);
-    expect(mock.worldAcks).toHaveLength(2);
-    mock.fire('session', { userId: USER_ONE });
-    expect(mock.worldAcks).toHaveLength(3);
-    mock.worldAcks[2]?.(snapshot());
-    await vi.waitFor(() => expect(client.getReadMetadata().freshness).toBe('current'));
-    expect(client.isConnected()).toBe(true);
-    expect((await client.searchActors({})).actors).toHaveLength(2);
-    await expect(client.searchActors({ cursor: page.nextCursor ?? undefined })).rejects.toThrow(
-      /no longer available/,
-    );
-  });
+  it.each([null, {}, { userId: '' }, { userId: '   ' }])(
+    'revokes anonymous sessions before any read or write: %j',
+    async (session) => {
+      const client = new FoundryClient({
+        allowPrivilegedAccount: true,
+        baseUrl: 'http://localhost:30000',
+        timeout: 100,
+        retryAttempts: 0,
+        writeEnabled: true,
+      });
+      const mock = buildMockSocket();
+      attachClient(client, mock);
+      await loadSnapshot(client, mock);
+      const page = await client.searchActors({ limit: 1 });
+      const pending = client.refreshWorldData();
+      const rejected = expect(pending).rejects.toThrow(/session/);
+      mock.fire('session', session);
+      await rejected;
+      mock.worldAcks[1]?.(snapshot());
+      expect(client.isConnected()).toBe(false);
+      expect(client.getWorldData()).toBeNull();
+      expect(client.getReadMetadata().freshness).toBe('unavailable');
+      await expect(client.searchActors({})).rejects.toThrow(/unavailable/);
+      await expect(client.refreshWorldData()).rejects.toThrow(/authenticated/);
+      await expect(client.updateActorAttribute(ACTOR_ONE, { name: 'Forbidden' })).rejects.toThrow(
+        /authenticated/,
+      );
+      expect(mock.modifyAcks).toHaveLength(0);
+      mock.fire('connect');
+      expect(client.isConnected()).toBe(false);
+      expect(mock.worldAcks).toHaveLength(2);
+      mock.fire('session', { userId: USER_ONE });
+      expect(mock.worldAcks).toHaveLength(3);
+      mock.worldAcks[2]?.(snapshot());
+      await vi.waitFor(() => expect(client.getReadMetadata().freshness).toBe('current'));
+      expect(client.isConnected()).toBe(true);
+      expect((await client.searchActors({})).actors).toHaveLength(2);
+      await expect(client.searchActors({ cursor: page.nextCursor ?? undefined })).rejects.toThrow(
+        /no longer available/,
+      );
+    },
+  );
 
   it('rejects a pending refresh across reconnect and ignores its retired ACK', async () => {
     const client = new FoundryClient({

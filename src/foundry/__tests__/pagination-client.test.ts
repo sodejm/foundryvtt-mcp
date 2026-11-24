@@ -598,30 +598,30 @@ describe('REST snapshot pagination', () => {
       await expect(search(restClient())).rejects.toThrow(/requires a backend snapshotId/);
       expect(get).toHaveBeenCalledOnce();
     });
-    it.each([
-      'changed-after-delete-and-append',
-      undefined,
-    ])(`refuses changed or omitted ${collection} snapshots even when totals and IDs look valid: %s`, async (snapshotId) => {
-      get.mockResolvedValueOnce({
-        data: {
-          [collection]: [record(1)],
-          total: 2,
-          page: 1,
-          limit: 100,
-          snapshotId: 'immutable',
-        },
-      });
-      get.mockResolvedValueOnce({
-        data: {
-          [collection]: [record(3)],
-          total: 2,
-          page: 2,
-          limit: 100,
-          snapshotId,
-        },
-      });
-      await expect(search(restClient())).rejects.toThrow(/snapshot changed or was omitted/);
-    });
+    it.each(['changed-after-delete-and-append', undefined])(
+      `refuses changed or omitted ${collection} snapshots even when totals and IDs look valid: %s`,
+      async (snapshotId) => {
+        get.mockResolvedValueOnce({
+          data: {
+            [collection]: [record(1)],
+            total: 2,
+            page: 1,
+            limit: 100,
+            snapshotId: 'immutable',
+          },
+        });
+        get.mockResolvedValueOnce({
+          data: {
+            [collection]: [record(3)],
+            total: 2,
+            page: 2,
+            limit: 100,
+            snapshotId,
+          },
+        });
+        await expect(search(restClient())).rejects.toThrow(/snapshot changed or was omitted/);
+      },
+    );
   }
 
   it('reports unsupported REST collections explicitly', async () => {
@@ -719,26 +719,24 @@ describe('verified compendium client boundary', () => {
       'unavailable',
     ]);
   });
-  it.each([
-    'unavailable',
-    'unauthorized',
-    'unreachable',
-    'incompatible',
-  ] as const)('preserves the %s failure instead of fabricating an empty page', async (status) => {
-    const { client, search } = compendiumClient();
-    search.mockResolvedValue({ capability: capability(status) });
-    const result = await client.searchCompendium({ query: 'x', limit: 7 });
-    expect(result).toMatchObject({
-      schemaVersion: 1,
-      restAvailable: false,
-      results: null,
-      total: null,
-      page: null,
-      limit: 7,
-      nextCursor: null,
-      capability: { status },
-    });
-  });
+  it.each(['unavailable', 'unauthorized', 'unreachable', 'incompatible'] as const)(
+    'preserves the %s failure instead of fabricating an empty page',
+    async (status) => {
+      const { client, search } = compendiumClient();
+      search.mockResolvedValue({ capability: capability(status) });
+      const result = await client.searchCompendium({ query: 'x', limit: 7 });
+      expect(result).toMatchObject({
+        schemaVersion: 1,
+        restAvailable: false,
+        results: null,
+        total: null,
+        page: null,
+        limit: 7,
+        nextCursor: null,
+        capability: { status },
+      });
+    },
+  );
   it('distinguishes a verified zero match from failure, with a default limit of 20', async () => {
     const { client, search } = compendiumClient();
     search.mockResolvedValue({ capability: capability(), entries: [] });
@@ -805,42 +803,38 @@ describe('verified compendium client boundary', () => {
       'world.b:aAAAAAAAAAAAAAAA',
     ]);
   });
-  it.each([
-    'query',
-    'limit',
-    'world',
-    'relay',
-    'relayUrl',
-    'relayApiKey',
-    'session',
-  ] as const)('binds cursors to %s', async (binding) => {
-    const { client } = compendiumClient();
-    const first = await client.searchCompendium({ query: 'Entry', limit: 1, source: '2014' });
-    const cursor = requireCursor(first.nextCursor);
-    if (binding === 'world') {
-      Reflect.set(client, 'snapshotWorldId', 'other-world');
-    }
-    if (binding === 'relay') {
-      (Reflect.get(client, 'config') as { restClientId: string }).restClientId = 'other-client';
-    }
-    if (binding === 'relayUrl') {
-      (Reflect.get(client, 'config') as { restUrl: string }).restUrl = 'https://other.example.test';
-    }
-    if (binding === 'relayApiKey') {
-      (Reflect.get(client, 'config') as { restApiKey: string }).restApiKey = 'other-key';
-    }
-    if (binding === 'session') {
-      Reflect.set(client, 'paginationSession', 'other-session');
-    }
-    await expect(
-      client.searchCompendium({
-        query: binding === 'query' ? 'other' : 'Entry',
-        source: '2014',
-        ...(binding === 'limit' ? { limit: 2 } : {}),
-        cursor,
-      }),
-    ).rejects.toThrow();
-  });
+  it.each(['query', 'limit', 'world', 'relay', 'relayUrl', 'relayApiKey', 'session'] as const)(
+    'binds cursors to %s',
+    async (binding) => {
+      const { client } = compendiumClient();
+      const first = await client.searchCompendium({ query: 'Entry', limit: 1, source: '2014' });
+      const cursor = requireCursor(first.nextCursor);
+      if (binding === 'world') {
+        Reflect.set(client, 'snapshotWorldId', 'other-world');
+      }
+      if (binding === 'relay') {
+        (Reflect.get(client, 'config') as { restClientId: string }).restClientId = 'other-client';
+      }
+      if (binding === 'relayUrl') {
+        (Reflect.get(client, 'config') as { restUrl: string }).restUrl =
+          'https://other.example.test';
+      }
+      if (binding === 'relayApiKey') {
+        (Reflect.get(client, 'config') as { restApiKey: string }).restApiKey = 'other-key';
+      }
+      if (binding === 'session') {
+        Reflect.set(client, 'paginationSession', 'other-session');
+      }
+      await expect(
+        client.searchCompendium({
+          query: binding === 'query' ? 'other' : 'Entry',
+          source: '2014',
+          ...(binding === 'limit' ? { limit: 2 } : {}),
+          cursor,
+        }),
+      ).rejects.toThrow();
+    },
+  );
   it('keeps relay cursor context private to each client', async () => {
     const { client: firstClient } = compendiumClient();
     const { client: secondClient } = compendiumClient();
@@ -865,24 +859,24 @@ describe('verified compendium client boundary', () => {
     config.restApiKey = originalKey;
     await expect(client.searchCompendium({ query: 'Entry', cursor })).rejects.toThrow();
   });
-  it.each([
-    'unavailable',
-    'unauthorized',
-  ] as const)('invalidates snapshots after %s and rejects old cursors after recovery', async (status) => {
-    const { client, probe } = compendiumClient();
-    const first = await client.searchCompendium({ query: 'Entry', limit: 1 });
-    const cursor = requireCursor(first.nextCursor);
-    probe.mockResolvedValue(capability(status));
-    expect(await client.searchCompendium({ query: 'Entry', cursor })).toMatchObject({
-      restAvailable: false,
-      capability: { status },
-    });
-    probe.mockResolvedValue(capability());
-    await expect(client.searchCompendium({ query: 'Entry', cursor })).rejects.toThrow();
-    expect(await client.searchCompendium({ query: 'Entry', limit: 1 })).toMatchObject({
-      restAvailable: true,
-    });
-  });
+  it.each(['unavailable', 'unauthorized'] as const)(
+    'invalidates snapshots after %s and rejects old cursors after recovery',
+    async (status) => {
+      const { client, probe } = compendiumClient();
+      const first = await client.searchCompendium({ query: 'Entry', limit: 1 });
+      const cursor = requireCursor(first.nextCursor);
+      probe.mockResolvedValue(capability(status));
+      expect(await client.searchCompendium({ query: 'Entry', cursor })).toMatchObject({
+        restAvailable: false,
+        capability: { status },
+      });
+      probe.mockResolvedValue(capability());
+      await expect(client.searchCompendium({ query: 'Entry', cursor })).rejects.toThrow();
+      expect(await client.searchCompendium({ query: 'Entry', limit: 1 })).toMatchObject({
+        restAvailable: true,
+      });
+    },
+  );
   it('denies delegated callers before sending compendium HTTP requests', async () => {
     const client = new FoundryClient({
       allowPrivilegedAccount: true,

@@ -26,25 +26,24 @@ function client(roll: unknown = result()): FoundryClient {
 afterEach(() => vi.restoreAllMocks());
 
 describe('roll_dice shared handler', () => {
-  it.each([
-    'auto',
-    'local',
-    'foundry',
-  ] as const)('passes engine %s and returns identical JSON and structured output', async (engine) => {
-    const roll = {
-      ...result(),
-      engine: engine === 'foundry' ? 'foundry' : 'local',
-      reason: 'attack',
-    };
-    const foundry = client(roll);
-    const response = await handleRollDice(
-      { formula: '2d6kh1+3', reason: 'attack', engine },
-      foundry,
-    );
-    expect(response.structuredContent).toEqual(roll);
-    expect(JSON.parse(response.content[0]?.text ?? '')).toEqual(roll);
-    expect(foundry.rollDice).toHaveBeenCalledExactlyOnceWith('2d6kh1+3', 'attack', engine);
-  });
+  it.each(['auto', 'local', 'foundry'] as const)(
+    'passes engine %s and returns identical JSON and structured output',
+    async (engine) => {
+      const roll = {
+        ...result(),
+        engine: engine === 'foundry' ? 'foundry' : 'local',
+        reason: 'attack',
+      };
+      const foundry = client(roll);
+      const response = await handleRollDice(
+        { formula: '2d6kh1+3', reason: 'attack', engine },
+        foundry,
+      );
+      expect(response.structuredContent).toEqual(roll);
+      expect(JSON.parse(response.content[0]?.text ?? '')).toEqual(roll);
+      expect(foundry.rollDice).toHaveBeenCalledExactlyOnceWith('2d6kh1+3', 'attack', engine);
+    },
+  );
 
   it('defaults the engine and preserves fallback provenance', async () => {
     const roll = {

@@ -86,20 +86,20 @@ describe('FoundryClient', () => {
   });
 
   describe('credential transport boundaries', () => {
-    it.each([
-      { apiKey: 'private-key' },
-      { username: 'gm', password: 'private-password' },
-    ])('rejects remote HTTP before client creation for %j', (credentials) => {
-      expect(
-        () =>
-          new FoundryClient({
-            allowPrivilegedAccount: true,
-            baseUrl: 'http://remote.test',
-            ...credentials,
-          }),
-      ).toThrow('HTTPS');
-      expect(mockAxios.create).not.toHaveBeenCalled();
-    });
+    it.each([{ apiKey: 'private-key' }, { username: 'gm', password: 'private-password' }])(
+      'rejects remote HTTP before client creation for %j',
+      (credentials) => {
+        expect(
+          () =>
+            new FoundryClient({
+              allowPrivilegedAccount: true,
+              baseUrl: 'http://remote.test',
+              ...credentials,
+            }),
+        ).toThrow('HTTPS');
+        expect(mockAxios.create).not.toHaveBeenCalled();
+      },
+    );
     it('checks the effective request URL before adding credentials and disables redirect overrides', async () => {
       const actualAxios = (await vi.importActual<typeof import('axios')>('axios')).default;
       mockAxios.getUri.mockImplementation(actualAxios.getUri);
@@ -151,24 +151,23 @@ describe('FoundryClient', () => {
       expect(mockAxiosInstance.get).not.toHaveBeenCalled();
     });
 
-    it.each([
-      {},
-      { username: 'gm' },
-      { password: '' },
-    ])('only checks HTTP reachability when authentication is incomplete: %j', async (credentials) => {
-      client = new FoundryClient({
-        allowPrivilegedAccount: true,
-        baseUrl: 'http://localhost:30000',
-        ...credentials,
-      });
-      const connect = vi.spyOn(client, 'connect');
-      mockAxiosInstance.get.mockResolvedValue({ status: 200 });
+    it.each([{}, { username: 'gm' }, { password: '' }])(
+      'only checks HTTP reachability when authentication is incomplete: %j',
+      async (credentials) => {
+        client = new FoundryClient({
+          allowPrivilegedAccount: true,
+          baseUrl: 'http://localhost:30000',
+          ...credentials,
+        });
+        const connect = vi.spyOn(client, 'connect');
+        mockAxiosInstance.get.mockResolvedValue({ status: 200 });
 
-      await expect(client.testConnection()).resolves.toBe(true);
+        await expect(client.testConnection()).resolves.toBe(true);
 
-      expect(connect).not.toHaveBeenCalled();
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/');
-    });
+        expect(connect).not.toHaveBeenCalled();
+        expect(mockAxiosInstance.get).toHaveBeenCalledWith('/');
+      },
+    );
 
     it('propagates authentication errors instead of falling back to HTTP reachability', async () => {
       client = new FoundryClient({
@@ -722,52 +721,53 @@ describe('FoundryClient', () => {
       });
     });
 
-    it.each([
-      'foundry',
-    ] as const)('selects paired Foundry execution for %s even with legacy configuration', async (engine) => {
-      client = new FoundryClient({
-        allowPrivilegedAccount: true,
-        baseUrl: 'http://localhost:30000',
-        ...paired,
-        apiKey: 'legacy-key',
-      });
-      mockAxiosInstance.post.mockResolvedValue({
-        data: {
-          type: 'roll-result',
-          requestId: 'fixture',
-          success: true,
+    it.each(['foundry'] as const)(
+      'selects paired Foundry execution for %s even with legacy configuration',
+      async (engine) => {
+        client = new FoundryClient({
+          allowPrivilegedAccount: true,
+          baseUrl: 'http://localhost:30000',
+          ...paired,
+          apiKey: 'legacy-key',
+        });
+        mockAxiosInstance.post.mockResolvedValue({
           data: {
-            id: 'manual_fixture',
-            chatMessageCreated: false,
-            roll: {
-              formula: '1d6 + 3',
-              total: 9,
-              timestamp: 0,
-              dice: [{ faces: 6, results: [{ result: 6, active: true }] }],
+            type: 'roll-result',
+            requestId: 'fixture',
+            success: true,
+            data: {
+              id: 'manual_fixture',
+              chatMessageCreated: false,
+              roll: {
+                formula: '1d6 + 3',
+                total: 9,
+                timestamp: 0,
+                dice: [{ faces: 6, results: [{ result: 6, active: true }] }],
+              },
             },
           },
-        },
-      });
-      const result = await client.rollDice('d6+3', 'attack', engine);
-      expect(result).toMatchObject({
-        engine: 'foundry',
-        total: 9,
-        normalizedFormula: '1d6 + 3',
-        fallback: null,
-        dice: [
-          {
-            termIndex: 0,
-            faces: 6,
-            count: 1,
-            modifier: null,
-            results: [{ result: 6, active: true }],
-          },
-        ],
-      });
-      expect(result.timestamp).toBe('1970-01-01T00:00:00.000Z');
-      expect(Math.random).not.toHaveBeenCalled();
-      expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
-    });
+        });
+        const result = await client.rollDice('d6+3', 'attack', engine);
+        expect(result).toMatchObject({
+          engine: 'foundry',
+          total: 9,
+          normalizedFormula: '1d6 + 3',
+          fallback: null,
+          dice: [
+            {
+              termIndex: 0,
+              faces: 6,
+              count: 1,
+              modifier: null,
+              results: [{ result: 6, active: true }],
+            },
+          ],
+        });
+        expect(result.timestamp).toBe('1970-01-01T00:00:00.000Z');
+        expect(Math.random).not.toHaveBeenCalled();
+        expect(mockAxiosInstance.post).toHaveBeenCalledOnce();
+      },
+    );
 
     it('never calls a configured native transport for explicit local execution', async () => {
       client = new FoundryClient({

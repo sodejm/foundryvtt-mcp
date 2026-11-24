@@ -39,20 +39,16 @@ describe('privileged publishing workflow policy', () => {
     expect(checkPublishWorkflow(baseline)).toEqual([]);
     expect(runYaml(source).status).toBe(0);
   });
-  it.each([
-    'main',
-    'v1',
-    'aad403b',
-    'A'.repeat(40),
-    'a'.repeat(41),
-    'b'.repeat(40),
-  ])('rejects mutable, malformed or unreviewed publishing ref %s', (ref) => {
-    expect(
-      mutated((workflow) => {
-        workflow.jobs.publish.uses = `${workflow.jobs.publish.uses.split('@')[0]}@${ref}`;
-      }),
-    ).toContain('Publish must use the reviewed external workflow at a full commit SHA');
-  });
+  it.each(['main', 'v1', 'aad403b', 'A'.repeat(40), 'a'.repeat(41), 'b'.repeat(40)])(
+    'rejects mutable, malformed or unreviewed publishing ref %s',
+    (ref) => {
+      expect(
+        mutated((workflow) => {
+          workflow.jobs.publish.uses = `${workflow.jobs.publish.uses.split('@')[0]}@${ref}`;
+        }),
+      ).toContain('Publish must use the reviewed external workflow at a full commit SHA');
+    },
+  );
   it('requires the reviewed publisher identity', () => {
     expect(
       mutated((workflow) => {
@@ -60,18 +56,16 @@ describe('privileged publishing workflow policy', () => {
       }),
     ).not.toEqual([]);
   });
-  it.each([
-    'pull_request',
-    'pull_request_target',
-    'workflow_call',
-    'schedule',
-  ])('rejects the %s event', (event) => {
-    expect(
-      mutated((workflow) => {
-        workflow.on[event] = null;
-      }),
-    ).toContain('Release triggers must be main push and optional workflow_dispatch');
-  });
+  it.each(['pull_request', 'pull_request_target', 'workflow_call', 'schedule'])(
+    'rejects the %s event',
+    (event) => {
+      expect(
+        mutated((workflow) => {
+          workflow.on[event] = null;
+        }),
+      ).toContain('Release triggers must be main push and optional workflow_dispatch');
+    },
+  );
   it.each([
     'permissions',
     'job permissions',
